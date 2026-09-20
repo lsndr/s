@@ -13,6 +13,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "engines": {
     "node": ">=24.0.0"
   },
@@ -20,12 +23,13 @@
     "build": "tsc -p tsconfig.lib.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -p tsconfig.spec.json --noEmit",
+    "test:build": "tsc -p tsconfig.spec.json --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
     "postinstall": "patch-package",
+    "prepublishOnly": "npm run build",
     "prepare": "husky"
   },
   "dependencies": {
@@ -59,6 +63,8 @@
     "testcontainers": "^12.0.3",
     "typescript": "^5.9.0",
     "typescript-eslint": "^8.32.1",
+    "conventional-changelog-conventionalcommits": "^9.0.0",
+    "semantic-release": "^25.0.0",
     "vitest": "^4.1.2"
   }
 }
