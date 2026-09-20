@@ -52,8 +52,8 @@ export class RabbitmqTransport
     this.connection = await connect(this.config.url);
     this.connection.on('error', (err) => {
       this.logger.error(
-        'RabbitMQ connection error',
-        err instanceof Error ? err.stack : String(err),
+        `RabbitMQ connection error: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
       );
     });
     this.channel = await this.connection.createConfirmChannel();
@@ -125,14 +125,14 @@ export class RabbitmqTransport
           const retryCount = this.getRetryCount(message);
 
           this.logger.error(
-            `Error handling event ${event.name} (retryCount: ${retryCount})`,
-            err instanceof Error ? err.stack : String(err),
+            `Error handling event ${event.name} (retryCount: ${retryCount}): ${String(err)}`,
+            err instanceof Error ? err.stack : undefined,
           );
 
           if (retryCount >= this.busConfig.retries.max) {
             this.logger.error(
-              `Event ${event.name} failed permanently after ${retryCount} retries. Discarding.`,
-              err instanceof Error ? err.stack : String(err),
+              `Event ${event.name} failed permanently after ${retryCount} retries: ${String(err)}`,
+              err instanceof Error ? err.stack : undefined,
             );
             channel.ack(message);
           } else {
