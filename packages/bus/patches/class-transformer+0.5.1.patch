@@ -1,0 +1,13 @@
+diff --git a/node_modules/class-transformer/cjs/TransformOperationExecutor.js b/node_modules/class-transformer/cjs/TransformOperationExecutor.js
+index 2e40fb4..9dadff8 100644
+--- a/node_modules/class-transformer/cjs/TransformOperationExecutor.js
++++ b/node_modules/class-transformer/cjs/TransformOperationExecutor.js
+@@ -144,7 +144,7 @@ class TransformOperationExecutor {
+                     newValue = new Map();
+                 }
+                 else if (targetType) {
+-                    newValue = new targetType();
++                    newValue = Object.create(targetType.prototype);
+                 }
+                 else {
+                     newValue = {};
