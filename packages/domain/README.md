@@ -10,25 +10,6 @@ npm install @lsndr/domain
 
 ## Usage
 
-### Domain objects
-
-```typescript
-import { DomainObject } from '@lsndr/domain';
-
-interface UserState {
-  id: string;
-  email: string;
-}
-
-class User extends DomainObject<UserState> {
-  public changeEmail(email: string): void {
-    this.assert(email.includes('@'), 'invalid_email');
-
-    this.state.email = email;
-  }
-}
-```
-
 ### Aggregate roots with domain events
 
 ```typescript

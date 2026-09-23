@@ -1,0 +1,52 @@
+{
+  "name": "@lsndr/domain",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.lib.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:build": "tsc -p tsconfig.spec.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.1.0",
+    "@commitlint/config-conventional": "^20.0.0",
+    "@eslint-community/eslint-plugin-eslint-comments": "^4.7.2",
+    "@eslint/js": "^9.27.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.27.0",
+    "eslint-import-resolver-typescript": "^4.4.5",
+    "eslint-plugin-import-x": "^4.12.2",
+    "globals": "^17.6.0",
+    "husky": "^9.0.11",
+    "prettier": "^3.8.4",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.32.1",
+    "conventional-changelog-conventionalcommits": "^9.0.0",
+    "semantic-release": "^25.0.0",
+    "vitest": "^4.1.2"
+  }
+}
