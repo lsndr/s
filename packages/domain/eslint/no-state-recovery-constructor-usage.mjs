@@ -91,7 +91,7 @@ export default {
     messages: {
       stateRecoveryConstructor:
         'Constructor of "{{className}}" is marked @stateRecovery. ' +
-        'Add // eslint-disable-next-line local/no-state-recovery-constructor-usage if intentional.',
+        'Add // eslint-disable-next-line {{ruleId}} if intentional.',
     },
     schema: [],
   },
@@ -121,6 +121,7 @@ export default {
           data: {
             className:
               node.callee.type === 'Identifier' ? node.callee.name : 'unknown',
+            ruleId: context.id,
           },
         });
       },
