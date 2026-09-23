@@ -10,7 +10,7 @@ import { type EventConstructor, BusConfig } from '../../types.js';
 import { Transport } from '../transport.js';
 import {
   connect,
-  Connection,
+  type ChannelModel,
   type ConfirmChannel,
   type ConsumeMessage,
 } from 'amqplib';
@@ -36,7 +36,7 @@ export class RabbitmqTransport
 {
   private readonly exchange = 'events';
 
-  private connection?: Connection;
+  private connection?: ChannelModel;
   private channel: ConfirmChannel | undefined;
   private readonly logger = new Logger(RabbitmqTransport.name);
 
@@ -237,8 +237,8 @@ export class RabbitmqTransport
     }
 
     return xDeath
-      .filter((entry: any) => entry.reason === 'rejected')
-      .reduce((sum: number, entry: any) => sum + (entry.count ?? 0), 0);
+      .filter((entry) => entry.reason === 'rejected')
+      .reduce((sum, entry) => sum + (entry.count ?? 0), 0);
   }
 
   private getChannel(): ConfirmChannel {
@@ -249,7 +249,7 @@ export class RabbitmqTransport
     return this.channel;
   }
 
-  private getConnection(): Connection {
+  private getConnection(): ChannelModel {
     if (!this.connection) {
       throw new Error(`${this.constructor.name} not initialized`);
     }
