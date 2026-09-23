@@ -54,7 +54,7 @@ None — the package has no runtime dependencies or configuration.
 ```javascript
 import noStateRecoveryConstructorUsage from '@lsndr/domain/eslint/no-state-recovery-constructor-usage';
 
-const localPlugin = {
+const domainPlugin = {
   rules: {
     'no-state-recovery-constructor-usage': noStateRecoveryConstructorUsage,
   },
@@ -62,8 +62,8 @@ const localPlugin = {
 
 export default defineConfig({
   files: ['**/*.ts'],
-  plugins: { local: localPlugin },
-  rules: { 'local/no-state-recovery-constructor-usage': 'error' },
+  plugins: { domain: domainPlugin },
+  rules: { 'domain/no-state-recovery-constructor-usage': 'error' },
 });
 ```
 
