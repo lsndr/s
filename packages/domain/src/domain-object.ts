@@ -4,7 +4,7 @@ export abstract class DomainObject<S> {
   protected state: S;
 
   /**
-   * @protected use for state recovery only
+   * @stateRecovery use only to recreate an instance from persisted state
    */
   public constructor(state: S) {
     this.state = state;

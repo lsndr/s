@@ -8,10 +8,12 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./eslint/no-state-recovery-constructor-usage": "./eslint/no-state-recovery-constructor-usage.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "eslint"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -30,6 +32,14 @@
     "format:fix": "prettier --write .",
     "prepublishOnly": "npm run build",
     "prepare": "husky"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@commitlint/cli": "^20.1.0",
