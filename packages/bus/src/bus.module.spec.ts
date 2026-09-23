@@ -131,6 +131,156 @@ describe('BusModule', () => {
     await module.close();
   });
 
+  describe('multiple events', () => {
+    afterEach(() => {
+      vi.clearAllMocks();
+    });
+
+    class OtherEvent {
+      public value2: string;
+
+      public constructor(props: OtherEvent) {
+        this.value2 = props.value2;
+      }
+    }
+
+    it('subscribes to each event', async () => {
+      @EventHandler([TestEvent, OtherEvent])
+      class MultiEventHandler {
+        public handle = vi.fn();
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            group: 'test-app',
+            handlers: [MultiEventHandler],
+            transport: {
+              provider: MockTransport,
+              config: {},
+            },
+          }),
+        ],
+        providers: [MultiEventHandler],
+      }).compile();
+
+      await module.init();
+
+      expect(MockTransport.subscribe).toHaveBeenCalledTimes(2);
+      expect(MockTransport.subscribe).toHaveBeenCalledWith(
+        TestEvent,
+        MultiEventHandler.name,
+        expect.any(Function),
+      );
+      expect(MockTransport.subscribe).toHaveBeenCalledWith(
+        OtherEvent,
+        MultiEventHandler.name,
+        expect.any(Function),
+      );
+
+      await module.close();
+    });
+
+    it('dispatches every subscribed event to the handler', async () => {
+      @EventHandler([TestEvent, OtherEvent])
+      class MultiEventHandler {
+        public handle = vi.fn<(event: EventPayload<object>) => void>();
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            group: 'test-app',
+            handlers: [MultiEventHandler],
+            transport: {
+              provider: MockTransport,
+              config: {},
+            },
+          }),
+        ],
+        providers: [MultiEventHandler],
+      }).compile();
+
+      await module.init();
+
+      const dispatcher = module.get<Dispatcher>(Dispatcher);
+      const testEvent = new TestEvent({ value: 'test' });
+      const otherEvent = new OtherEvent({ value2: 'other' });
+
+      await dispatcher.publish(testEvent);
+      await dispatcher.publish(otherEvent);
+
+      const handler = module.get(MultiEventHandler);
+      expect(handler.handle).toHaveBeenCalledWith(
+        expect.objectContaining({ event: testEvent }),
+      );
+      expect(handler.handle).toHaveBeenCalledWith(
+        expect.objectContaining({ event: otherEvent }),
+      );
+
+      await module.close();
+    });
+
+    it('applies handler-level middleware to every subscribed event', async () => {
+      @Injectable()
+      class MultiEventMiddleware implements EventHandlerMiddleware {
+        public static use = vi.fn(
+          async (
+            event: EventPayload<object>,
+            next: (event: EventPayload<object>) => Promise<void>,
+          ) => {
+            await next(event);
+          },
+        );
+
+        public use = MultiEventMiddleware.use;
+      }
+
+      @EventHandler([TestEvent, OtherEvent], {
+        middlewares: [MultiEventMiddleware],
+      })
+      class MultiEventHandler {
+        public handle = vi.fn();
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            group: 'test-app',
+            handlers: [MultiEventHandler],
+            transport: {
+              provider: MockTransport,
+              config: {},
+            },
+          }),
+        ],
+        providers: [MultiEventHandler],
+      }).compile();
+
+      await module.init();
+
+      const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+      await dispatcher.publish(new TestEvent({ value: 'test' }));
+      await dispatcher.publish(new OtherEvent({ value2: 'other' }));
+
+      expect(MultiEventMiddleware.use).toHaveBeenCalledTimes(2);
+
+      await module.close();
+    });
+
+    it('throws when given an empty array of events', () => {
+      expect(() => {
+        @EventHandler([])
+        class EmptyHandler {
+          public handle = vi.fn();
+        }
+
+        return EmptyHandler;
+      }).toThrow();
+    });
+  });
+
   describe('middlewares', () => {
     afterEach(() => {
       vi.clearAllMocks();

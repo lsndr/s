@@ -1,11 +1,15 @@
 import { Injectable, type Type } from '@nestjs/common';
-import { type EventConstructor, type EventHandler } from '../types.js';
+import {
+  type EventPayload,
+  type EventConstructor,
+  type EventHandler,
+} from '../types.js';
 import { type EventHandlerMiddleware } from '../middleware/middleware.js';
 
 export const BUS_EVENT_HANDLER_METADATA = Symbol('BUS_EVENT_HANDLER_METADATA');
 
 export interface EventHandlerMetadata {
-  event: EventConstructor<object>;
+  events: EventConstructor<object>[];
   middlewares: Type<EventHandlerMiddleware>[];
 }
 
@@ -13,21 +17,49 @@ export interface EventHandlerOptions {
   middlewares?: Type<EventHandlerMiddleware>[];
 }
 
+type EventPayloadOf<C> =
+  C extends EventConstructor<infer E> ? EventPayload<E> : never;
+
 export function EventHandler<E extends object>(
   event: EventConstructor<E>,
   options?: EventHandlerOptions,
+): <T extends new (...args: any[]) => EventHandler<E>>(target: T) => void;
+export function EventHandler<
+  const C extends readonly EventConstructor<object>[],
+>(
+  events: C,
+  options?: EventHandlerOptions,
+): <
+  T extends new (...args: any[]) => {
+    // Declared as a function-typed property (not a method) so that
+    // strictFunctionTypes checks the parameter contravariantly: a handler
+    // that only accepts a subset of the union (e.g. just EventPayload<C[0]>)
+    // is rejected instead of being silently allowed through method
+    // bivariance.
+    handle: (event: EventPayloadOf<C[number]>) => Promise<void> | void;
+  },
+>(
+  target: T,
+) => void;
+export function EventHandler(
+  event: EventConstructor<object> | readonly EventConstructor<object>[],
+  options?: EventHandlerOptions,
 ) {
-  return <T extends new (...args: any[]) => EventHandler<E>>(
-    target: T,
-  ): void => {
+  const events = [...new Set(Array.isArray(event) ? event : [event])];
+
+  if (events.length === 0) {
+    throw new Error('@EventHandler() requires at least one event');
+  }
+
+  return (target: new (...args: any[]) => any): void => {
     Reflect.defineMetadata(
       BUS_EVENT_HANDLER_METADATA,
       {
-        event,
+        events,
         middlewares: options?.middlewares ?? [],
       } satisfies EventHandlerMetadata,
       target,
     );
-    Injectable()(target as unknown as new (...args: any[]) => any);
+    Injectable()(target);
   };
 }

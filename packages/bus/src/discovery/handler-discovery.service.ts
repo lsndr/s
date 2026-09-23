@@ -77,7 +77,9 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
         instance,
       );
 
-      await this.subscriber.subscribe(metadata.event, metatype.name, callback);
+      for (const event of metadata.events) {
+        await this.subscriber.subscribe(event, metatype.name, callback);
+      }
     }
   }
 
