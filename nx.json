@@ -58,5 +58,6 @@
     "git": {
       "commitMessage": "chore(release): publish [skip ci]"
     }
-  }
+  },
+  "analytics": false
 }
