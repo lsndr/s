@@ -6,30 +6,53 @@
       "outputs": ["{projectRoot}/dist"],
       "cache": true
     },
-    "test": { "dependsOn": ["build"], "cache": true },
-    "test:build": { "cache": true },
-    "lint": { "cache": true }
+    "test": {
+      "dependsOn": ["build"],
+      "cache": true
+    },
+    "test:build": {
+      "cache": true
+    },
+    "lint": {
+      "cache": true
+    }
   },
   "release": {
     "projects": ["packages/*"],
     "projectsRelationship": "independent",
-    "releaseTagPattern": "{projectName}@{version}",
+    "releaseTag": {
+      "pattern": "{projectName}@{version}"
+    },
     "version": {
-      "conventionalCommits": true,
       "currentVersionResolver": "git-tag",
       "fallbackCurrentVersionResolver": "disk",
-      "preserveLocalDependencyProtocols": true
+      "preserveLocalDependencyProtocols": true,
+      "specifierSource": "conventional-commits",
+      "adjustSemverBumpsForZeroMajorVersion": false
     },
     "changelog": {
-      "projectChangelogs": { "createRelease": "github", "file": false }
+      "projectChangelogs": {
+        "createRelease": "github",
+        "file": false
+      }
     },
     "conventionalCommits": {
       "types": {
-        "docs": { "semverBump": "patch" },
-        "perf": { "semverBump": "patch" },
-        "refactor": { "semverBump": "patch" },
-        "build": { "semverBump": "patch" },
-        "revert": { "semverBump": "patch" }
+        "docs": {
+          "semverBump": "patch"
+        },
+        "perf": {
+          "semverBump": "patch"
+        },
+        "refactor": {
+          "semverBump": "patch"
+        },
+        "build": {
+          "semverBump": "patch"
+        },
+        "revert": {
+          "semverBump": "patch"
+        }
       }
     },
     "git": {
