@@ -1,0 +1,297 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import { GenericContainer, Wait } from 'testcontainers';
+import {
+  RabbitmqTransport,
+  RabbitmqTransportConfig,
+} from './rabbitmq/transport.js';
+import { TransportConfig, type Transport } from './transport.js';
+import { setTimeout } from 'node:timers/promises';
+import { BusConfig } from '../types.js';
+import { IsDate, IsString } from 'class-validator';
+import { Test, TestingModule } from '@nestjs/testing';
+
+class TestEvent {
+  @IsString()
+  public value: string;
+
+  @IsDate()
+  public createdAt: Date;
+
+  public constructor(props: { value: string }) {
+    this.value = props.value;
+    this.createdAt = new Date();
+  }
+}
+
+interface TransportTest {
+  name: string;
+  setup: () => Promise<{
+    createTransport: (config: BusConfig) => Promise<Transport>;
+    teardown: () => Promise<void>;
+  }>;
+}
+
+describe('Transport', { timeout: 60_000 }, () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe.each<TransportTest>([
+    {
+      name: 'RabbitmqTransport',
+      setup: async () => {
+        const container = await new GenericContainer('rabbitmq:3-management')
+          .withExposedPorts(5672)
+          .withWaitStrategy(Wait.forLogMessage(/Server startup complete/))
+          .start();
+        const url = `amqp://${container.getHost()}:${container.getMappedPort(5672)}`;
+        const modules: TestingModule[] = [];
+
+        const createTransport = async (busConfig: BusConfig) => {
+          const module = await Test.createTestingModule({
+            imports: [],
+            providers: [
+              RabbitmqTransport,
+              {
+                provide: BusConfig,
+                useValue: busConfig,
+              },
+              {
+                provide: TransportConfig,
+                useValue: {
+                  url,
+                } satisfies RabbitmqTransportConfig,
+              },
+            ],
+          }).compile();
+
+          await module.init();
+
+          modules.push(module);
+
+          return module.get<RabbitmqTransport>(RabbitmqTransport);
+        };
+
+        const teardown = async () => {
+          await Promise.all(modules.map((m) => m.close()));
+          await container.stop();
+        };
+
+        return { createTransport, teardown };
+      },
+    },
+  ])('$name', ({ setup }) => {
+    let teardown: () => Promise<void>;
+    let createTransport: (config: BusConfig) => Promise<Transport>;
+
+    beforeAll(async () => {
+      const setupResult = await setup();
+
+      teardown = setupResult.teardown;
+      createTransport = setupResult.createTransport;
+    }, 60_000);
+
+    afterAll(async () => {
+      await teardown();
+    });
+
+    it('delivers message to multiple groups', async () => {
+      const subscribe = async () => {
+        const handler = vi.fn();
+        const config: BusConfig = {
+          group: crypto.randomUUID(),
+          retries: { max: 0, delay: 100 },
+        };
+        const transport = await createTransport(config);
+        await transport.subscribe(TestEvent, 'TestHandler', handler);
+
+        return handler;
+      };
+      const subscriber1 = await subscribe();
+      const subscriber2 = await subscribe();
+      const subscriber3 = await subscribe();
+
+      const publisher = await createTransport({
+        group: crypto.randomUUID(),
+        retries: { max: 0, delay: 100 },
+      });
+      const event = new TestEvent({ value: 'hello' });
+
+      await publisher.publish(event);
+
+      await vi.waitFor(() => {
+        expect(subscriber1).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            id: expect.any(String),
+            event,
+            meta: {},
+            publishedAt: expect.any(Date),
+          }),
+        );
+        expect(subscriber2).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            id: expect.any(String),
+            event,
+            meta: {},
+            publishedAt: expect.any(Date),
+          }),
+        );
+        expect(subscriber3).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            id: expect.any(String),
+            event,
+            meta: {},
+            publishedAt: expect.any(Date),
+          }),
+        );
+      });
+    });
+
+    it('distributes messages between multiple instances of the same consumers in the same group', async () => {
+      const group = crypto.randomUUID();
+      const config: BusConfig = {
+        group,
+        retries: { max: 0, delay: 100 },
+      };
+      const subscribe = async () => {
+        const handler = vi.fn();
+        const transport = await createTransport(config);
+        await transport.subscribe(TestEvent, 'TestHandler', handler);
+
+        return handler;
+      };
+      const publisher = await createTransport(config);
+      const subscriber1 = await subscribe();
+      const subscriber2 = await subscribe();
+      const subscriber3 = await subscribe();
+
+      const event1 = new TestEvent({ value: '1' });
+      const event2 = new TestEvent({ value: '2' });
+      const event3 = new TestEvent({ value: '3' });
+
+      await publisher.publish(event1);
+      await publisher.publish(event2);
+      await publisher.publish(event3);
+
+      await vi.waitFor(() => {
+        expect(subscriber1).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            id: expect.any(String),
+            event: event1,
+            meta: {},
+            publishedAt: expect.any(Date),
+          }),
+        );
+        expect(subscriber2).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            id: expect.any(String),
+            event: event2,
+            meta: {},
+            publishedAt: expect.any(Date),
+          }),
+        );
+        expect(subscriber3).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            id: expect.any(String),
+            event: event3,
+            meta: {},
+            publishedAt: expect.any(Date),
+          }),
+        );
+      });
+    });
+
+    it('delivers message to multiple handlers in the same group', async () => {
+      const group = crypto.randomUUID();
+      const config: BusConfig = {
+        group,
+        retries: { max: 0, delay: 100 },
+      };
+      const handler1 = vi.fn();
+      const handler2 = vi.fn();
+      const transport1 = await createTransport(config);
+      const transport2 = await createTransport(config);
+      await transport1.subscribe(TestEvent, 'HandlerA', handler1);
+      await transport2.subscribe(TestEvent, 'HandlerB', handler2);
+
+      const publisher = await createTransport(config);
+      const event = new TestEvent({ value: 'multi-handler' });
+      await publisher.publish(event);
+
+      await vi.waitFor(() => {
+        expect(handler1).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ event }),
+        );
+        expect(handler2).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ event }),
+        );
+      });
+    });
+
+    it.each([1, 5, 10])(
+      'retries a failing callback up to %s times',
+      async (max) => {
+        const delay = 100;
+        const config: BusConfig = {
+          group: crypto.randomUUID(),
+          retries: { max, delay },
+        };
+        const transport = await createTransport(config);
+        const handler = vi.fn().mockImplementation(() => {
+          throw new Error();
+        });
+        await transport.subscribe(TestEvent, 'TestHandler', handler);
+
+        await transport.publish(new TestEvent({ value: 'retry-me' }));
+
+        await setTimeout(delay * (max * 2));
+        expect(handler).toHaveBeenCalledTimes(max + 1); // 1 initial attempt + max retries
+      },
+    );
+
+    describe('assertHealthy', () => {
+      it('resolves when transport is connected', async () => {
+        const transport = await createTransport({
+          group: crypto.randomUUID(),
+          retries: { max: 0, delay: 100 },
+        });
+
+        await expect(transport.assertHealthy()).resolves.toBeUndefined();
+      });
+
+      it('throws when transport is not initialized', async () => {
+        const module = await Test.createTestingModule({
+          providers: [
+            RabbitmqTransport,
+            {
+              provide: BusConfig,
+              useValue: {
+                group: crypto.randomUUID(),
+                retries: { max: 0, delay: 100 },
+              },
+            },
+            {
+              provide: TransportConfig,
+              useValue: {
+                url: 'amqp://localhost',
+              } satisfies RabbitmqTransportConfig,
+            },
+          ],
+        }).compile();
+
+        // intentionally skip module.init() so channel is never set
+        const transport = module.get(RabbitmqTransport);
+
+        await expect(transport.assertHealthy()).rejects.toThrow();
+      });
+    });
+  });
+});
