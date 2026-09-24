@@ -32,6 +32,11 @@ jobs:
           registry-url: https://npm.pkg.github.com
           cache: npm
 
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - run: npm ci
       - run: npx nx run-many -t build
 
