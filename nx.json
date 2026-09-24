@@ -1,0 +1,39 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "targetDefaults": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["{projectRoot}/dist"],
+      "cache": true
+    },
+    "test": { "dependsOn": ["build"], "cache": true },
+    "test:build": { "cache": true },
+    "lint": { "cache": true }
+  },
+  "release": {
+    "projects": ["packages/*"],
+    "projectsRelationship": "independent",
+    "releaseTagPattern": "{projectName}@{version}",
+    "version": {
+      "conventionalCommits": true,
+      "currentVersionResolver": "git-tag",
+      "fallbackCurrentVersionResolver": "disk",
+      "preserveLocalDependencyProtocols": true
+    },
+    "changelog": {
+      "projectChangelogs": { "createRelease": "github", "file": false }
+    },
+    "conventionalCommits": {
+      "types": {
+        "docs": { "semverBump": "patch" },
+        "perf": { "semverBump": "patch" },
+        "refactor": { "semverBump": "patch" },
+        "build": { "semverBump": "patch" },
+        "revert": { "semverBump": "patch" }
+      }
+    },
+    "git": {
+      "commitMessage": "chore(release): publish [skip ci]"
+    }
+  }
+}

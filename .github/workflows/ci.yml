@@ -17,6 +17,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -24,8 +26,5 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run build
-      - run: npm run test:build
-      - run: npm run test
-      - run: npm run lint
+      - run: npx nx affected -t build test:build test lint --base=origin/main
       - run: npm run format
