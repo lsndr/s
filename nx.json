@@ -28,7 +28,7 @@
       "fallbackCurrentVersionResolver": "disk",
       "preserveLocalDependencyProtocols": true,
       "specifierSource": "conventional-commits",
-      "adjustSemverBumpsForZeroMajorVersion": false
+      "adjustSemverBumpsForZeroMajorVersion": true
     },
     "changelog": {
       "projectChangelogs": {
