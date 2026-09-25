@@ -64,7 +64,7 @@ export class OrderService {
 
   async place(orderId: string) {
     await this.dispatcher.publish(new OrderPlaced(orderId), {
-      id: crypto.randomUUID(), // optional, generated if omitted
+      id: 'custom-id', // optional, a UUID v7 is generated if omitted
       meta: { correlationId: 'abc-123' }, // optional
     });
   }
