@@ -22,7 +22,6 @@ jobs:
       id-token: write
 
     steps:
-      # App token that can bypass the main ruleset, so nx release can push the version commit and tags
       - uses: actions/create-github-app-token@v2
         id: app-token
         with:
