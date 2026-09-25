@@ -6,6 +6,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { plainToInstance, instanceToPlain } from 'class-transformer';
+import { v7 as uuidv7 } from 'uuid';
 import { type EventConstructor, BusConfig } from '../../types.js';
 import { Transport } from '../transport.js';
 import {
@@ -73,7 +74,7 @@ export class RabbitmqTransport
     const eventName = event.constructor.name;
 
     const payload: EventDto = {
-      id: options?.id ?? crypto.randomUUID(),
+      id: options?.id ?? uuidv7(),
       name: eventName,
       event: instanceToPlain(event),
       meta: options?.meta ?? {},
