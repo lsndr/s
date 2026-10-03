@@ -12,6 +12,10 @@ import {
   RabbitmqTransport,
   RabbitmqTransportConfig,
 } from './rabbitmq/transport.js';
+import {
+  RedisStreamsTransport,
+  RedisStreamsTransportConfig,
+} from './redis-streams/transport.js';
 import { TransportConfig, type Transport } from './transport.js';
 import { setTimeout } from 'node:timers/promises';
 import { BusConfig } from '../types.js';
@@ -78,6 +82,47 @@ describe('Transport', { timeout: 60_000 }, () => {
           modules.push(module);
 
           return module.get<RabbitmqTransport>(RabbitmqTransport);
+        };
+
+        const teardown = async () => {
+          await Promise.all(modules.map((m) => m.close()));
+          await container.stop();
+        };
+
+        return { createTransport, teardown };
+      },
+    },
+    {
+      name: 'RedisStreamsTransport',
+      setup: async () => {
+        const container = await new GenericContainer('redis:8.2')
+          .withExposedPorts(6379)
+          .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
+          .start();
+        const url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
+        const modules: TestingModule[] = [];
+
+        const createTransport = async (busConfig: BusConfig) => {
+          const module = await Test.createTestingModule({
+            providers: [
+              RedisStreamsTransport,
+              { provide: BusConfig, useValue: busConfig },
+              {
+                provide: TransportConfig,
+                useValue: {
+                  url,
+                  blockTimeout: 1_000,
+                  reclaimInterval: 25,
+                } satisfies RedisStreamsTransportConfig,
+              },
+            ],
+          }).compile();
+
+          await module.init();
+
+          modules.push(module);
+
+          return module.get<RedisStreamsTransport>(RedisStreamsTransport);
         };
 
         const teardown = async () => {
