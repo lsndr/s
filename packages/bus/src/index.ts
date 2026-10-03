@@ -8,6 +8,10 @@ export {
   RabbitmqTransport,
   RabbitmqTransportConfig,
 } from './transport/rabbitmq/transport.js';
+export {
+  RedisStreamsTransport,
+  RedisStreamsTransportConfig,
+} from './transport/redis-streams/transport.js';
 export { Dispatcher } from './transport/dispatcher.js';
 export { Health } from './transport/health.js';
 export { type EventPayload, type BusRetriesConfig } from './types.js';

@@ -5,8 +5,6 @@ import {
   BeforeApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
-import { plainToInstance, instanceToPlain } from 'class-transformer';
-import { v7 as uuidv7 } from 'uuid';
 import { type EventConstructor, BusConfig } from '../../types.js';
 import { Transport } from '../transport.js';
 import {
@@ -17,14 +15,11 @@ import {
 } from 'amqplib';
 import { type EventCallback } from '../subscriber.js';
 import { PublishOptions } from '../dispatcher.js';
-
-export interface EventDto {
-  id: string;
-  name: string;
-  event: Record<string, string | number | undefined | null>;
-  meta: Record<string, string | number | undefined | null>;
-  publishedAt: Date;
-}
+import {
+  createEventDto,
+  parseEventPayload,
+  type EventDto,
+} from '../event-dto.js';
 
 export interface RabbitmqTransportConfig {
   url: string;
@@ -71,17 +66,9 @@ export class RabbitmqTransport
     event: E,
     options?: PublishOptions,
   ): Promise<void> {
-    const eventName = event.constructor.name;
+    const payload = createEventDto(event, options);
 
-    const payload: EventDto = {
-      id: options?.id ?? uuidv7(),
-      name: eventName,
-      event: instanceToPlain(event),
-      meta: options?.meta ?? {},
-      publishedAt: new Date(),
-    };
-
-    return this.publishEvent(eventName, payload);
+    return this.publishEvent(payload.name, payload);
   }
 
   public async subscribe<
@@ -106,17 +93,7 @@ export class RabbitmqTransport
       this.logger.verbose(`Event ${event.name} payload: ${content}`);
 
       Promise.resolve()
-        .then(() => {
-          const dto = JSON.parse(content) as EventDto;
-          const eventInstance = plainToInstance(event, dto.event, {
-            enableImplicitConversion: true,
-          });
-          return callback({
-            ...dto,
-            event: eventInstance,
-            publishedAt: new Date(dto.publishedAt),
-          });
-        })
+        .then(() => callback(parseEventPayload(event, content)))
         .then(() => {
           channel.ack(message);
 

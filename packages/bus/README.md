@@ -1,6 +1,6 @@
 # @lsndr/bus
 
-Event bus for [NestJS](https://nestjs.com/) with decorator-based event handlers, middleware, delayed retries, and a RabbitMQ transport.
+Event bus for [NestJS](https://nestjs.com/) with decorator-based event handlers, middleware, delayed retries, and RabbitMQ and Redis Streams transports.
 
 ## Installation
 
@@ -14,6 +14,12 @@ Peer dependencies: `@nestjs/common`, `@nestjs/core`, `reflect-metadata`. To use 
 
 ```bash
 npm install amqplib class-transformer
+```
+
+For the Redis Streams transport (requires **Redis 8.2+**), install `redis` instead of `amqplib`:
+
+```bash
+npm install redis class-transformer
 ```
 
 ## Usage
@@ -136,7 +142,7 @@ await this.health.assertHealthy(); // throws if the broker is unreachable
 `BusModule.forRoot()` options:
 
 - `group` — required. Consumer group name, used as a prefix for queue names.
-- `transport` — required. `{ provider, config }`; for RabbitMQ, `config` is `{ url }`.
+- `transport` — required. `{ provider, config }`; for RabbitMQ, `config` is `{ url }`, for Redis Streams see [Redis Streams topology](#redis-streams-topology).
 - `handlers` — event handler classes to subscribe.
 - `middlewares` — global middleware classes.
 - `imports`, `providers` — additional Nest imports and providers for the module.
@@ -149,3 +155,26 @@ await this.health.assertHealthy(); // throws if the broker is unreachable
 - Each handler/event pair gets a queue named `<group>.<HandlerClass>.<EventClass>`.
 - Failed messages are nacked into `<queue>.delay` (via the `events.delay` exchange), wait `retries.delay` ms, and are redelivered to the original queue.
 - After `retries.max` failed retries, the message is logged as permanently failed and acknowledged (dropped).
+
+## Redis Streams topology
+
+```typescript
+BusModule.forRoot({
+  group: 'billing',
+  transport: {
+    provider: RedisStreamsTransport,
+    config: { url: 'redis://localhost:6379' },
+  },
+});
+```
+
+The transport checks the server version on startup and fails if Redis is older than 8.2.
+
+Config options: `url` (required), `consumer`, `streamPrefix` (`events:`), `maxLength` (`1000`), `batchSize` (`10`), `blockTimeout` (`5000` ms), `reclaimInterval` (`max(retries.delay / 4, 1000)` ms), `consumerTtl` (`3600000` ms).
+
+- Each event class has its own stream, `<streamPrefix><EventClass>`.
+- Each handler gets its own consumer group per stream, named `<group>.<HandlerClass>`, created at the stream's tail (`$`). Instances of the same handler share the group, so entries are load-balanced between them.
+- The consumer name defaults to the host name. A stable name avoids leaving stale consumers behind after restarts; it doesn't change recovery, since pending entries are reclaimed by any consumer after `retries.delay`. Set `consumer` explicitly if several instances share a host, since instances with the same name share their pending entries. A consumer is removed from its groups on graceful shutdown unless it still has pending entries.
+- Consumers that crashed or were renamed stay registered in the group. Running consumers delete the ones that have no pending entries and have been idle for longer than `consumerTtl`; keep it longer than `blockTimeout`.
+- Delivery is at-least-once. Handled entries are acknowledged with `XACK`. Failed entries stay pending and are claimed again (by any instance) after `retries.delay` ms, up to `retries.max` retries, then logged as permanently failed and acknowledged. Entries of crashed consumers are recovered the same way. While a handler is running its entry is kept from being reclaimed.
+- Publishing uses `XADD … MAXLEN ~ <maxLength> ACKED`: entries are trimmed only once every consumer group has acknowledged them, so `maxLength` is a soft cap that unacknowledged entries can exceed. Trimming is approximate, so it removes whole stream nodes (100 entries each by default).
