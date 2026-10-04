@@ -6,9 +6,9 @@ import {
   Logger,
   type OnModuleInit,
 } from '@nestjs/common';
-import { createClient, type RedisClientType } from 'redis';
+import { type RedisClientType } from 'redis';
 import { type EventConstructor, BusConfig } from '../../types.js';
-import { Transport, TransportConfig } from '../transport.js';
+import { Transport } from '../transport.js';
 import { type EventCallback } from '../subscriber.js';
 import { PublishOptions } from '../dispatcher.js';
 import { createEventDto, parseEventPayload } from '../event-dto.js';
@@ -84,21 +84,17 @@ export class RedisStreamsTransport
   extends Transport<RedisStreamsTransportConfig>
   implements OnModuleInit, BeforeApplicationShutdown
 {
-  private readonly client: RedisClientType;
+  private client: RedisClientType | undefined;
   private readonly consumers: StreamConsumer[] = [];
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
-  public constructor(
-    @Inject(BusConfig) private readonly busConfig: BusConfig,
-    @Inject(TransportConfig) config: RedisStreamsTransportConfig,
-  ) {
+  public constructor(@Inject(BusConfig) private readonly busConfig: BusConfig) {
     super();
-
-    this.client = this.createClient(config);
   }
 
   public async onModuleInit(): Promise<void> {
-    await this.client.connect();
+    this.client = await this.createClient(this.config);
+    await this.getClient().connect();
 
     await this.assertVersion();
   }
@@ -115,7 +111,7 @@ export class RedisStreamsTransport
         );
     }
 
-    await this.client.close();
+    await this.getClient().close();
   }
 
   public async publish<E extends object>(
@@ -128,7 +124,7 @@ export class RedisStreamsTransport
     this.logger.log(`Publishing event ${payload.name}`);
     this.logger.verbose(`Event ${payload.name} payload: ${json}`);
 
-    await this.client.xAdd(
+    await this.getClient().xAdd(
       this.getStream(payload.name),
       '*',
       { id: payload.id, payload: json },
@@ -153,7 +149,7 @@ export class RedisStreamsTransport
     const group = `${this.busConfig.group}.${handlerName}`;
 
     try {
-      await this.client.xGroupCreate(stream, group, '$', {
+      await this.getClient().xGroupCreate(stream, group, '$', {
         MKSTREAM: true,
       });
     } catch (err) {
@@ -163,7 +159,7 @@ export class RedisStreamsTransport
     }
 
     // XREADGROUP BLOCK occupies the connection, so each consumer has its own
-    const blockingClient = this.createClient(this.config);
+    const blockingClient = await this.createClient(this.config);
     await blockingClient.connect();
 
     const consumer = new StreamConsumer({
@@ -171,7 +167,7 @@ export class RedisStreamsTransport
       group,
       consumer: this.getConsumerName(),
       eventName: event.name,
-      client: this.client,
+      client: this.getClient(),
       blockingClient,
       retries: this.busConfig.retries,
       batchSize: this.config.batchSize ?? 10,
@@ -193,11 +189,11 @@ export class RedisStreamsTransport
   }
 
   public async assertHealthy(): Promise<void> {
-    await this.client.ping();
+    await this.getClient().ping();
   }
 
   private async assertVersion(): Promise<void> {
-    const info = await this.client.info('server');
+    const info = await this.getClient().info('server');
     const match = /redis_version:(\d+)\.(\d+)\.(\d+)/.exec(info);
     const version = match?.slice(1).map(Number) ?? [];
     const supported = MIN_REDIS_VERSION.reduce<boolean | undefined>(
@@ -207,7 +203,7 @@ export class RedisStreamsTransport
     );
 
     if (!match || supported === false) {
-      await this.client.close();
+      await this.getClient().close();
 
       throw new Error(
         `${this.constructor.name} requires Redis >= ${MIN_REDIS_VERSION.join('.')}, got ${version.join('.') || 'unknown version'}`,
@@ -215,7 +211,18 @@ export class RedisStreamsTransport
     }
   }
 
-  private createClient(config: RedisStreamsTransportConfig): RedisClientType {
+  private getClient(): RedisClientType {
+    if (!this.client) {
+      throw new Error('Redis client is not initialized');
+    }
+
+    return this.client;
+  }
+
+  private async createClient(
+    config: RedisStreamsTransportConfig,
+  ): Promise<RedisClientType> {
+    const { createClient } = await import('redis');
     const client = createClient({ url: config.url });
 
     client.on('error', (err: unknown) => {

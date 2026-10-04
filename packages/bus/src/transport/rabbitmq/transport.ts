@@ -8,7 +8,6 @@ import {
 import { type EventConstructor, BusConfig } from '../../types.js';
 import { Transport } from '../transport.js';
 import {
-  connect,
   type ChannelModel,
   type ConfirmChannel,
   type ConsumeMessage,
@@ -45,6 +44,8 @@ export class RabbitmqTransport
   }
 
   public async onModuleInit(): Promise<void> {
+    const { connect } = await import('amqplib');
+
     this.connection = await connect(this.config.url);
     this.connection.on('error', (err) => {
       this.logger.error(
