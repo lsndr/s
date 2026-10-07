@@ -5,6 +5,7 @@ import {
   type OnApplicationBootstrap,
 } from '@nestjs/common';
 import {
+  type ContextId,
   ContextIdFactory,
   DiscoveryService,
   ModuleRef,
@@ -21,6 +22,17 @@ import {
   type EventHandlerMiddleware,
   GlobalEventHandlerMiddlewares,
 } from '../middleware/middleware.js';
+
+/**
+ * A provider of the application. Default-scoped ones have a single instance,
+ * the others are resolved anew for every event.
+ */
+interface Resolvable<T> {
+  wrapper: InstanceWrapper;
+  name: string;
+  /** Set when the provider has the default scope. */
+  instance: T | undefined;
+}
 
 @Injectable()
 export class HandlerDiscoveryService implements OnApplicationBootstrap {
@@ -49,9 +61,7 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
         continue;
       }
 
-      // Factory providers have a factory as metatype, the class is the type of
-      // the instance they produce
-      const metatype = (provider.instance?.constructor ?? provider.metatype) as
+      const metatype = this.getClass(provider) as
         Type<EventHandler<object>> | undefined;
 
       if (!this.isConstructor(metatype)) {
@@ -80,10 +90,9 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
         metadata.middlewares,
       );
 
-      const callback = this.buildMiddlewareChain(
-        globalEventHandlerMiddlewares,
-        eventHandlerMiddlewares,
-        this.createHandle(provider, metatype),
+      const callback = this.createCallback(
+        [...globalEventHandlerMiddlewares, ...eventHandlerMiddlewares],
+        this.toResolvable<EventHandler<object>>(provider, metatype.name),
       );
 
       for (const event of metadata.events) {
@@ -92,13 +101,18 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
     }
   }
 
+  /**
+   * Looks up middleware providers of the application, so that the application
+   * decides in which module a middleware lives and how its dependencies are
+   * resolved.
+   */
   private findMiddlewares(
     providers: InstanceWrapper[],
     types: Type<EventHandlerMiddleware>[],
-  ): EventHandlerMiddleware[] {
+  ): Resolvable<EventHandlerMiddleware>[] {
     return types.map((type) => {
       const matches = providers.filter(
-        (provider) => provider.metatype === type,
+        (provider) => !provider.isAlias && this.getClass(provider) === type,
       );
 
       if (matches.length === 0) {
@@ -113,31 +127,54 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
         );
       }
 
-      const instance = matches[0]?.instance as
-        EventHandlerMiddleware | undefined;
-
-      if (!instance) {
-        throw new Error(
-          `Middleware ${type.name} must be a provider with the default scope`,
-        );
-      }
-
-      return instance;
+      return this.toResolvable<EventHandlerMiddleware>(matches[0]!, type.name);
     });
   }
 
-  private createHandle(
-    provider: InstanceWrapper,
-    metatype: Type<EventHandler<object>>,
-  ): (event: EventPayload<object>) => Promise<void> | void {
-    if (provider.isDependencyTreeStatic() && !provider.isTransient) {
-      const instance = provider.instance as EventHandler<object> | undefined;
+  /**
+   * The class of a provider is the class of its instance, so that providers
+   * created with `useValue` or `useFactory` are found too. A factory provider
+   * has the factory as its metatype.
+   */
+  private getClass(provider: InstanceWrapper): unknown {
+    return provider.instance?.constructor ?? provider.metatype;
+  }
 
-      if (!instance) {
-        throw new Error(`Event handler ${metatype.name} has no instance`);
-      }
+  private toResolvable<T>(
+    wrapper: InstanceWrapper,
+    name: string,
+  ): Resolvable<T> {
+    // Transient providers have a static dependency tree, but still must not
+    // be shared
+    if (!wrapper.isDependencyTreeStatic() || wrapper.isTransient) {
+      return { wrapper, name, instance: undefined };
+    }
 
-      return (event) => instance.handle(event);
+    if (!wrapper.instance) {
+      throw new Error(`${name} has no instance`);
+    }
+
+    return { wrapper, name, instance: wrapper.instance as T };
+  }
+
+  /**
+   * Builds the callback of a handler. When everything in the chain is a
+   * singleton the chain is built once. Otherwise, the scoped providers are
+   * resolved for every event, all in the same context so that they share
+   * request-scoped dependencies, and the event payload is available as
+   * `REQUEST`.
+   */
+  private createCallback(
+    middlewares: Resolvable<EventHandlerMiddleware>[],
+    handler: Resolvable<EventHandler<object>>,
+  ): EventCallback<object> {
+    if (handler.instance && middlewares.every((m) => m.instance)) {
+      const instance = handler.instance;
+
+      return this.buildMiddlewareChain(
+        middlewares.map((m) => m.instance!),
+        (event) => instance.handle(event),
+      );
     }
 
     return async (event) => {
@@ -145,23 +182,36 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
 
       this.moduleRef.registerRequestByContextId(event, contextId);
 
-      const instance = await this.moduleRef.resolve<EventHandler<object>>(
-        provider.token,
-        contextId,
-        { strict: false },
-      );
+      const resolvedMiddlewares: EventHandlerMiddleware[] = [];
 
-      await instance.handle(event);
+      for (const middleware of middlewares) {
+        resolvedMiddlewares.push(await this.resolve(middleware, contextId));
+      }
+
+      const resolvedHandler = await this.resolve(handler, contextId);
+
+      await this.buildMiddlewareChain(resolvedMiddlewares, (e) =>
+        resolvedHandler.handle(e),
+      )(event);
     };
   }
 
+  private async resolve<T>(
+    resolvable: Resolvable<T>,
+    contextId: ContextId,
+  ): Promise<T> {
+    return (
+      resolvable.instance ??
+      (await this.moduleRef.resolve<T>(resolvable.wrapper.token, contextId, {
+        strict: false,
+      }))
+    );
+  }
+
   private buildMiddlewareChain(
-    globalMiddlewares: EventHandlerMiddleware[],
-    localMiddlewares: EventHandlerMiddleware[],
+    allMiddlewares: EventHandlerMiddleware[],
     handle: (event: EventPayload<object>) => Promise<void> | void,
   ): EventCallback<object> {
-    const allMiddlewares = [...globalMiddlewares, ...localMiddlewares];
-
     return allMiddlewares.reduceRight<
       (event: EventPayload<object>) => Promise<void>
     >(

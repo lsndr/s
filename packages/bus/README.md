@@ -124,7 +124,7 @@ export class AppModule {}
 
 Provide a handler in exactly one module: if the same class is provided in more than one (for example in both `BusModule`'s `providers` and a parent module), the application fails to start. Handlers provided with `useFactory` are discovered too, and a `useExisting` alias of a handler is ignored since the aliased provider is discovered itself. To keep a handler out of an application, don't import the module that provides it.
 
-Handlers can be request-scoped or transient (the `scope` option), or depend on request-scoped providers. Such a handler is resolved anew for every event, and the event payload (`EventPayload`) is available as `REQUEST`:
+Handlers can be request-scoped or transient (the `scope` option), or depend on request-scoped providers. Such a handler is resolved anew for every event, and the event payload (`EventPayload`) is available as `REQUEST` (see [Middleware](#middleware) for how it combines with scoped middlewares):
 
 ```typescript
 @EventHandler(OrderPlaced, { scope: Scope.REQUEST })
@@ -161,7 +161,9 @@ A middleware must be provided in a module of the application, like a handler, so
 export class OrderPlacedHandler {}
 ```
 
-Global middlewares run before handler-level ones. A middleware is a single shared instance. Bootstrap fails if a referenced middleware is not provided anywhere, is provided more than once, or doesn't have the default scope.
+Global middlewares run before handler-level ones. Bootstrap fails if a referenced middleware is not provided anywhere or is provided more than once. Like handlers, middlewares can be provided with `useValue` or `useFactory`, and a `useExisting` alias is ignored.
+
+A middleware can be request-scoped or transient (`@Injectable({ scope: Scope.REQUEST })`), or depend on request-scoped providers. When a handler or any of its middlewares is scoped, they are all resolved anew for every event, in the same context, so they share request-scoped dependencies, and the event payload as received is available as `REQUEST`. Default-scoped middlewares are single shared instances.
 
 ### Health checks
 

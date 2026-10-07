@@ -1,4 +1,4 @@
-import { Inject, Injectable, Scope } from '@nestjs/common';
+import { Inject, Injectable, Scope, type Type } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -638,6 +638,230 @@ describe('BusModule', () => {
       expect(module.get(Dependency).seen).toHaveBeenCalledOnce();
 
       await module.close();
+    });
+
+    describe('scopes and provider kinds', () => {
+      const createModule = (
+        middleware: Type<EventHandlerMiddleware>,
+        providers: any[],
+      ) =>
+        Test.createTestingModule({
+          imports: [
+            BusModule.forRoot({
+              group: 'test-app',
+              middlewares: [middleware],
+              transport: {
+                provider: MockTransport,
+                config: {},
+              },
+            }),
+          ],
+          providers,
+        }).compile();
+
+      it('resolves a request-scoped middleware for every event with the payload as request', async () => {
+        const instances: object[] = [];
+        const requests: unknown[] = [];
+
+        @Injectable({ scope: Scope.REQUEST })
+        class ScopedMiddleware implements EventHandlerMiddleware {
+          public constructor(@Inject(REQUEST) request: unknown) {
+            instances.push(this);
+            requests.push(request);
+          }
+
+          public async use(
+            event: EventPayload<object>,
+            next: (event: EventPayload<object>) => Promise<void>,
+          ) {
+            await next(event);
+          }
+        }
+
+        const module = await createModule(ScopedMiddleware, [
+          TestHandler,
+          ScopedMiddleware,
+        ]);
+
+        await module.init();
+
+        const dispatcher = module.get<Dispatcher>(Dispatcher);
+        const first = new TestEvent({ value: 'first' });
+        const second = new TestEvent({ value: 'second' });
+
+        await dispatcher.publish(first);
+        await dispatcher.publish(second);
+
+        expect(instances).toHaveLength(2);
+        expect(instances[0]).not.toBe(instances[1]);
+        expect(requests).toEqual([
+          expect.objectContaining({ event: first }),
+          expect.objectContaining({ event: second }),
+        ]);
+        expect(module.get(TestHandler).handle).toHaveBeenCalledTimes(2);
+
+        await module.close();
+      });
+
+      it('resolves a transient middleware for every event', async () => {
+        const instances: object[] = [];
+
+        @Injectable({ scope: Scope.TRANSIENT })
+        class TransientMiddleware implements EventHandlerMiddleware {
+          public async use(
+            event: EventPayload<object>,
+            next: (event: EventPayload<object>) => Promise<void>,
+          ) {
+            instances.push(this);
+            await next(event);
+          }
+        }
+
+        const module = await createModule(TransientMiddleware, [
+          TestHandler,
+          TransientMiddleware,
+        ]);
+
+        await module.init();
+
+        const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+        await dispatcher.publish(new TestEvent({ value: 'first' }));
+        await dispatcher.publish(new TestEvent({ value: 'second' }));
+
+        expect(instances).toHaveLength(2);
+        expect(instances[0]).not.toBe(instances[1]);
+
+        await module.close();
+      });
+
+      it('shares request-scoped dependencies between middleware and handler within an event', async () => {
+        const seen: [object, object][] = [];
+
+        @Injectable({ scope: Scope.REQUEST })
+        class ScopedDependency {}
+
+        @Injectable()
+        class DependentMiddleware implements EventHandlerMiddleware {
+          public constructor(
+            @Inject(ScopedDependency) public readonly dep: ScopedDependency,
+          ) {}
+
+          public async use(
+            event: EventPayload<object>,
+            next: (event: EventPayload<object>) => Promise<void>,
+          ) {
+            await next(event);
+          }
+        }
+
+        @EventHandler(TestEvent, { middlewares: [DependentMiddleware] })
+        class DependentHandler {
+          public constructor(
+            @Inject(ScopedDependency) private readonly dep: ScopedDependency,
+            @Inject(DependentMiddleware)
+            private readonly middleware: DependentMiddleware,
+          ) {}
+
+          public handle() {
+            seen.push([this.dep, this.middleware.dep]);
+          }
+        }
+
+        const module = await createModule(DependentMiddleware, [
+          ScopedDependency,
+          DependentMiddleware,
+          DependentHandler,
+        ]);
+
+        await module.init();
+
+        const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+        await dispatcher.publish(new TestEvent({ value: 'first' }));
+        await dispatcher.publish(new TestEvent({ value: 'second' }));
+
+        expect(seen).toHaveLength(2);
+        expect(seen[0]![0]).toBe(seen[0]![1]);
+        expect(seen[1]![0]).toBe(seen[1]![1]);
+        expect(seen[0]![0]).not.toBe(seen[1]![0]);
+
+        await module.close();
+      });
+
+      it.each([
+        {
+          name: 'useValue',
+          provide: (instance: object) => ({
+            provide: 'MIDDLEWARE',
+            useValue: instance,
+          }),
+        },
+        {
+          name: 'useFactory',
+          provide: (instance: object) => ({
+            provide: 'MIDDLEWARE',
+            useFactory: () => instance,
+          }),
+        },
+      ])('applies a middleware provided with $name', async ({ provide }) => {
+        @Injectable()
+        class CustomProvidedMiddleware implements EventHandlerMiddleware {
+          public use = vi.fn(
+            async (
+              event: EventPayload<object>,
+              next: (event: EventPayload<object>) => Promise<void>,
+            ) => next(event),
+          );
+        }
+
+        const middleware = new CustomProvidedMiddleware();
+        const module = await createModule(CustomProvidedMiddleware, [
+          TestHandler,
+          provide(middleware),
+        ]);
+
+        await module.init();
+
+        await module
+          .get<Dispatcher>(Dispatcher)
+          .publish(new TestEvent({ value: 'test' }));
+
+        expect(middleware.use).toHaveBeenCalledOnce();
+
+        await module.close();
+      });
+
+      it('applies a middleware once when it is also provided with useExisting', async () => {
+        @Injectable()
+        class AliasedMiddleware implements EventHandlerMiddleware {
+          public static use = vi.fn();
+
+          public async use(
+            event: EventPayload<object>,
+            next: (event: EventPayload<object>) => Promise<void>,
+          ) {
+            AliasedMiddleware.use();
+            await next(event);
+          }
+        }
+
+        const module = await createModule(AliasedMiddleware, [
+          TestHandler,
+          AliasedMiddleware,
+          { provide: 'MIDDLEWARE_ALIAS', useExisting: AliasedMiddleware },
+        ]);
+
+        await module.init();
+
+        await module
+          .get<Dispatcher>(Dispatcher)
+          .publish(new TestEvent({ value: 'test' }));
+
+        expect(AliasedMiddleware.use).toHaveBeenCalledOnce();
+
+        await module.close();
+      });
     });
 
     it('throws if a middleware is not provided in any module', async () => {

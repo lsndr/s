@@ -330,9 +330,7 @@ describe('Transport', { timeout: 60_000 }, () => {
               } satisfies RabbitmqTransportConfig,
             },
           ],
-        })
-          .setLogger(silentLogger)
-          .compile();
+        }).compile();
 
         // intentionally skip module.init() so channel is never set
         const transport = module.get(RabbitmqTransport);
