@@ -124,6 +124,17 @@ export class AppModule {}
 
 Provide a handler in exactly one module: if the same class is provided in more than one (for example in both `BusModule`'s `providers` and a parent module), the application fails to start. To keep a handler out of an application, don't import the module that provides it.
 
+Handlers can be request-scoped or transient (the `scope` option), or depend on request-scoped providers. Such a handler is resolved anew for every event, and the event payload (`EventPayload`) is available as `REQUEST`:
+
+```typescript
+@EventHandler(OrderPlaced, { scope: Scope.REQUEST })
+export class OrderPlacedHandler {
+  constructor(
+    @Inject(REQUEST) private readonly payload: EventPayload<OrderPlaced>,
+  ) {}
+}
+```
+
 ### Middleware
 
 ```typescript

@@ -4,7 +4,12 @@ import {
   Type,
   type OnApplicationBootstrap,
 } from '@nestjs/common';
-import { DiscoveryService, Reflector } from '@nestjs/core';
+import {
+  ContextIdFactory,
+  DiscoveryService,
+  ModuleRef,
+  Reflector,
+} from '@nestjs/core';
 import {
   BUS_EVENT_HANDLER_METADATA,
   type EventHandlerMetadata,
@@ -26,6 +31,7 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
     @Inject(Subscriber) private readonly subscriber: Subscriber,
     @Inject(GlobalEventHandlerMiddlewares)
     private readonly globalEventHandlerMiddlewares: Type<EventHandlerMiddleware>[],
+    @Inject(ModuleRef) private readonly moduleRef: ModuleRef,
   ) {}
 
   public async onApplicationBootstrap(): Promise<void> {
@@ -37,30 +43,33 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
     const subscribed = new Set<unknown>();
 
     for (const provider of providers) {
-      if (!this.isConstructor(provider.metatype)) {
+      // Factory providers have a factory as metatype, the class is the type of
+      // the instance they produce
+      const metatype = (
+        provider.inject ? provider.instance?.constructor : provider.metatype
+      ) as Type<EventHandler<object>> | undefined;
+
+      if (!this.isConstructor(metatype)) {
         continue;
       }
 
       const metadata = this.reflector.get<EventHandlerMetadata | undefined>(
         BUS_EVENT_HANDLER_METADATA,
-        provider.metatype,
+        metatype,
       );
 
       if (!metadata) {
         continue;
       }
 
-      const metatype = provider.metatype as Type<EventHandler<object>>;
-
       if (subscribed.has(metatype)) {
         throw new Error(
-          `Event handler ${provider.name} is provided more than once. Provide it in a single module`,
+          `Event handler ${metatype.name} is provided more than once. Provide it in a single module`,
         );
       }
 
       subscribed.add(metatype);
 
-      const instance = provider.instance as EventHandler<object>;
       const eventHandlerMiddlewares = this.findMiddlewares(
         providers,
         metadata.middlewares,
@@ -69,7 +78,7 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
       const callback = this.buildMiddlewareChain(
         globalEventHandlerMiddlewares,
         eventHandlerMiddlewares,
-        instance,
+        this.createHandle(provider, metatype),
       );
 
       for (const event of metadata.events) {
@@ -78,11 +87,6 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
     }
   }
 
-  /**
-   * Looks up middleware instances among the providers of the application, so
-   * that the application decides in which module a middleware lives and how
-   * its dependencies are resolved.
-   */
   private findMiddlewares(
     providers: InstanceWrapper[],
     types: Type<EventHandlerMiddleware>[],
@@ -117,10 +121,39 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
     });
   }
 
+  private createHandle(
+    provider: InstanceWrapper,
+    metatype: Type<EventHandler<object>>,
+  ): (event: EventPayload<object>) => Promise<void> | void {
+    if (provider.isDependencyTreeStatic() && !provider.isTransient) {
+      const instance = provider.instance as EventHandler<object> | undefined;
+
+      if (!instance) {
+        throw new Error(`Event handler ${metatype.name} has no instance`);
+      }
+
+      return (event) => instance.handle(event);
+    }
+
+    return async (event) => {
+      const contextId = ContextIdFactory.create();
+
+      this.moduleRef.registerRequestByContextId(event, contextId);
+
+      const instance = await this.moduleRef.resolve<EventHandler<object>>(
+        provider.token,
+        contextId,
+        { strict: false },
+      );
+
+      await instance.handle(event);
+    };
+  }
+
   private buildMiddlewareChain(
     globalMiddlewares: EventHandlerMiddleware[],
     localMiddlewares: EventHandlerMiddleware[],
-    handler: EventHandler<object>,
+    handle: (event: EventPayload<object>) => Promise<void> | void,
   ): EventCallback<object> {
     const allMiddlewares = [...globalMiddlewares, ...localMiddlewares];
 
@@ -130,7 +163,7 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
       (next, middleware) => {
         return (event) => middleware.use(event, next);
       },
-      (event) => Promise.resolve(handler.handle(event)).then(() => undefined),
+      (event) => Promise.resolve(handle(event)).then(() => undefined),
     );
   }
 

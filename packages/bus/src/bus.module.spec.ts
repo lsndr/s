@@ -1,4 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Scope } from '@nestjs/common';
+import { REQUEST } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from './bus.module.js';
@@ -702,6 +703,141 @@ describe('BusModule', () => {
       );
 
       await module.close().catch(() => undefined);
+    });
+  });
+
+  describe('handler scopes', () => {
+    const createModule = (providers: any[]) =>
+      Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            group: 'test-app',
+            transport: {
+              provider: MockTransport,
+              config: {},
+            },
+          }),
+        ],
+        providers,
+      }).compile();
+
+    it('resolves a request-scoped handler for every event with the payload as request', async () => {
+      const instances: object[] = [];
+      const requests: unknown[] = [];
+
+      @EventHandler(TestEvent, { scope: Scope.REQUEST })
+      class ScopedHandler {
+        public constructor(@Inject(REQUEST) request: unknown) {
+          instances.push(this);
+          requests.push(request);
+        }
+
+        public handle() {}
+      }
+
+      const module = await createModule([ScopedHandler]);
+
+      await module.init();
+
+      const dispatcher = module.get<Dispatcher>(Dispatcher);
+      const first = new TestEvent({ value: 'first' });
+      const second = new TestEvent({ value: 'second' });
+
+      await dispatcher.publish(first);
+      await dispatcher.publish(second);
+
+      expect(instances).toHaveLength(2);
+      expect(instances[0]).not.toBe(instances[1]);
+      expect(requests).toEqual([
+        expect.objectContaining({ event: first }),
+        expect.objectContaining({ event: second }),
+      ]);
+
+      await module.close();
+    });
+
+    it('resolves a transient handler for every event', async () => {
+      const instances: object[] = [];
+
+      @EventHandler(TestEvent, { scope: Scope.TRANSIENT })
+      class TransientHandler {
+        public handle() {
+          instances.push(this);
+        }
+      }
+
+      const module = await createModule([TransientHandler]);
+
+      await module.init();
+
+      const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+      await dispatcher.publish(new TestEvent({ value: 'first' }));
+      await dispatcher.publish(new TestEvent({ value: 'second' }));
+
+      expect(instances).toHaveLength(2);
+      expect(instances[0]).not.toBe(instances[1]);
+
+      await module.close();
+    });
+
+    it('resolves a handler depending on a request-scoped provider for every event', async () => {
+      const dependencies: object[] = [];
+
+      @Injectable({ scope: Scope.REQUEST })
+      class ScopedDependency {}
+
+      @EventHandler(TestEvent)
+      class DependentHandler {
+        public constructor(
+          @Inject(ScopedDependency) private readonly dep: ScopedDependency,
+        ) {}
+
+        public handle() {
+          dependencies.push(this.dep);
+        }
+      }
+
+      const module = await createModule([ScopedDependency, DependentHandler]);
+
+      await module.init();
+
+      const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+      await dispatcher.publish(new TestEvent({ value: 'first' }));
+      await dispatcher.publish(new TestEvent({ value: 'second' }));
+
+      expect(dependencies).toHaveLength(2);
+      expect(dependencies[0]).not.toBe(dependencies[1]);
+
+      await module.close();
+    });
+
+    it('registers a handler provided by a factory', async () => {
+      @EventHandler(TestEvent)
+      class FactoryHandler {
+        public handle = vi.fn();
+      }
+
+      const handler = new FactoryHandler();
+      const module = await createModule([
+        { provide: 'FACTORY_HANDLER', useFactory: () => handler },
+      ]);
+
+      await module.init();
+
+      await module
+        .get<Dispatcher>(Dispatcher)
+        .publish(new TestEvent({ value: 'test' }));
+
+      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
+        TestEvent,
+        FactoryHandler.name,
+        expect.any(Function),
+      );
+      expect(handler.handle).toHaveBeenCalledOnce();
+
+      await module.close();
     });
   });
 });

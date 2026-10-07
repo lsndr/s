@@ -1,4 +1,4 @@
-import { Injectable, type Type } from '@nestjs/common';
+import { Injectable, type Scope, type Type } from '@nestjs/common';
 import {
   type EventPayload,
   type EventConstructor,
@@ -15,6 +15,7 @@ export interface EventHandlerMetadata {
 
 export interface EventHandlerOptions {
   middlewares?: Type<EventHandlerMiddleware>[];
+  scope?: Scope;
 }
 
 type EventPayloadOf<C> =
@@ -60,6 +61,6 @@ export function EventHandler(
       } satisfies EventHandlerMetadata,
       target,
     );
-    Injectable()(target);
+    Injectable({ scope: options?.scope })(target);
   };
 }
