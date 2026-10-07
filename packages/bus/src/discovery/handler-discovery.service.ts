@@ -43,11 +43,16 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
     const subscribed = new Set<unknown>();
 
     for (const provider of providers) {
+      // An alias (`useExisting`) points at a provider that is discovered on
+      // its own
+      if (provider.isAlias) {
+        continue;
+      }
+
       // Factory providers have a factory as metatype, the class is the type of
       // the instance they produce
-      const metatype = (
-        provider.inject ? provider.instance?.constructor : provider.metatype
-      ) as Type<EventHandler<object>> | undefined;
+      const metatype = (provider.instance?.constructor ?? provider.metatype) as
+        Type<EventHandler<object>> | undefined;
 
       if (!this.isConstructor(metatype)) {
         continue;

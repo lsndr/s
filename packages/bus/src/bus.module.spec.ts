@@ -813,6 +813,50 @@ describe('BusModule', () => {
       await module.close();
     });
 
+    it('registers a handler once when it is also provided with useExisting', async () => {
+      const module = await createModule([
+        TestHandler,
+        { provide: 'HANDLER_ALIAS', useExisting: TestHandler },
+      ]);
+
+      await module.init();
+
+      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
+        TestEvent,
+        TestHandler.name,
+        expect.any(Function),
+      );
+
+      await module.close();
+    });
+
+    it('registers a handler provided with useValue', async () => {
+      @EventHandler(TestEvent)
+      class ValueHandler {
+        public handle = vi.fn();
+      }
+
+      const handler = new ValueHandler();
+      const module = await createModule([
+        { provide: 'VALUE_HANDLER', useValue: handler },
+      ]);
+
+      await module.init();
+
+      await module
+        .get<Dispatcher>(Dispatcher)
+        .publish(new TestEvent({ value: 'test' }));
+
+      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
+        TestEvent,
+        ValueHandler.name,
+        expect.any(Function),
+      );
+      expect(handler.handle).toHaveBeenCalledOnce();
+
+      await module.close();
+    });
+
     it('registers a handler provided by a factory', async () => {
       @EventHandler(TestEvent)
       class FactoryHandler {
