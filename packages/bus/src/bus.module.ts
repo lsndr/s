@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import { HandlerDiscoveryService } from './discovery/handler-discovery.service.js';
+import { HandlerInvoker } from './discovery/handler-invoker.js';
 import { Transport, TransportConfig } from './transport/transport.js';
 import { Dispatcher } from './transport/dispatcher.js';
 import { BusConfig, BusRetriesConfig } from './types.js';
@@ -72,6 +73,7 @@ export class BusModule {
             group: options.group,
           } satisfies BusConfig,
         },
+        HandlerInvoker,
         HandlerDiscoveryService,
         ...(options.providers ?? []),
       ],

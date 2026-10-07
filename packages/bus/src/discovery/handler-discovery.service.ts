@@ -4,34 +4,25 @@ import {
   Type,
   type OnApplicationBootstrap,
 } from '@nestjs/common';
-import {
-  type ContextId,
-  ContextIdFactory,
-  DiscoveryService,
-  ModuleRef,
-  Reflector,
-} from '@nestjs/core';
+import { DiscoveryService, Reflector } from '@nestjs/core';
+import { type InstanceWrapper } from '@nestjs/core/injector/instance-wrapper.js';
 import {
   BUS_EVENT_HANDLER_METADATA,
   type EventHandlerMetadata,
 } from '../decorators/event-handler.decorator.js';
-import { type InstanceWrapper } from '@nestjs/core/injector/instance-wrapper.js';
-import { type EventCallback, Subscriber } from '../transport/subscriber.js';
-import { type EventHandler, type EventPayload } from '../types.js';
+import { Subscriber } from '../transport/subscriber.js';
+import { type EventHandler } from '../types.js';
 import {
   type EventHandlerMiddleware,
   GlobalEventHandlerMiddlewares,
 } from '../middleware/middleware.js';
+import { HandlerInvoker, type Resolvable } from './handler-invoker.js';
 
-/**
- * A provider of the application. Default-scoped ones have a single instance,
- * the others are resolved anew for every event.
- */
-interface Resolvable<T> {
-  wrapper: InstanceWrapper;
-  name: string;
-  /** Set when the provider has the default scope. */
-  instance: T | undefined;
+interface DiscoveredHandler {
+  metatype: Type<EventHandler<object>>;
+  metadata: EventHandlerMetadata;
+  handler: Resolvable<EventHandler<object>>;
+  middlewares: Resolvable<EventHandlerMiddleware>[];
 }
 
 @Injectable()
@@ -43,16 +34,32 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
     @Inject(Subscriber) private readonly subscriber: Subscriber,
     @Inject(GlobalEventHandlerMiddlewares)
     private readonly globalEventHandlerMiddlewares: Type<EventHandlerMiddleware>[],
-    @Inject(ModuleRef) private readonly moduleRef: ModuleRef,
+    @Inject(HandlerInvoker) private readonly invoker: HandlerInvoker,
   ) {}
 
   public async onApplicationBootstrap(): Promise<void> {
+    for (const {
+      metatype,
+      metadata,
+      handler,
+      middlewares,
+    } of this.findHandlers()) {
+      const callback = this.invoker.createCallback(middlewares, handler);
+
+      for (const event of metadata.events) {
+        await this.subscriber.subscribe(event, metatype.name, callback);
+      }
+    }
+  }
+
+  private findHandlers(): DiscoveredHandler[] {
     const providers = this.discoveryService.getProviders();
-    const globalEventHandlerMiddlewares = this.findMiddlewares(
+    const globalMiddlewares = this.findMiddlewares(
       providers,
       this.globalEventHandlerMiddlewares,
     );
-    const subscribed = new Set<unknown>();
+    const handlers: DiscoveredHandler[] = [];
+    const found = new Set<unknown>();
 
     for (const provider of providers) {
       // An alias (`useExisting`) points at a provider that is discovered on
@@ -64,7 +71,7 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
       const metatype = this.getClass(provider) as
         Type<EventHandler<object>> | undefined;
 
-      if (!this.isConstructor(metatype)) {
+      if (typeof metatype !== 'function') {
         continue;
       }
 
@@ -77,35 +84,31 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
         continue;
       }
 
-      if (subscribed.has(metatype)) {
+      if (found.has(metatype)) {
         throw new Error(
           `Event handler ${metatype.name} is provided more than once. Provide it in a single module`,
         );
       }
 
-      subscribed.add(metatype);
+      found.add(metatype);
 
-      const eventHandlerMiddlewares = this.findMiddlewares(
-        providers,
-        metadata.middlewares,
-      );
-
-      const callback = this.createCallback(
-        [...globalEventHandlerMiddlewares, ...eventHandlerMiddlewares],
-        this.toResolvable<EventHandler<object>>(provider, metatype.name),
-      );
-
-      for (const event of metadata.events) {
-        await this.subscriber.subscribe(event, metatype.name, callback);
-      }
+      handlers.push({
+        metatype,
+        metadata,
+        handler: this.toResolvable<EventHandler<object>>(
+          provider,
+          metatype.name,
+        ),
+        middlewares: [
+          ...globalMiddlewares,
+          ...this.findMiddlewares(providers, metadata.middlewares),
+        ],
+      });
     }
+
+    return handlers;
   }
 
-  /**
-   * Looks up middleware providers of the application, so that the application
-   * decides in which module a middleware lives and how its dependencies are
-   * resolved.
-   */
   private findMiddlewares(
     providers: InstanceWrapper[],
     types: Type<EventHandlerMiddleware>[],
@@ -155,74 +158,5 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
     }
 
     return { wrapper, name, instance: wrapper.instance as T };
-  }
-
-  /**
-   * Builds the callback of a handler. When everything in the chain is a
-   * singleton the chain is built once. Otherwise, the scoped providers are
-   * resolved for every event, all in the same context so that they share
-   * request-scoped dependencies, and the event payload is available as
-   * `REQUEST`.
-   */
-  private createCallback(
-    middlewares: Resolvable<EventHandlerMiddleware>[],
-    handler: Resolvable<EventHandler<object>>,
-  ): EventCallback<object> {
-    if (handler.instance && middlewares.every((m) => m.instance)) {
-      const instance = handler.instance;
-
-      return this.buildMiddlewareChain(
-        middlewares.map((m) => m.instance!),
-        (event) => instance.handle(event),
-      );
-    }
-
-    return async (event) => {
-      const contextId = ContextIdFactory.create();
-
-      this.moduleRef.registerRequestByContextId(event, contextId);
-
-      const resolvedMiddlewares: EventHandlerMiddleware[] = [];
-
-      for (const middleware of middlewares) {
-        resolvedMiddlewares.push(await this.resolve(middleware, contextId));
-      }
-
-      const resolvedHandler = await this.resolve(handler, contextId);
-
-      await this.buildMiddlewareChain(resolvedMiddlewares, (e) =>
-        resolvedHandler.handle(e),
-      )(event);
-    };
-  }
-
-  private async resolve<T>(
-    resolvable: Resolvable<T>,
-    contextId: ContextId,
-  ): Promise<T> {
-    return (
-      resolvable.instance ??
-      (await this.moduleRef.resolve<T>(resolvable.wrapper.token, contextId, {
-        strict: false,
-      }))
-    );
-  }
-
-  private buildMiddlewareChain(
-    allMiddlewares: EventHandlerMiddleware[],
-    handle: (event: EventPayload<object>) => Promise<void> | void,
-  ): EventCallback<object> {
-    return allMiddlewares.reduceRight<
-      (event: EventPayload<object>) => Promise<void>
-    >(
-      (next, middleware) => {
-        return (event) => middleware.use(event, next);
-      },
-      (event) => Promise.resolve(handle(event)).then(() => undefined),
-    );
-  }
-
-  private isConstructor(value: unknown): value is object {
-    return typeof value === 'function';
   }
 }
