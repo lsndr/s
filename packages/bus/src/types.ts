@@ -1,5 +1,3 @@
-import { type Type } from '@nestjs/common';
-
 export interface EventPayload<E extends object> {
   id: string;
   event: E;
@@ -12,10 +10,6 @@ export type EventConstructor<E extends object> = new (...args: any) => E;
 export interface EventHandler<E extends object> {
   handle(event: EventPayload<E>): Promise<void> | void;
 }
-
-export type EventHandlers = Type<EventHandler<object>>[];
-
-export const EventHandlers = Symbol('EventHandlers');
 
 export interface BusRetriesConfig {
   max: number;

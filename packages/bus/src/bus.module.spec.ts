@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from './bus.module.js';
@@ -84,51 +84,67 @@ describe('BusModule', () => {
     await module.close();
   });
 
-  it('registers explicit even handlers', async () => {
+  it.each([
+    {
+      name: 'bus',
+      busProviders: [TestHandler],
+      parentProviders: [],
+    },
+    {
+      name: 'parent',
+      busProviders: [],
+      parentProviders: [TestHandler],
+    },
+  ])(
+    'registers handlers provided in $name module',
+    async ({ busProviders, parentProviders: mainProviders }) => {
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            group: 'test-app',
+            transport: {
+              provider: MockTransport,
+              config: {},
+            },
+            providers: [...busProviders],
+          }),
+        ],
+        providers: [...mainProviders],
+      }).compile();
+
+      await module.init();
+
+      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
+        TestEvent,
+        TestHandler.name,
+        expect.any(Function),
+      );
+
+      await module.close();
+    },
+  );
+
+  it('throws if a handler is provided in both BusModule and a parent module', async () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
           group: 'test-app',
-          handlers: [TestHandler],
           transport: {
             provider: MockTransport,
             config: {},
           },
+          providers: [TestHandler],
         }),
       ],
       providers: [TestHandler],
     }).compile();
 
-    await module.init();
-
-    expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
-      TestEvent,
-      TestHandler.name,
-      expect.any(Function),
+    await expect(module.init()).rejects.toThrow(
+      `Event handler ${TestHandler.name} is provided more than once`,
     );
 
-    await module.close();
-  });
-
-  it('does not register implicit event handlers', async () => {
-    const module = await Test.createTestingModule({
-      imports: [
-        BusModule.forRoot({
-          group: 'test-app',
-          transport: {
-            provider: MockTransport,
-            config: {},
-          },
-        }),
-      ],
-      providers: [TestHandler],
-    }).compile();
-
-    await module.init();
-
-    expect(MockTransport.subscribe).not.toHaveBeenCalled();
-
-    await module.close();
+    // Nest rethrows the failed initialization on close
+    await module.close().catch(() => undefined);
   });
 
   describe('multiple events', () => {
@@ -154,7 +170,6 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             group: 'test-app',
-            handlers: [MultiEventHandler],
             transport: {
               provider: MockTransport,
               config: {},
@@ -191,7 +206,6 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             group: 'test-app',
-            handlers: [MultiEventHandler],
             transport: {
               provider: MockTransport,
               config: {},
@@ -247,14 +261,13 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             group: 'test-app',
-            handlers: [MultiEventHandler],
             transport: {
               provider: MockTransport,
               config: {},
             },
           }),
         ],
-        providers: [MultiEventHandler],
+        providers: [MultiEventHandler, MultiEventMiddleware],
       }).compile();
 
       await module.init();
@@ -305,7 +318,6 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             group: 'test-app',
-            handlers: [TestHandler],
             middlewares: [TestMiddleware],
             transport: {
               provider: MockTransport,
@@ -313,7 +325,7 @@ describe('BusModule', () => {
             },
           }),
         ],
-        providers: [TestHandler],
+        providers: [TestHandler, TestMiddleware],
       }).compile();
 
       await module.init();
@@ -367,7 +379,6 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             group: 'test-app',
-            handlers: [TestHandler],
             middlewares: [MiddlewareA, MiddlewareB],
             transport: {
               provider: MockTransport,
@@ -375,7 +386,7 @@ describe('BusModule', () => {
             },
           }),
         ],
-        providers: [TestHandler],
+        providers: [TestHandler, MiddlewareA, MiddlewareB],
       }).compile();
 
       await module.init();
@@ -426,14 +437,13 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             group: 'test-app',
-            handlers: [TestHandler, HandlerWithMiddleware],
             transport: {
               provider: MockTransport,
               config: {},
             },
           }),
         ],
-        providers: [TestHandler, HandlerWithMiddleware],
+        providers: [TestHandler, HandlerWithMiddleware, HandlerMiddleware],
       }).compile();
 
       await module.init();
@@ -485,7 +495,6 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             group: 'test-app',
-            handlers: [HandlerWithMiddleware],
             middlewares: [BusLevelMiddleware],
             transport: {
               provider: MockTransport,
@@ -493,7 +502,11 @@ describe('BusModule', () => {
             },
           }),
         ],
-        providers: [HandlerWithMiddleware],
+        providers: [
+          HandlerWithMiddleware,
+          BusLevelMiddleware,
+          HandlerLevelMiddleware,
+        ],
       }).compile();
 
       await module.init();
@@ -522,7 +535,6 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             group: 'test-app',
-            handlers: [TestHandler],
             middlewares: [PayloadModifyingMiddleware],
             transport: {
               provider: MockTransport,
@@ -530,7 +542,7 @@ describe('BusModule', () => {
             },
           }),
         ],
-        providers: [TestHandler],
+        providers: [TestHandler, PayloadModifyingMiddleware],
       }).compile();
 
       await module.init();
@@ -559,7 +571,6 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             group: 'test-app',
-            handlers: [TestHandler],
             middlewares: [ShortCircuitMiddleware],
             transport: {
               provider: MockTransport,
@@ -567,7 +578,7 @@ describe('BusModule', () => {
             },
           }),
         ],
-        providers: [TestHandler],
+        providers: [TestHandler, ShortCircuitMiddleware],
       }).compile();
 
       await module.init();
@@ -580,6 +591,117 @@ describe('BusModule', () => {
       expect(handler.handle).not.toHaveBeenCalled();
 
       await module.close();
+    });
+
+    it('resolves middleware dependencies from the module providing it', async () => {
+      @Injectable()
+      class Dependency {
+        public readonly seen = vi.fn();
+      }
+
+      @Injectable()
+      class DependentMiddleware implements EventHandlerMiddleware {
+        public constructor(
+          @Inject(Dependency) private readonly dep: Dependency,
+        ) {}
+
+        public async use(
+          event: EventPayload<object>,
+          next: (event: EventPayload<object>) => Promise<void>,
+        ) {
+          this.dep.seen();
+          await next(event);
+        }
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            group: 'test-app',
+            middlewares: [DependentMiddleware],
+            transport: {
+              provider: MockTransport,
+              config: {},
+            },
+          }),
+        ],
+        providers: [TestHandler, Dependency, DependentMiddleware],
+      }).compile();
+
+      await module.init();
+
+      await module
+        .get<Dispatcher>(Dispatcher)
+        .publish(new TestEvent({ value: 'test' }));
+
+      expect(module.get(Dependency).seen).toHaveBeenCalledOnce();
+
+      await module.close();
+    });
+
+    it('throws if a middleware is not provided in any module', async () => {
+      @Injectable()
+      class NotProvidedMiddleware implements EventHandlerMiddleware {
+        public async use(
+          event: EventPayload<object>,
+          next: (event: EventPayload<object>) => Promise<void>,
+        ) {
+          await next(event);
+        }
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            group: 'test-app',
+            middlewares: [NotProvidedMiddleware],
+            transport: {
+              provider: MockTransport,
+              config: {},
+            },
+          }),
+        ],
+        providers: [TestHandler],
+      }).compile();
+
+      await expect(module.init()).rejects.toThrow(
+        'Middleware NotProvidedMiddleware is not provided in any module',
+      );
+
+      await module.close().catch(() => undefined);
+    });
+
+    it('throws if a middleware is provided in more than one module', async () => {
+      @Injectable()
+      class DuplicatedMiddleware implements EventHandlerMiddleware {
+        public async use(
+          event: EventPayload<object>,
+          next: (event: EventPayload<object>) => Promise<void>,
+        ) {
+          await next(event);
+        }
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            group: 'test-app',
+            middlewares: [DuplicatedMiddleware],
+            transport: {
+              provider: MockTransport,
+              config: {},
+            },
+            providers: [DuplicatedMiddleware],
+          }),
+        ],
+        providers: [TestHandler, DuplicatedMiddleware],
+      }).compile();
+
+      await expect(module.init()).rejects.toThrow(
+        'Middleware DuplicatedMiddleware is provided more than once',
+      );
+
+      await module.close().catch(() => undefined);
     });
   });
 });

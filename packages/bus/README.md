@@ -38,7 +38,6 @@ import { BusModule, RabbitmqTransport } from '@lsndr/bus';
         provider: RabbitmqTransport,
         config: { url: 'amqp://localhost' },
       },
-      handlers: [OrderPlacedHandler],
       providers: [OrderPlacedHandler],
     }),
   ],
@@ -99,7 +98,31 @@ export class OrderAuditHandler {
 }
 ```
 
-`@EventHandler` makes the class injectable, but it must also be registered as a provider **and** listed in the `handlers` option. Handlers missing from `handlers` are skipped with a warning at bootstrap.
+`@EventHandler` makes the class injectable. Register it as a provider in any module of the application, either in the `providers` option above or in a module of its own, and it is subscribed at bootstrap. Declaring it in a module of its own lets the handler inject that module's dependencies:
+
+```typescript
+@Module({
+  imports: [OrdersModule], // provides what OrderPlacedHandler injects
+  providers: [OrderPlacedHandler],
+})
+export class BillingModule {}
+
+@Module({
+  imports: [
+    BillingModule,
+    BusModule.forRoot({
+      group: 'billing',
+      transport: {
+        provider: RabbitmqTransport,
+        config: { url: 'amqp://localhost' },
+      },
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+Provide a handler in exactly one module: if the same class is provided in more than one (for example in both `BusModule`'s `providers` and a parent module), the application fails to start. To keep a handler out of an application, don't import the module that provides it.
 
 ### Middleware
 
@@ -120,14 +143,14 @@ export class TimingMiddleware implements EventHandlerMiddleware {
 }
 ```
 
-Register globally with the `middlewares` option, or per handler:
+A middleware must be provided in a module of the application, like a handler, so it is up to you how its dependencies are resolved. Then reference the class globally with the `middlewares` option, or per handler:
 
 ```typescript
 @EventHandler(OrderPlaced, { middlewares: [TimingMiddleware] })
 export class OrderPlacedHandler {}
 ```
 
-Global middlewares run before handler-level ones.
+Global middlewares run before handler-level ones. A middleware is a single shared instance. Bootstrap fails if a referenced middleware is not provided anywhere, is provided more than once, or doesn't have the default scope.
 
 ### Health checks
 
@@ -143,8 +166,7 @@ await this.health.assertHealthy(); // throws if the broker is unreachable
 
 - `group` — required. Consumer group name, used as a prefix for queue names.
 - `transport` — required. `{ provider, config }`; for RabbitMQ, `config` is `{ url }`, for Redis Streams see [Redis Streams topology](#redis-streams-topology).
-- `handlers` — event handler classes to subscribe.
-- `middlewares` — global middleware classes.
+- `middlewares` — global middleware classes. They must be provided in a module of the application.
 - `imports`, `providers` — additional Nest imports and providers for the module.
 - `retries.max` — maximum retries before a message is dropped. Defaults to `5`.
 - `retries.delay` — delay between retries in milliseconds. Defaults to `5000`.
