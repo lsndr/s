@@ -6,9 +6,10 @@ import {
 } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import { HandlerDiscoveryService } from './discovery/handler-discovery.service.js';
+import { HandlerInvoker } from './discovery/handler-invoker.js';
 import { Transport, TransportConfig } from './transport/transport.js';
 import { Dispatcher } from './transport/dispatcher.js';
-import { BusConfig, BusRetriesConfig, EventHandlers } from './types.js';
+import { BusConfig, BusRetriesConfig } from './types.js';
 import { Subscriber } from './transport/subscriber.js';
 import { Health } from './transport/health.js';
 import { GlobalEventHandlerMiddlewares } from './middleware/middleware.js';
@@ -22,7 +23,6 @@ export interface BusTransport<T extends Transport> {
 
 export interface BusModuleOptions<T extends Transport> {
   group: string;
-  handlers?: EventHandlers;
   middlewares?: GlobalEventHandlerMiddlewares;
   transport: BusTransport<T>;
   imports?: any[];
@@ -35,7 +35,6 @@ export class BusModule {
   public static forRoot<T extends Transport>(
     options: BusModuleOptions<T>,
   ): DynamicModule {
-    const handlers = options.handlers ?? [];
     const middlewares = options.middlewares ?? [];
 
     return {
@@ -43,10 +42,6 @@ export class BusModule {
       module: BusModule,
       imports: [DiscoveryModule, ...(options.imports ?? [])],
       providers: [
-        {
-          provide: EventHandlers,
-          useValue: handlers,
-        },
         {
           provide: GlobalEventHandlerMiddlewares,
           useValue: middlewares,
@@ -78,6 +73,7 @@ export class BusModule {
             group: options.group,
           } satisfies BusConfig,
         },
+        HandlerInvoker,
         HandlerDiscoveryService,
         ...(options.providers ?? []),
       ],
