@@ -1,25 +1,21 @@
-import {
-  type DynamicModule,
-  Module,
-  type Provider,
-  type Type,
-} from '@nestjs/common';
+import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import { HandlerDiscoveryService } from './discovery/handler-discovery.service.js';
 import { HandlerInvoker } from './discovery/handler-invoker.js';
-import { Transport, TransportConfig } from './transport/transport.js';
+import {
+  type BusTransport,
+  Transport,
+  TransportConfig,
+} from './transport/transport.js';
+import { Outbox, type OutboxConfig } from './transport/outbox/outbox.js';
+import { OutboxTransportModule } from './transport/outbox/outbox-transport.module.js';
 import { Dispatcher } from './transport/dispatcher.js';
 import { BusConfig, BusRetriesConfig } from './types.js';
 import { Subscriber } from './transport/subscriber.js';
 import { Health } from './transport/health.js';
 import { GlobalEventHandlerMiddlewares } from './middleware/middleware.js';
 
-type InferTransportConfig<T> = T extends Transport<infer C> ? C : unknown;
-
-export interface BusTransport<T extends Transport> {
-  provider: Type<T>;
-  config: InferTransportConfig<T>;
-}
+export { type BusTransport };
 
 export interface BusModuleOptions<T extends Transport> {
   group: string;
@@ -36,11 +32,28 @@ export class BusModule {
     options: BusModuleOptions<T>,
   ): DynamicModule {
     const middlewares = options.middlewares ?? [];
-
+    const busConfig = {
+      retries: {
+        max: options.retries?.max ?? 5,
+        delay: options.retries?.delay ?? 5000,
+      },
+      group: options.group,
+    } satisfies BusConfig;
     return {
       global: true,
       module: BusModule,
-      imports: [DiscoveryModule, ...(options.imports ?? [])],
+      imports: [
+        DiscoveryModule,
+        ...(this.isOutbox(options.transport)
+          ? [
+              OutboxTransportModule.register(
+                options.transport.config.transport,
+                busConfig,
+              ),
+            ]
+          : []),
+        ...(options.imports ?? []),
+      ],
       providers: [
         {
           provide: GlobalEventHandlerMiddlewares,
@@ -65,13 +78,7 @@ export class BusModule {
         },
         {
           provide: BusConfig,
-          useValue: {
-            retries: {
-              max: options.retries?.max ?? 5,
-              delay: options.retries?.delay ?? 5000,
-            },
-            group: options.group,
-          } satisfies BusConfig,
+          useValue: busConfig,
         },
         HandlerInvoker,
         HandlerDiscoveryService,
@@ -79,5 +86,11 @@ export class BusModule {
       ],
       exports: [Dispatcher, Health],
     };
+  }
+
+  private static isOutbox(
+    transport: BusTransport<Transport>,
+  ): transport is BusTransport<Outbox<OutboxConfig>> {
+    return transport.provider.prototype instanceof Outbox;
   }
 }

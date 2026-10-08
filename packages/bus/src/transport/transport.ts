@@ -2,9 +2,14 @@ import { type PublishOptions, type Dispatcher } from './dispatcher.js';
 import { type EventConstructor } from '../types.js';
 import { type EventCallback, type Subscriber } from './subscriber.js';
 import { type Health } from './health.js';
-import { Inject } from '@nestjs/common';
+import { Inject, type Type } from '@nestjs/common';
 
 export const TransportConfig = Symbol('TransportConfig');
+
+export interface TransportPublishOptions extends PublishOptions {
+  /** Event name. Defaults to the class name of the event. */
+  name?: string;
+}
 
 export abstract class Transport<TransportConfig = unknown>
   implements Dispatcher, Subscriber, Health
@@ -14,7 +19,7 @@ export abstract class Transport<TransportConfig = unknown>
 
   public abstract publish<E extends object>(
     event: E,
-    options?: PublishOptions,
+    options?: TransportPublishOptions,
   ): Promise<void>;
 
   public abstract subscribe<
@@ -23,4 +28,12 @@ export abstract class Transport<TransportConfig = unknown>
   >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
 
   public abstract assertHealthy(): Promise<void>;
+}
+
+export type InferTransportConfig<T> =
+  T extends Transport<infer C> ? C : unknown;
+
+export interface BusTransport<T extends Transport> {
+  provider: Type<T>;
+  config: InferTransportConfig<T>;
 }
