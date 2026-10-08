@@ -8,9 +8,8 @@ import {
 } from '@nestjs/common';
 import { type RedisClientType } from 'redis';
 import { type EventConstructor, BusConfig } from '../../types.js';
-import { Transport } from '../transport.js';
+import { Transport, type TransportPublishOptions } from '../transport.js';
 import { type EventCallback } from '../subscriber.js';
-import { PublishOptions } from '../dispatcher.js';
 import { createEventDto, parseEventPayload } from '../event-dto.js';
 import { StreamConsumer } from './stream-consumer.js';
 
@@ -116,7 +115,7 @@ export class RedisStreamsTransport
 
   public async publish<E extends object>(
     event: E,
-    options?: PublishOptions,
+    options?: TransportPublishOptions,
   ): Promise<void> {
     const payload = createEventDto(event, options);
     const json = JSON.stringify(payload);

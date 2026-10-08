@@ -1,7 +1,7 @@
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import { v7 as uuidv7 } from 'uuid';
 import { type EventConstructor, type EventPayload } from '../types.js';
-import { type PublishOptions } from './dispatcher.js';
+import { type TransportPublishOptions } from './transport.js';
 
 /** Wire format of an event, shared by all transports. */
 export interface EventDto {
@@ -16,19 +16,19 @@ export interface EventDto {
  * Serializes an event to its wire format.
  *
  * @param event - Event instance. Its class name becomes the event name.
- * @param options - Optional event id and meta.
+ * @param options - Optional event id, name, meta and publication time.
  * @returns The DTO, with a UUID v7 id unless `options.id` is set.
  */
 export function createEventDto<E extends object>(
   event: E,
-  options?: PublishOptions,
+  options?: TransportPublishOptions,
 ): EventDto {
   return {
     id: options?.id ?? uuidv7(),
-    name: event.constructor.name,
+    name: options?.name ?? event.constructor.name,
     event: instanceToPlain(event),
     meta: options?.meta ?? {},
-    publishedAt: new Date(),
+    publishedAt: options?.publishedAt ?? new Date(),
   };
 }
 

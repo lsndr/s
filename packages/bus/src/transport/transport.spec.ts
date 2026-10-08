@@ -148,6 +148,33 @@ describe('Transport', { timeout: 60_000 }, () => {
       await teardown();
     });
 
+    it('republishes persisted data under its original id, name and time', async () => {
+      const config: BusConfig = {
+        group: crypto.randomUUID(),
+        retries: { max: 0, delay: 100 },
+      };
+      const transport = await createTransport(config);
+      const handler = vi.fn();
+      const publishedAt = new Date('2026-01-02T03:04:05.000Z');
+
+      await transport.subscribe(TestEvent, 'TestHandler', handler);
+      await transport.publish(
+        { value: 'hello' },
+        { id: 'persisted-id', name: 'TestEvent', meta: { a: 1 }, publishedAt },
+      );
+
+      await vi.waitFor(() => {
+        expect(handler).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            id: 'persisted-id',
+            event: expect.objectContaining({ value: 'hello' }),
+            meta: { a: 1 },
+            publishedAt,
+          }),
+        );
+      });
+    });
+
     it('delivers message to multiple groups', async () => {
       const subscribe = async () => {
         const handler = vi.fn();

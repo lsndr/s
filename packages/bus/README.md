@@ -70,6 +70,7 @@ export class OrderService {
   async place(orderId: string) {
     await this.dispatcher.publish(new OrderPlaced(orderId), {
       id: 'custom-id', // optional, a UUID v7 is generated if omitted
+      publishedAt: new Date(), // optional, defaults to now
       meta: { correlationId: 'abc-123' }, // optional
     });
   }
@@ -172,6 +173,58 @@ import { Health } from '@lsndr/bus';
 
 await this.health.assertHealthy(); // throws if the broker is unreachable
 ```
+
+## Outbox
+
+`Outbox` is a transport that stores events instead of publishing them, so the event can be written in the same database transaction as your data. A background loop then relays the stored events to a real transport (RabbitMQ, Redis Streams, or your own `Transport`). Subscriptions and health checks go straight to that transport.
+
+Extend `Outbox` with your store and pass the real transport in `config.transport`, using the same `{ provider, config }` shape as `transport`:
+
+```typescript
+import { Outbox, type OutboxConfig, type OutboxRecord } from '@lsndr/bus';
+
+interface PostgresOutboxConfig extends OutboxConfig {
+  batchSize: number;
+}
+
+@Injectable()
+class PostgresOutbox extends Outbox<PostgresOutboxConfig> {
+  // Runs inside the caller's transaction: join it here (e.g. via AsyncLocalStorage)
+  protected async save(record: OutboxRecord) {
+    // INSERT INTO outbox (...) VALUES (...)
+  }
+
+  protected async relay() {
+    // BEGIN
+    // SELECT ... FROM outbox ORDER BY ... LIMIT this.config.batchSize FOR UPDATE SKIP LOCKED
+    // await this.dispatch(rows)
+    // DELETE FROM outbox WHERE id = ANY(...)
+    // COMMIT
+    // return rows.length
+  }
+}
+
+BusModule.forRoot({
+  group: 'billing',
+  transport: {
+    provider: PostgresOutbox,
+    config: {
+      transport: {
+        provider: RabbitmqTransport,
+        config: { url: 'amqp://localhost' },
+      },
+      interval: 1000, // optional, ms to wait when idle or after a failure
+      batchSize: 100, // your own option
+    },
+  },
+});
+```
+
+- `publish` calls `save` with an `OutboxRecord` (id, event name, plain event data, meta, `publishedAt`).
+- `relay` is called in a loop. It locks pending records, calls `this.dispatch(records)`, and marks them dispatched only if that resolves. It returns the number of records dispatched: if above zero it runs again right away, otherwise it waits `interval`. Batching and limits are up to your implementation.
+- `dispatch` publishes the records one by one, in order, to the real transport with their original `id`, `name`, `meta` and `publishedAt`. It rejects on the first failure, so roll back and retry. Delivery is at-least-once.
+- Locking with `SKIP LOCKED` lets several instances relay together, at the cost of strict ordering between batches.
+- If you override `onApplicationBootstrap` or `onModuleDestroy`, call `super`.
 
 ## Configuration
 

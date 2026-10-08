@@ -6,14 +6,13 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { type EventConstructor, BusConfig } from '../../types.js';
-import { Transport } from '../transport.js';
+import { Transport, type TransportPublishOptions } from '../transport.js';
 import {
   type ChannelModel,
   type ConfirmChannel,
   type ConsumeMessage,
 } from 'amqplib';
 import { type EventCallback } from '../subscriber.js';
-import { PublishOptions } from '../dispatcher.js';
 import {
   createEventDto,
   parseEventPayload,
@@ -65,7 +64,7 @@ export class RabbitmqTransport
 
   public publish<E extends object>(
     event: E,
-    options?: PublishOptions,
+    options?: TransportPublishOptions,
   ): Promise<void> {
     const payload = createEventDto(event, options);
 
