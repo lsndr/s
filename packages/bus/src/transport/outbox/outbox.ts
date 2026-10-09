@@ -5,9 +5,10 @@ import {
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { setTimeout } from 'node:timers/promises';
-import { type EventConstructor } from '../../types.js';
 import { createEventDto, type EventDto } from '../event-dto.js';
-import { type EventCallback } from '../subscriber.js';
+import { type PublishEvent } from '../dispatcher.js';
+import { type EventCallback, type Subscription } from '../subscriber.js';
+import { type EventConstructor } from '../../types.js';
 import {
   type BusTransport,
   Transport,
@@ -55,10 +56,12 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   private loop?: Promise<void>;
 
   /**
-   * Stores a record. To make the event part of the caller's transaction, join
-   * it here, e.g. through `AsyncLocalStorage`.
+   * Stores the records of one `publish` call, in order. Store them together,
+   * so that a batch is either saved entirely or not at all. To make the events
+   * part of the caller's transaction, join it here, e.g. through
+   * `AsyncLocalStorage`.
    */
-  protected abstract save(record: OutboxRecord): Promise<void>;
+  protected abstract save(records: OutboxRecord[]): Promise<void>;
 
   /**
    * Relays pending records. Implementations lock the pending records they
@@ -83,39 +86,75 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
     await this.loop;
   }
 
-  public async publish<E extends object>(
-    event: E,
-    options?: TransportPublishOptions,
-  ): Promise<void> {
-    await this.save(createEventDto(event, options));
-  }
-
-  public subscribe<
-    C extends EventConstructor<any>,
-    E extends InstanceType<C> = InstanceType<C>,
-  >(event: C, handler: string, callback: EventCallback<E>): Promise<void> {
-    return this.transport.subscribe(event, handler, callback);
-  }
-
   public assertHealthy(): Promise<void> {
     return this.transport.assertHealthy();
   }
 
+  public publish(
+    events: PublishEvent<TransportPublishOptions>[],
+  ): Promise<void>;
+  public publish(
+    event: object,
+    options?: TransportPublishOptions,
+  ): Promise<void>;
+  public async publish(
+    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
+    options?: TransportPublishOptions,
+  ): Promise<void> {
+    const events = Array.isArray(eventOrEvents)
+      ? eventOrEvents
+      : [{ event: eventOrEvents, options }];
+
+    if (events.length === 0) {
+      return;
+    }
+
+    await this.save(
+      events.map(({ event, options }) => createEventDto(event, options)),
+    );
+  }
+
+  public subscribe(subscriptions: Subscription[]): Promise<void>;
+  public subscribe<
+    C extends EventConstructor<any>,
+    E extends InstanceType<C> = InstanceType<C>,
+  >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
+  public subscribe(
+    eventOrSubscriptions: EventConstructor<any> | Subscription[],
+    handler?: string,
+    callback?: EventCallback<any>,
+  ): Promise<void> {
+    const subscriptions = Array.isArray(eventOrSubscriptions)
+      ? eventOrSubscriptions
+      : [
+          {
+            event: eventOrSubscriptions,
+            handler: handler!,
+            callback: callback!,
+          },
+        ];
+
+    return this.transport.subscribe(subscriptions);
+  }
+
   /**
-   * Publishes records to the configured transport one by one, in order, with
-   * their original id, name, meta and publication time. Rejects on the first
+   * Publishes records to the configured transport in order, with their
+   * original id, name, meta and publication time. Rejects on the first
    * failure, so the records are expected to stay pending and be retried
    * (at-least-once delivery).
    */
   protected async dispatch(records: OutboxRecord[]): Promise<void> {
-    for (const record of records) {
-      await this.transport.publish(record.event, {
-        id: record.id,
-        name: record.name,
-        meta: record.meta,
-        publishedAt: new Date(record.publishedAt),
-      });
-    }
+    await this.transport.publish(
+      records.map((record) => ({
+        event: record.event,
+        options: {
+          id: record.id,
+          name: record.name,
+          meta: record.meta,
+          publishedAt: new Date(record.publishedAt),
+        },
+      })),
+    );
   }
 
   private async runLoop(signal: AbortSignal): Promise<void> {

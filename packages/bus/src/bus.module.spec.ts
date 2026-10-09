@@ -5,8 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from './bus.module.js';
 import { EventHandler } from './decorators/event-handler.decorator.js';
 import { Transport } from './transport/transport.js';
-import { Dispatcher, type PublishOptions } from './transport/dispatcher.js';
-import { type EventCallback } from './transport/subscriber.js';
+import {
+  Dispatcher,
+  type PublishEvent,
+  type PublishOptions,
+} from './transport/dispatcher.js';
+import {
+  type EventCallback,
+  type Subscription,
+} from './transport/subscriber.js';
 import { type EventConstructor, EventPayload } from './types.js';
 import { type EventHandlerMiddleware } from './middleware/middleware.js';
 
@@ -36,24 +43,47 @@ class MockTransport extends Transport {
       }
     },
   );
-  public static subscribe = vi.fn((event: any, handler: any, callback: any) => {
-    MockTransport.subscriptions.push({
-      event: event as EventConstructor<object>,
-      callback: callback as EventCallback<object>,
-    });
+  public static subscribe = vi.fn((subscriptions: Subscription[]) => {
+    MockTransport.subscriptions.push(...subscriptions);
 
     return Promise.resolve();
   });
   public static assertHealthy = vi.fn().mockResolvedValue(undefined);
 
-  private static readonly subscriptions: {
-    event: EventConstructor<object>;
-    callback: EventCallback<object>;
-  }[] = [];
+  private static readonly subscriptions: Subscription[] = [];
 
   public assertHealthy = MockTransport.assertHealthy;
-  public subscribe = MockTransport.subscribe;
-  public publish = MockTransport.publish;
+
+  public async publish(
+    eventOrEvents: object | PublishEvent[],
+    options?: PublishOptions,
+  ): Promise<void> {
+    const events = Array.isArray(eventOrEvents)
+      ? eventOrEvents
+      : [{ event: eventOrEvents, options }];
+
+    for (const item of events) {
+      await MockTransport.publish(item.event, item.options);
+    }
+  }
+
+  public async subscribe(
+    eventOrSubscriptions: EventConstructor<any> | Subscription[],
+    handler?: string,
+    callback?: EventCallback<any>,
+  ): Promise<void> {
+    const subscriptions = Array.isArray(eventOrSubscriptions)
+      ? eventOrSubscriptions
+      : [
+          {
+            event: eventOrSubscriptions,
+            handler: handler!,
+            callback: callback!,
+          },
+        ];
+
+    await MockTransport.subscribe(subscriptions);
+  }
 }
 
 @EventHandler(TestEvent)
@@ -115,11 +145,13 @@ describe('BusModule', () => {
 
       await module.init();
 
-      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
-        TestEvent,
-        TestHandler.name,
-        expect.any(Function),
-      );
+      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
+        {
+          event: TestEvent,
+          handler: TestHandler.name,
+          callback: expect.any(Function),
+        },
+      ]);
 
       await module.close();
     },
@@ -182,17 +214,18 @@ describe('BusModule', () => {
 
       await module.init();
 
-      expect(MockTransport.subscribe).toHaveBeenCalledTimes(2);
-      expect(MockTransport.subscribe).toHaveBeenCalledWith(
-        TestEvent,
-        MultiEventHandler.name,
-        expect.any(Function),
-      );
-      expect(MockTransport.subscribe).toHaveBeenCalledWith(
-        OtherEvent,
-        MultiEventHandler.name,
-        expect.any(Function),
-      );
+      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
+        {
+          event: TestEvent,
+          handler: MultiEventHandler.name,
+          callback: expect.any(Function),
+        },
+        {
+          event: OtherEvent,
+          handler: MultiEventHandler.name,
+          callback: expect.any(Function),
+        },
+      ]);
 
       await module.close();
     });
@@ -1045,11 +1078,13 @@ describe('BusModule', () => {
 
       await module.init();
 
-      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
-        TestEvent,
-        TestHandler.name,
-        expect.any(Function),
-      );
+      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
+        {
+          event: TestEvent,
+          handler: TestHandler.name,
+          callback: expect.any(Function),
+        },
+      ]);
 
       await module.close();
     });
@@ -1071,11 +1106,13 @@ describe('BusModule', () => {
         .get<Dispatcher>(Dispatcher)
         .publish(new TestEvent({ value: 'test' }));
 
-      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
-        TestEvent,
-        ValueHandler.name,
-        expect.any(Function),
-      );
+      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
+        {
+          event: TestEvent,
+          handler: ValueHandler.name,
+          callback: expect.any(Function),
+        },
+      ]);
       expect(handler.handle).toHaveBeenCalledOnce();
 
       await module.close();
@@ -1098,11 +1135,13 @@ describe('BusModule', () => {
         .get<Dispatcher>(Dispatcher)
         .publish(new TestEvent({ value: 'test' }));
 
-      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
-        TestEvent,
-        FactoryHandler.name,
-        expect.any(Function),
-      );
+      expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
+        {
+          event: TestEvent,
+          handler: FactoryHandler.name,
+          callback: expect.any(Function),
+        },
+      ]);
       expect(handler.handle).toHaveBeenCalledOnce();
 
       await module.close();

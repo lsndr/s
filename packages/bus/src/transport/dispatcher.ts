@@ -5,8 +5,14 @@ export interface PublishOptions {
   publishedAt?: Date;
 }
 
+export interface PublishEvent<O extends PublishOptions = PublishOptions> {
+  event: object;
+  options?: O;
+}
+
 export interface Dispatcher {
-  publish<E extends object>(event: E, options?: PublishOptions): Promise<void>;
+  publish(events: PublishEvent[]): Promise<void>;
+  publish(event: object, options?: PublishOptions): Promise<void>;
 }
 
 export const Dispatcher = Symbol('Dispatcher');

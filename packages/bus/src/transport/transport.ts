@@ -1,6 +1,14 @@
-import { type PublishOptions, type Dispatcher } from './dispatcher.js';
+import {
+  type PublishEvent,
+  type PublishOptions,
+  type Dispatcher,
+} from './dispatcher.js';
 import { type EventConstructor } from '../types.js';
-import { type EventCallback, type Subscriber } from './subscriber.js';
+import {
+  type EventCallback,
+  type Subscriber,
+  type Subscription,
+} from './subscriber.js';
 import { type Health } from './health.js';
 import { Inject, type Type } from '@nestjs/common';
 
@@ -17,17 +25,21 @@ export abstract class Transport<TransportConfig = unknown>
   @Inject(TransportConfig)
   protected config!: TransportConfig;
 
-  public abstract publish<E extends object>(
-    event: E,
+  public abstract assertHealthy(): Promise<void>;
+
+  public abstract publish(
+    events: PublishEvent<TransportPublishOptions>[],
+  ): Promise<void>;
+  public abstract publish(
+    event: object,
     options?: TransportPublishOptions,
   ): Promise<void>;
 
+  public abstract subscribe(subscriptions: Subscription[]): Promise<void>;
   public abstract subscribe<
     C extends EventConstructor<any>,
     E extends InstanceType<C> = InstanceType<C>,
   >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
-
-  public abstract assertHealthy(): Promise<void>;
 }
 
 export type InferTransportConfig<T> =

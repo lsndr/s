@@ -4,7 +4,9 @@ import { setTimeout } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from '../../bus.module.js';
 import { EventHandler } from '../../decorators/event-handler.decorator.js';
-import { Dispatcher } from '../dispatcher.js';
+import { Dispatcher, type PublishEvent } from '../dispatcher.js';
+import { type EventCallback, type Subscription } from '../subscriber.js';
+import { type EventConstructor } from '../../types.js';
 import { Health } from '../health.js';
 import { Transport, type TransportPublishOptions } from '../transport.js';
 import { Outbox, type OutboxConfig, type OutboxRecord } from './outbox.js';
@@ -24,19 +26,46 @@ interface InnerConfig {
 @Injectable()
 class InnerTransport extends Transport<InnerConfig> {
   public static publish =
-    vi.fn<
-      (event: object, options?: TransportPublishOptions) => Promise<void>
-    >();
-  public static subscribe = vi.fn().mockResolvedValue(undefined);
+    vi.fn<(events: PublishEvent<TransportPublishOptions>[]) => Promise<void>>();
+  public static subscribe = vi
+    .fn<(subscriptions: Subscription[]) => Promise<void>>()
+    .mockResolvedValue(undefined);
   public static assertHealthy = vi.fn().mockResolvedValue(undefined);
   public static configs: InnerConfig[] = [];
 
-  public publish = InnerTransport.publish;
-  public subscribe = InnerTransport.subscribe;
   public assertHealthy = InnerTransport.assertHealthy;
 
   public getConfig(): InnerConfig {
     return this.config;
+  }
+
+  public publish(
+    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
+    options?: TransportPublishOptions,
+  ): Promise<void> {
+    const events = Array.isArray(eventOrEvents)
+      ? eventOrEvents
+      : [{ event: eventOrEvents, options }];
+
+    return InnerTransport.publish(events);
+  }
+
+  public subscribe(
+    eventOrSubscriptions: EventConstructor<any> | Subscription[],
+    handler?: string,
+    callback?: EventCallback<any>,
+  ): Promise<void> {
+    const subscriptions = Array.isArray(eventOrSubscriptions)
+      ? eventOrSubscriptions
+      : [
+          {
+            event: eventOrSubscriptions,
+            handler: handler!,
+            callback: callback!,
+          },
+        ];
+
+    return InnerTransport.subscribe(subscriptions);
   }
 }
 
@@ -48,13 +77,15 @@ interface MemoryOutboxConfig extends OutboxConfig {
 class MemoryOutbox extends Outbox<MemoryOutboxConfig> {
   public static pending: OutboxRecord[] = [];
   public static relay = vi.fn();
+  public static save = vi.fn();
 
   public getConfig(): MemoryOutboxConfig {
     return this.config;
   }
 
-  protected save(record: OutboxRecord): Promise<void> {
-    MemoryOutbox.pending.push(record);
+  protected save(records: OutboxRecord[]): Promise<void> {
+    MemoryOutbox.save(records);
+    MemoryOutbox.pending.push(...records);
 
     return Promise.resolve();
   }
@@ -134,6 +165,46 @@ describe('Outbox', () => {
     await module.close();
   });
 
+  it('stores a batch of events with a single save', async () => {
+    const module = await createModule();
+    const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+    await dispatcher.publish([
+      { event: new TestEvent({ value: 'a' }), options: { id: 'id-1' } },
+      { event: new TestEvent({ value: 'b' }), options: { id: 'id-2' } },
+    ]);
+
+    expect(MemoryOutbox.save).toHaveBeenCalledOnce();
+    expect(MemoryOutbox.pending.map(({ id }) => id)).toEqual(['id-1', 'id-2']);
+
+    await dispatcher.publish([]);
+    expect(MemoryOutbox.save).toHaveBeenCalledOnce();
+
+    await module.close();
+  });
+
+  it('relays a batch of stored events with a single publish', async () => {
+    const module = await createModule(2);
+    const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+    await dispatcher.publish([
+      { event: new TestEvent({ value: 'a' }), options: { id: 'id-1' } },
+      { event: new TestEvent({ value: 'b' }), options: { id: 'id-2' } },
+    ]);
+
+    await module.init();
+    await vi.waitFor(() => expect(MemoryOutbox.pending).toHaveLength(0));
+
+    expect(InnerTransport.publish).toHaveBeenCalledOnce();
+    expect(
+      InnerTransport.publish.mock.calls[0]![0].map(
+        ({ options }) => options?.id,
+      ),
+    ).toEqual(['id-1', 'id-2']);
+
+    await module.close();
+  });
+
   it('relays stored events to the transport as they were stored', async () => {
     const module = await createModule(1);
     const dispatcher = module.get<Dispatcher>(Dispatcher);
@@ -147,22 +218,30 @@ describe('Outbox', () => {
 
     expect(InnerTransport.publish.mock.calls).toEqual([
       [
-        { value: 'a' },
-        {
-          id: 'id-1',
-          name: 'TestEvent',
-          meta: {},
-          publishedAt: first!.publishedAt,
-        },
+        [
+          {
+            event: { value: 'a' },
+            options: {
+              id: 'id-1',
+              name: 'TestEvent',
+              meta: {},
+              publishedAt: first!.publishedAt,
+            },
+          },
+        ],
       ],
       [
-        { value: 'b' },
-        {
-          id: 'id-2',
-          name: 'TestEvent',
-          meta: {},
-          publishedAt: second!.publishedAt,
-        },
+        [
+          {
+            event: { value: 'b' },
+            options: {
+              id: 'id-2',
+              name: 'TestEvent',
+              meta: {},
+              publishedAt: second!.publishedAt,
+            },
+          },
+        ],
       ],
     ]);
 
@@ -189,11 +268,13 @@ describe('Outbox', () => {
 
     await module.init();
 
-    expect(InnerTransport.subscribe).toHaveBeenCalledExactlyOnceWith(
-      TestEvent,
-      TestHandler.name,
-      expect.any(Function),
-    );
+    expect(InnerTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
+      {
+        event: TestEvent,
+        handler: TestHandler.name,
+        callback: expect.any(Function),
+      },
+    ]);
 
     await module.get<Health>(Health).assertHealthy();
     expect(InnerTransport.assertHealthy).toHaveBeenCalledOnce();
