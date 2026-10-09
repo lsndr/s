@@ -10,7 +10,7 @@ import {
   BUS_EVENT_HANDLER_METADATA,
   type EventHandlerMetadata,
 } from '../decorators/event-handler.decorator.js';
-import { Subscriber } from '../transport/subscriber.js';
+import { Subscriber, type Subscription } from '../transport/subscriber.js';
 import { type EventHandler } from '../types.js';
 import {
   type EventHandlerMiddleware,
@@ -38,6 +38,8 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
   ) {}
 
   public async onApplicationBootstrap(): Promise<void> {
+    const subscriptions: Subscription[] = [];
+
     for (const {
       metatype,
       metadata,
@@ -47,9 +49,11 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
       const callback = this.invoker.createCallback(middlewares, handler);
 
       for (const event of metadata.events) {
-        await this.subscriber.subscribe(event, metatype.name, callback);
+        subscriptions.push({ event, handler: metatype.name, callback });
       }
     }
+
+    await this.subscriber.subscribe(subscriptions);
   }
 
   private findHandlers(): DiscoveredHandler[] {

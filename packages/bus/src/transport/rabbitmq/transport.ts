@@ -12,7 +12,8 @@ import {
   type ConfirmChannel,
   type ConsumeMessage,
 } from 'amqplib';
-import { type EventCallback } from '../subscriber.js';
+import { type EventCallback, type Subscription } from '../subscriber.js';
+import { type PublishEvent } from '../dispatcher.js';
 import {
   createEventDto,
   parseEventPayload,
@@ -62,16 +63,62 @@ export class RabbitmqTransport
     });
   }
 
-  public publish<E extends object>(
-    event: E,
-    options?: TransportPublishOptions,
-  ): Promise<void> {
-    const payload = createEventDto(event, options);
-
-    return this.publishEvent(payload.name, payload);
+  public async assertHealthy(): Promise<void> {
+    await this.getChannel().checkExchange(this.exchange);
   }
 
-  public async subscribe<
+  public publish(
+    events: PublishEvent<TransportPublishOptions>[],
+  ): Promise<void>;
+  public publish(
+    event: object,
+    options?: TransportPublishOptions,
+  ): Promise<void>;
+  public async publish(
+    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
+    options?: TransportPublishOptions,
+  ): Promise<void> {
+    const events = Array.isArray(eventOrEvents)
+      ? eventOrEvents
+      : [{ event: eventOrEvents, options }];
+
+    for (const { event, options: eventOptions } of events) {
+      const payload = createEventDto(event, eventOptions);
+
+      await this.publishEvent(payload.name, payload);
+    }
+  }
+
+  public subscribe(subscriptions: Subscription[]): Promise<void>;
+  public subscribe<
+    C extends EventConstructor<any>,
+    E extends InstanceType<C> = InstanceType<C>,
+  >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
+  public async subscribe(
+    eventOrSubscriptions: EventConstructor<any> | Subscription[],
+    handler?: string,
+    callback?: EventCallback<any>,
+  ): Promise<void> {
+    const subscriptions = Array.isArray(eventOrSubscriptions)
+      ? eventOrSubscriptions
+      : [
+          {
+            event: eventOrSubscriptions,
+            handler: handler!,
+            callback: callback!,
+          },
+        ];
+
+    for (const subscription of subscriptions) {
+      await this.subscribeEvent(
+        subscription.event,
+        subscription.handler,
+        subscription.callback,
+      );
+    }
+  }
+
+  private async subscribeEvent<
     C extends EventConstructor<any>,
     E extends InstanceType<C> = InstanceType<C>,
   >(event: C, handlerName: string, callback: EventCallback<E>): Promise<void> {
@@ -122,10 +169,6 @@ export class RabbitmqTransport
     await channel.consume(queue, (message) => handler(message), {
       noAck: false,
     });
-  }
-
-  public async assertHealthy(): Promise<void> {
-    await this.getChannel().checkExchange(this.exchange);
   }
 
   private publishEvent(eventName: string, payload: EventDto): Promise<void> {

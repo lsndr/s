@@ -9,7 +9,8 @@ import {
 import { type RedisClientType } from 'redis';
 import { type EventConstructor, BusConfig } from '../../types.js';
 import { Transport, type TransportPublishOptions } from '../transport.js';
-import { type EventCallback } from '../subscriber.js';
+import { type EventCallback, type Subscription } from '../subscriber.js';
+import { type PublishEvent } from '../dispatcher.js';
 import { createEventDto, parseEventPayload } from '../event-dto.js';
 import { StreamConsumer } from './stream-consumer.js';
 
@@ -113,8 +114,61 @@ export class RedisStreamsTransport
     await this.getClient().close();
   }
 
-  public async publish<E extends object>(
-    event: E,
+  public async assertHealthy(): Promise<void> {
+    await this.getClient().ping();
+  }
+
+  public publish(
+    events: PublishEvent<TransportPublishOptions>[],
+  ): Promise<void>;
+  public publish(
+    event: object,
+    options?: TransportPublishOptions,
+  ): Promise<void>;
+  public async publish(
+    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
+    options?: TransportPublishOptions,
+  ): Promise<void> {
+    const events = Array.isArray(eventOrEvents)
+      ? eventOrEvents
+      : [{ event: eventOrEvents, options }];
+
+    for (const { event, options: eventOptions } of events) {
+      await this.publishEvent(event, eventOptions);
+    }
+  }
+
+  public subscribe(subscriptions: Subscription[]): Promise<void>;
+  public subscribe<
+    C extends EventConstructor<any>,
+    E extends InstanceType<C> = InstanceType<C>,
+  >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
+  public async subscribe(
+    eventOrSubscriptions: EventConstructor<any> | Subscription[],
+    handler?: string,
+    callback?: EventCallback<any>,
+  ): Promise<void> {
+    const subscriptions = Array.isArray(eventOrSubscriptions)
+      ? eventOrSubscriptions
+      : [
+          {
+            event: eventOrSubscriptions,
+            handler: handler!,
+            callback: callback!,
+          },
+        ];
+
+    for (const subscription of subscriptions) {
+      await this.subscribeEvent(
+        subscription.event,
+        subscription.handler,
+        subscription.callback,
+      );
+    }
+  }
+
+  private async publishEvent(
+    event: object,
     options?: TransportPublishOptions,
   ): Promise<void> {
     const payload = createEventDto(event, options);
@@ -140,7 +194,7 @@ export class RedisStreamsTransport
     this.logger.debug(`Event ${payload.name} added to the stream`);
   }
 
-  public async subscribe<
+  private async subscribeEvent<
     C extends EventConstructor<any>,
     E extends InstanceType<C> = InstanceType<C>,
   >(event: C, handlerName: string, callback: EventCallback<E>): Promise<void> {
@@ -185,10 +239,6 @@ export class RedisStreamsTransport
     this.logger.log(
       `Subscribed to event ${event.name} (handler: ${handlerName})`,
     );
-  }
-
-  public async assertHealthy(): Promise<void> {
-    await this.getClient().ping();
   }
 
   private async assertVersion(): Promise<void> {

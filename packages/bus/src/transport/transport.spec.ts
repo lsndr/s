@@ -35,6 +35,10 @@ class TestEvent {
   }
 }
 
+class OtherEvent {
+  public readonly kind = 'other';
+}
+
 interface TransportTest {
   name: string;
   setup: () => Promise<{
@@ -171,6 +175,35 @@ describe('Transport', { timeout: 60_000 }, () => {
             meta: { a: 1 },
             publishedAt,
           }),
+        );
+      });
+    });
+
+    it('subscribes and publishes in batches', async () => {
+      const transport = await createTransport({
+        group: crypto.randomUUID(),
+        retries: { max: 0, delay: 100 },
+      });
+      const testHandler = vi.fn();
+      const otherHandler = vi.fn();
+
+      await transport.subscribe([
+        { event: TestEvent, handler: 'TestHandler', callback: testHandler },
+        { event: OtherEvent, handler: 'OtherHandler', callback: otherHandler },
+      ]);
+      await transport.publish([
+        { event: new TestEvent({ value: 'first' }), options: { id: 'id-1' } },
+        { event: new OtherEvent(), options: { id: 'id-2' } },
+        { event: new TestEvent({ value: 'second' }), options: { id: 'id-3' } },
+      ]);
+
+      await vi.waitFor(() => {
+        expect(testHandler.mock.calls.map(([payload]) => payload.id)).toEqual(
+          expect.arrayContaining(['id-1', 'id-3']),
+        );
+        expect(testHandler).toHaveBeenCalledTimes(2);
+        expect(otherHandler).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ id: 'id-2' }),
         );
       });
     });
