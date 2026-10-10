@@ -84,7 +84,14 @@ export class StreamsConsumer {
     await this.clients.destroy('read');
 
     await Promise.all(this.loops);
-    await this.drain();
+
+    const drained = await this.streams.drain(this.options.shutdownTimeout);
+
+    if (!drained) {
+      this.logger.warn(
+        `Shutdown timeout reached with entries still in flight, they stay pending`,
+      );
+    }
 
     for (const { name } of this.streams.all()) {
       await this.removeConsumerIfIdle(name).catch((err) =>
@@ -97,33 +104,6 @@ export class StreamsConsumer {
     await this.clients.close();
 
     this.loops.length = 0;
-  }
-
-  private async drain(): Promise<void> {
-    const { shutdownTimeout } = this.options;
-    const pending = this.streams.inflight();
-
-    if (pending.length === 0) {
-      return;
-    }
-
-    const settled = Promise.all(pending).then(() => true);
-
-    if (shutdownTimeout === undefined) {
-      await settled;
-      return;
-    }
-
-    const finished = await Promise.race([
-      settled,
-      sleep(shutdownTimeout).then(() => false),
-    ]);
-
-    if (!finished) {
-      this.logger.warn(
-        `Shutdown timeout reached with entries still in flight, they stay pending`,
-      );
-    }
   }
 
   private async readLoop(): Promise<void> {

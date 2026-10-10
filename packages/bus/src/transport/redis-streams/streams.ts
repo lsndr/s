@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import { type EventConstructor, type EventPayload } from '../../types.js';
 import { Slots } from './slots.js';
 
@@ -57,9 +58,40 @@ export class Streams {
     stream.handlers.set(handler, callback);
   }
 
-  /** Entries of all streams that are running. */
-  public inflight(): Promise<void>[] {
-    return this.all().flatMap(({ inflight }) => [...inflight.values()]);
+  /**
+   * Waits for the entries that are running now, of all streams, to finish.
+   *
+   * @param timeout - Gives up after this many milliseconds. Without it, waits
+   * for as long as it takes.
+   * @returns `false` if the timeout was reached with entries still running.
+   */
+  public async drain(timeout?: number): Promise<boolean> {
+    const pending = this.all().flatMap(({ inflight }) => [
+      ...inflight.values(),
+    ]);
+
+    if (pending.length === 0) {
+      return true;
+    }
+
+    const drained = Promise.allSettled(pending).then(() => true);
+
+    if (timeout === undefined) {
+      return drained;
+    }
+
+    const timer = new AbortController();
+    const timedOut = sleep(timeout, undefined, { signal: timer.signal }).then(
+      () => false,
+      () => false,
+    );
+
+    try {
+      return await Promise.race([drained, timedOut]);
+    } finally {
+      // Don't keep the process alive for a timeout that is not needed
+      timer.abort();
+    }
   }
 
   /**
@@ -76,7 +108,7 @@ export class Streams {
   /**
    * Starts an entry of a stream without waiting for it. It holds a slot of the
    * stream and is listed as in flight until `work` settles, see
-   * {@link Streams.inflight}. `work` must not reject.
+   * {@link Streams.drain}. `work` must not reject.
    *
    * @throws If the stream is not registered.
    */
