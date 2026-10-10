@@ -14,9 +14,10 @@ import {
 } from '../transport.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent } from '../dispatcher.js';
-import { createEventDto } from '../event-dto.js';
+import { createEventDto, parseEventPayload } from '../event-dto.js';
 import { Clients } from './clients.js';
-import { StreamsConsumer } from './consumer.js';
+import { Loops } from './loops.js';
+import { type Stream, Streams } from './streams.js';
 
 export interface RedisStreamsTransportConfig {
   /**
@@ -111,14 +112,33 @@ export interface RedisStreamsTransportConfig {
   shutdownTimeout?: number;
 }
 
+/** Values of the config with the defaults applied. */
+interface Settings {
+  group: string;
+  consumer: string;
+  keyPrefix: string;
+  retries: { max: number; delay: number };
+  batchSize: number;
+  blockTimeout: number;
+  reclaimInterval: number;
+  consumerTtl: number;
+  shutdownTimeout: number | undefined;
+}
+
+interface StreamEntry {
+  id: string;
+  message: Record<string, string>;
+}
+
 @Injectable()
 export class RedisStreamsTransport
   extends Transport<RedisStreamsTransportConfig>
   implements OnModuleInit, BeforeApplicationShutdown
 {
-  private readonly clients: Clients;
-  private readonly consumer: StreamsConsumer;
-  private readonly keyPrefix: string;
+  private readonly clients: Clients<'read' | 'command'>;
+  private readonly streams: Streams;
+  private readonly loops = new Loops();
+  private readonly settings: Settings;
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
   public constructor(
@@ -131,13 +151,10 @@ export class RedisStreamsTransport
       delay: config.retries?.delay ?? 5_000,
     };
 
-    this.clients = new Clients(config.url);
-    this.keyPrefix = config.keyPrefix ?? 'events:';
-    this.consumer = new StreamsConsumer({
+    this.settings = {
       group: config.group,
       consumer: config.consumer ?? hostname(),
-      keyPrefix: this.keyPrefix,
-      url: config.url,
+      keyPrefix: config.keyPrefix ?? 'events:',
       retries,
       batchSize: config.batchSize ?? 10,
       blockTimeout: config.blockTimeout ?? 5_000,
@@ -145,20 +162,49 @@ export class RedisStreamsTransport
         config.reclaimInterval ?? Math.max(retries.delay / 4, 1_000),
       consumerTtl: config.consumerTtl ?? 3_600_000,
       shutdownTimeout: config.shutdownTimeout,
-    });
+    };
+    this.clients = new Clients(config.url);
+    this.streams = new Streams(this.settings.batchSize);
   }
 
   public async onModuleInit(): Promise<void> {
-    await this.clients.get();
+    await this.clients.get('command');
   }
 
+  /**
+   * Stops reading and reclaiming, waits for the entries in flight and removes
+   * the consumer from the groups unless it owns pending entries, then closes
+   * the connections.
+   */
   public async beforeApplicationShutdown(): Promise<void> {
-    await this.consumer.stop();
+    this.loops.abort();
+
+    // Interrupts a blocked XREADGROUP
+    await this.clients.destroy('read');
+
+    await this.loops.wait();
+
+    const drained = await this.streams.drain(this.settings.shutdownTimeout);
+
+    if (!drained) {
+      this.logger.warn(
+        `Shutdown timeout reached with entries still in flight, they stay pending`,
+      );
+    }
+
+    for (const { name } of this.streams.all()) {
+      await this.removeConsumerIfIdle(name).catch((err) =>
+        this.logger.warn(
+          `Failed to remove consumer from ${name}: ${String(err)}`,
+        ),
+      );
+    }
+
     await this.clients.close();
   }
 
   public async assertHealthy(): Promise<void> {
-    await (await this.clients.get()).ping();
+    await (await this.clients.get('command')).ping();
   }
 
   public publish(
@@ -202,12 +248,13 @@ export class RedisStreamsTransport
         ];
 
     for (const { event, handler: handlerName, callback: cb } of subscriptions) {
-      await this.consumer.register(
-        this.getStream(event.name),
-        event,
-        handlerName,
-        cb,
-      );
+      const stream = this.getStream(event.name);
+
+      if (!this.streams.has(stream)) {
+        await this.createGroup(stream);
+      }
+
+      this.streams.register(stream, event, handlerName, cb);
 
       this.logger.log(
         `Subscribed to event ${event.name} (handler: ${handlerName})`,
@@ -215,7 +262,7 @@ export class RedisStreamsTransport
     }
 
     // Consuming starts once the handlers are registered
-    this.consumer.start();
+    this.start();
   }
 
   private async publishEvent(
@@ -228,7 +275,7 @@ export class RedisStreamsTransport
     this.logger.log(`Publishing event ${payload.name}`);
     this.logger.verbose(`Event ${payload.name} payload:`, payload);
 
-    const client = await this.clients.get();
+    const client = await this.clients.get('command');
 
     await client.xAdd(
       this.getStream(payload.name),
@@ -247,7 +294,285 @@ export class RedisStreamsTransport
     this.logger.debug(`Event ${payload.name} added to the stream`);
   }
 
+  /**
+   * Starts the loops that consume the streams. Does nothing when they are
+   * running already.
+   */
+  private start(): void {
+    if (this.loops.running) {
+      return;
+    }
+
+    const { reclaimInterval, consumerTtl } = this.settings;
+    const { delay } = this.settings.retries;
+
+    this.loops.start('read from streams', () => this.read(), {
+      retryDelay: 1_000,
+    });
+    this.loops.start('reclaim entries', () => this.reclaim(), {
+      // Jitter keeps instances from polling at the same moment
+      interval: () => reclaimInterval * (0.9 + Math.random() * 0.2),
+    });
+    this.loops.start('refresh entries', () => this.refresh(), {
+      interval: () => Math.max(delay / 2, 10),
+    });
+    this.loops.start('remove stale consumers', () => this.removeStale(), {
+      interval: () => consumerTtl / 2,
+    });
+  }
+
+  /** Reads the streams that have a free slot, and starts the entries. */
+  private async read(): Promise<void> {
+    const { group, consumer, batchSize, blockTimeout } = this.settings;
+
+    // Waits for a free slot instead of calling Redis when all are full
+    const readable = await this.streams.readable(this.loops.signal);
+
+    if (readable.length === 0) {
+      return;
+    }
+
+    const client = await this.clients.get('read');
+    const reply =
+      (await client.xReadGroup(
+        group,
+        consumer,
+        readable.map((key) => ({ key, id: '>' })),
+        { COUNT: batchSize, BLOCK: blockTimeout },
+      )) ?? [];
+
+    for (const { name, messages } of reply) {
+      for (const entry of messages) {
+        this.streams.run(String(name), entry.id, (stream) =>
+          this.process(stream, entry, 1),
+        );
+      }
+    }
+  }
+
+  /** Claims the entries that have been pending for too long, and runs them. */
+  private async reclaim(): Promise<void> {
+    const { group, consumer, batchSize } = this.settings;
+    const { delay } = this.settings.retries;
+
+    for (const state of this.streams.all()) {
+      const { name: stream } = state;
+
+      try {
+        const client = await this.clients.get('command');
+        const pending = await client.xPendingRange(
+          stream,
+          group,
+          '-',
+          '+',
+          batchSize,
+          { IDLE: delay },
+        );
+        const deliveries = new Map(
+          pending
+            .filter(({ id }) => !state.inflight.has(id))
+            .map((entry) => [entry.id, entry.deliveriesCounter]),
+        );
+
+        if (deliveries.size === 0) {
+          continue;
+        }
+
+        // min-idle makes sure only one of the competing consumers wins an
+        // entry
+        const claimed = await client.xClaim(stream, group, consumer, delay, [
+          ...deliveries.keys(),
+        ]);
+
+        for (const entry of claimed) {
+          if (entry && !this.loops.signal.aborted) {
+            const attempt = (deliveries.get(entry.id) ?? 0) + 1;
+
+            this.streams.run(stream, entry.id, (current) =>
+              this.process(current, entry, attempt),
+            );
+          }
+        }
+      } catch (err) {
+        if (this.loops.signal.aborted) {
+          return;
+        }
+
+        this.logger.error(
+          `Failed to reclaim entries of ${stream}: ${String(err)}`,
+          err instanceof Error ? err.stack : undefined,
+        );
+      }
+    }
+  }
+
+  /**
+   * Runs the handlers of an entry that haven't succeeded yet. The entry is
+   * acknowledged once every handler has succeeded or failed permanently,
+   * otherwise it stays pending and is retried by the reclaim loop.
+   */
+  private async process(
+    stream: Stream,
+    entry: StreamEntry,
+    attempt: number,
+  ): Promise<void> {
+    const { group, keyPrefix, reclaimInterval } = this.settings;
+    const { event, handlers } = stream;
+    const { id, message } = entry;
+    const { max, delay } = this.settings.retries;
+    const retryCount = attempt - 1;
+    const eventName = event.name;
+    const doneKey = `${keyPrefix}done:${group}:${eventName}:${id}`;
+    // Long enough to outlive every retry of an entry
+    const doneTtl = Math.max(
+      2 * (max + 1) * (delay + reclaimInterval),
+      3_600_000,
+    );
+
+    this.logger.log(`Received message for event ${eventName}`);
+
+    try {
+      const client = await this.clients.get('command');
+      const done = await client.hGetAll(doneKey);
+      const pending = [...handlers].filter(([name]) => !(name in done));
+      const payload = message['payload'] ?? '';
+
+      this.logger.verbose(`Event ${eventName} payload: ${payload}`);
+
+      const results = await Promise.all(
+        pending.map(async ([name, callback]) => {
+          try {
+            await callback(parseEventPayload(event, payload));
+          } catch (err) {
+            return { name, error: err };
+          }
+
+          await client
+            .multi()
+            .hSet(doneKey, name, '1')
+            .pExpire(doneKey, doneTtl)
+            .exec()
+            .catch((err) =>
+              this.logger.warn(
+                `Failed to record handler ${name} of ${id}: ${String(err)}`,
+              ),
+            );
+
+          return { name, error: undefined };
+        }),
+      );
+      const failed = results.filter(({ error }) => error !== undefined);
+
+      for (const { name, error } of failed) {
+        this.logger.error(
+          `Error handling event ${eventName} (handler: ${name}, retryCount: ${retryCount}): ${String(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+
+      if (failed.length > 0 && retryCount < max) {
+        // stays pending and is retried by the reclaim loop
+        return;
+      }
+
+      for (const { name, error } of failed) {
+        this.logger.error(
+          `Event ${eventName} (handler: ${name}) failed permanently after ${retryCount} retries: ${String(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+
+      await client.multi().xAck(stream.name, group, id).del(doneKey).exec();
+
+      if (failed.length === 0) {
+        this.logger.log(`Event ${eventName} handled successfully`);
+      }
+    } catch (err) {
+      // Redis failure, the entry stays pending
+      this.logger.error(
+        `Failed to process entry ${id} of ${stream.name}: ${String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+    }
+  }
+
+  /** Keeps the entries in flight from looking abandoned. */
+  private async refresh(): Promise<void> {
+    const { group, consumer } = this.settings;
+
+    for (const { name: stream, inflight } of this.streams.all()) {
+      if (inflight.size === 0) {
+        continue;
+      }
+
+      try {
+        const client = await this.clients.get('command');
+
+        await client.xClaimJustId(stream, group, consumer, 0, [
+          ...inflight.keys(),
+        ]);
+      } catch (err) {
+        this.logger.warn(
+          `Failed to refresh entries of ${stream}: ${String(err)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Deletes the other consumers of the groups that have no pending entries and
+   * have been idle for longer than `consumerTtl`.
+   */
+  private async removeStale(): Promise<void> {
+    const { group, consumer, consumerTtl } = this.settings;
+    const client = await this.clients.get('command');
+
+    for (const { name: stream } of this.streams.all()) {
+      const consumers = await client.xInfoConsumers(stream, group);
+
+      for (const { name, pending, idle } of consumers) {
+        if (name === consumer || pending > 0 || idle <= consumerTtl) {
+          continue;
+        }
+
+        await client.xGroupDelConsumer(stream, group, name);
+
+        this.logger.log(`Removed stale consumer ${name} of group ${group}`);
+      }
+    }
+  }
+
+  /**
+   * Deletes the consumer from the group unless it owns pending entries,
+   * which still have to be retried.
+   */
+  private async removeConsumerIfIdle(stream: string): Promise<void> {
+    const { group, consumer } = this.settings;
+    const client = await this.clients.get('command');
+    const owned = await client.xPendingRange(stream, group, '-', '+', 1, {
+      consumer,
+    });
+
+    if (owned.length === 0) {
+      await client.xGroupDelConsumer(stream, group, consumer);
+    }
+  }
+
+  private async createGroup(stream: string): Promise<void> {
+    try {
+      await (
+        await this.clients.get('read')
+      ).xGroupCreate(stream, this.settings.group, '$', {
+        MKSTREAM: true,
+      });
+    } catch (err) {
+      if (!String(err).includes('BUSYGROUP')) {
+        throw err;
+      }
+    }
+  }
+
   private getStream(eventName: string): string {
-    return `${this.keyPrefix}${eventName}`;
+    return `${this.settings.keyPrefix}${eventName}`;
   }
 }
