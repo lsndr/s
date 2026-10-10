@@ -34,23 +34,13 @@ export interface StreamsConsumerOptions {
 export class StreamsConsumer {
   private readonly streams: Streams;
   private readonly stopController = new AbortController();
-  private readonly doneTtl: number;
   private readonly clients: Clients<'read' | 'command'>;
-  private loops: Promise<void>[] = [];
-  private started = false;
+  private readonly loops: Promise<void>[] = [];
   private readonly logger = new Logger(StreamsConsumer.name);
 
   public constructor(private readonly options: StreamsConsumerOptions) {
-    const { retries, reclaimInterval } = options;
-
     this.clients = new Clients(options.url);
     this.streams = new Streams(options.batchSize);
-
-    // Long enough to outlive every retry of an entry
-    this.doneTtl = Math.max(
-      2 * (retries.max + 1) * (retries.delay + reclaimInterval),
-      3_600_000,
-    );
   }
 
   public async register(
@@ -70,18 +60,16 @@ export class StreamsConsumer {
    * Starts the loops. Does nothing when they are running already.
    */
   public start(): void {
-    if (this.started) {
+    if (this.loops.length > 0) {
       return;
     }
 
-    this.started = true;
-
-    this.loops = [
+    this.loops.push(
       this.readLoop(),
       this.reclaimLoop(),
       this.refreshLoop(),
       this.cleanupLoop(),
-    ];
+    );
   }
 
   /**
@@ -107,6 +95,8 @@ export class StreamsConsumer {
     }
 
     await this.clients.close();
+
+    this.loops.length = 0;
   }
 
   private async drain(): Promise<void> {
@@ -253,13 +243,18 @@ export class StreamsConsumer {
     entry: StreamEntry,
     attempt: number,
   ): Promise<void> {
-    const { group, keyPrefix } = this.options;
+    const { group, keyPrefix, reclaimInterval } = this.options;
     const { event, handlers } = stream;
     const { id, message } = entry;
-    const { max } = this.options.retries;
+    const { max, delay } = this.options.retries;
     const retryCount = attempt - 1;
     const eventName = event.name;
     const doneKey = `${keyPrefix}done:${group}:${eventName}:${id}`;
+    // Long enough to outlive every retry of an entry
+    const doneTtl = Math.max(
+      2 * (max + 1) * (delay + reclaimInterval),
+      3_600_000,
+    );
 
     this.logger.log(`Received message for event ${eventName}`);
 
@@ -282,7 +277,7 @@ export class StreamsConsumer {
           await client
             .multi()
             .hSet(doneKey, name, '1')
-            .pExpire(doneKey, this.doneTtl)
+            .pExpire(doneKey, doneTtl)
             .exec()
             .catch((err) =>
               this.logger.warn(
