@@ -49,8 +49,7 @@ export class StreamsConsumer {
   private readonly streams = new Map<string, StreamState>();
   private readonly stopController = new AbortController();
   private readonly doneTtl: number;
-  private client: RedisClientType | undefined;
-  private connecting: Promise<RedisClientType> | undefined;
+  private client: Promise<RedisClientType> | undefined;
   private loops: Promise<void>[] = [];
   private heartbeat: NodeJS.Timeout | undefined;
   private started = false;
@@ -67,13 +66,6 @@ export class StreamsConsumer {
     );
   }
 
-  /**
-   * Adds a handler and creates the consumer group of its stream. A stream
-   * registered while the consumer is running joins the next read.
-   *
-   * The group is created on the reading connection, so a running read can
-   * delay it by up to `blockTimeout`.
-   */
   public async register(
     stream: string,
     event: EventConstructor<any>,
@@ -111,7 +103,7 @@ export class StreamsConsumer {
     }
 
     this.started = true;
-    await this.connect();
+    await this.getClient();
 
     const { delay } = this.options.retries;
 
@@ -131,7 +123,10 @@ export class StreamsConsumer {
     this.signal();
 
     // Interrupts a blocked XREADGROUP
-    this.client?.destroy();
+    await this.client?.then(
+      (client) => client.destroy(),
+      () => undefined,
+    );
 
     await Promise.all(this.loops);
     await this.drain();
@@ -194,7 +189,9 @@ export class StreamsConsumer {
       }
 
       try {
-        const reply = await this.client!.xReadGroup(
+        const reply = await (
+          await this.getClient()
+        ).xReadGroup(
           group,
           consumer,
           readable.map(({ stream }) => ({ key: stream, id: '>' })),
@@ -453,21 +450,17 @@ export class StreamsConsumer {
   }
 
   /**
-   * Connects the client used for reading. XREADGROUP BLOCK occupies the
-   * connection, so it is separate from the one of the transport.
+   * The client used for reading, connected on first use. XREADGROUP BLOCK
+   * occupies the connection, so it is separate from the one of the transport.
    */
-  private connect(): Promise<RedisClientType> {
-    this.connecting ??= this.createClient().then((client) => {
-      this.client = client;
+  private getClient(): Promise<RedisClientType> {
+    this.client ??= this.createClient();
 
-      return client;
-    });
-
-    return this.connecting;
+    return this.client;
   }
 
   private async createGroup(stream: string): Promise<void> {
-    const client = await this.connect();
+    const client = await this.getClient();
 
     try {
       await client.xGroupCreate(stream, this.options.group, '$', {
