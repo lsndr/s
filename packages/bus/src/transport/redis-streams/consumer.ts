@@ -424,9 +424,11 @@ export class StreamsConsumer {
     }
   }
 
-  private pause(ms: number): Promise<void> {
-    return sleep(ms, undefined, { signal: this.stopController.signal }).catch(
-      () => undefined,
-    );
+  private async pause(ms: number): Promise<void> {
+    try {
+      await sleep(ms, undefined, { signal: this.stopController.signal });
+    } catch {
+      // Aborted on shutdown, which is how the loops are woken up
+    }
   }
 }
