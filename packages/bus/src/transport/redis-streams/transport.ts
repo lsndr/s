@@ -102,7 +102,7 @@ export class RedisStreamsTransport
 
   public async onModuleInit(): Promise<void> {
     this.client = await this.createClient(this.config);
-    await this.getClient().connect();
+    await this.client.connect();
 
     await this.assertVersion();
   }
