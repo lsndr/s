@@ -216,13 +216,7 @@ export class RedisStreamsTransport
       group: this.busConfig.group,
       consumer: this.getConsumerName(),
       client: this.getClient(),
-      // XREADGROUP BLOCK occupies the connection, so it has its own
-      createBlockingClient: async () => {
-        const client = await this.createClient(this.config);
-        await client.connect();
-
-        return client;
-      },
+      url: this.config.url,
       retries: this.busConfig.retries,
       batchSize: this.config.batchSize ?? 10,
       blockTimeout: this.config.blockTimeout ?? 5_000,

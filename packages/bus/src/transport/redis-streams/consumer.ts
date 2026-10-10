@@ -28,7 +28,8 @@ export interface StreamsConsumerOptions {
   group: string;
   consumer: string;
   client: RedisClientType;
-  createBlockingClient: () => Promise<RedisClientType>;
+  /** Connection URL of the client used for reading streams. */
+  url: string;
   retries: BusRetriesConfig;
   batchSize: number;
   blockTimeout: number;
@@ -48,7 +49,7 @@ export class StreamsConsumer {
   private readonly streams = new Map<string, StreamState>();
   private readonly stopController = new AbortController();
   private readonly doneTtl: number;
-  private blockingClient: RedisClientType | undefined;
+  private client: RedisClientType | undefined;
   private loops: Promise<void>[] = [];
   private heartbeat: NodeJS.Timeout | undefined;
   private started = false;
@@ -103,7 +104,9 @@ export class StreamsConsumer {
     }
 
     this.started = true;
-    this.blockingClient = await this.options.createBlockingClient();
+    // XREADGROUP BLOCK occupies the connection, so it has its own
+    this.client = await this.createClient();
+    await this.client.connect();
 
     const { delay } = this.options.retries;
 
@@ -123,7 +126,7 @@ export class StreamsConsumer {
     this.signal();
 
     // Interrupts a blocked XREADGROUP
-    this.blockingClient?.destroy();
+    this.client?.destroy();
 
     await Promise.all(this.loops);
     await this.drain();
@@ -186,7 +189,7 @@ export class StreamsConsumer {
       }
 
       try {
-        const reply = await this.blockingClient!.xReadGroup(
+        const reply = await this.client!.xReadGroup(
           group,
           consumer,
           readable.map(({ stream }) => ({ key: stream, id: '>' })),
@@ -442,6 +445,20 @@ export class StreamsConsumer {
     if (owned.length === 0) {
       await client.xGroupDelConsumer(stream, group, consumer);
     }
+  }
+
+  private async createClient(): Promise<RedisClientType> {
+    const { createClient } = await import('redis');
+    const client = createClient({ url: this.options.url });
+
+    client.on('error', (err: unknown) => {
+      this.options.logger.error(
+        `Redis connection error: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+    });
+
+    return client;
   }
 
   private waitForSignal(): Promise<void> {
