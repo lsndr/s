@@ -91,7 +91,6 @@ export class StreamsConsumer {
    */
   public async stop(): Promise<void> {
     this.stopController.abort();
-    this.streams.wake();
 
     // Interrupts a blocked XREADGROUP
     await this.clients.destroy('read');
@@ -142,11 +141,10 @@ export class StreamsConsumer {
     const signal = this.stopController.signal;
 
     while (!signal.aborted) {
-      const readable = this.streams.readable();
+      // Waits for a free slot instead of calling Redis when all are full
+      const readable = await this.streams.readable(signal);
 
       if (readable.length === 0) {
-        // Nothing to read, wait for a slot instead of calling Redis
-        await this.streams.wait();
         continue;
       }
 

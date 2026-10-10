@@ -66,18 +66,15 @@ export class Streams {
     return this.all().flatMap(({ inflight }) => [...inflight.values()]);
   }
 
-  /** Names of the streams that have a free slot. */
-  public readable(): string[] {
-    return this.slots.readable();
-  }
-
-  /** Resolves when a stream becomes readable or after {@link Streams.wake}. */
-  public wait(): Promise<void> {
-    return this.slots.wait();
-  }
-
-  public wake(): void {
-    this.slots.wake();
+  /**
+   * Names of the streams that have a free slot. Waits while there are none,
+   * so nothing is read from a full stream.
+   *
+   * @param signal - Stops the wait.
+   * @returns The streams, or an empty list once `signal` is aborted.
+   */
+  public readable(signal: AbortSignal): Promise<string[]> {
+    return this.slots.readable(signal);
   }
 
   /**

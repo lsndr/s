@@ -27,24 +27,39 @@ export class Slots {
     this.changed.notify();
   }
 
-  /** Streams that have at least one free slot. */
-  public readable(): string[] {
-    return [...this.free]
-      .filter(([, free]) => free > 0)
-      .map(([stream]) => stream);
-  }
-
   /**
-   * Resolves when a stream is added or a slot is released. Check
-   * {@link Slots.readable} right before waiting.
+   * Streams that have at least one free slot. When there are none, waits
+   * until a slot is released or a stream is added.
+   *
+   * @param signal - Stops the wait.
+   * @returns The streams, or an empty list once `signal` is aborted.
    */
-  public wait(): Promise<void> {
-    return this.changed.wait();
+  public async readable(signal: AbortSignal): Promise<string[]> {
+    while (!signal.aborted) {
+      const streams = [...this.free]
+        .filter(([, free]) => free > 0)
+        .map(([stream]) => stream);
+
+      if (streams.length > 0) {
+        return streams;
+      }
+
+      await this.waitForChange(signal);
+    }
+
+    return [];
   }
 
-  /** Wakes the waiter without a change, e.g. to let it see a shutdown. */
-  public wake(): void {
-    this.changed.notify();
+  private async waitForChange(signal: AbortSignal): Promise<void> {
+    const wake = () => this.changed.notify();
+
+    signal.addEventListener('abort', wake, { once: true });
+
+    try {
+      await this.changed.wait();
+    } finally {
+      signal.removeEventListener('abort', wake);
+    }
   }
 
   private getFree(stream: string): number {
