@@ -50,6 +50,7 @@ export class StreamsConsumer {
   private readonly stopController = new AbortController();
   private readonly doneTtl: number;
   private client: RedisClientType | undefined;
+  private connecting: Promise<RedisClientType> | undefined;
   private loops: Promise<void>[] = [];
   private heartbeat: NodeJS.Timeout | undefined;
   private started = false;
@@ -67,19 +68,29 @@ export class StreamsConsumer {
   }
 
   /**
-   * Adds a handler. A stream registered while the consumer is running joins
-   * the next read.
+   * Adds a handler and creates the consumer group of its stream. A stream
+   * registered while the consumer is running joins the next read.
+   *
+   * The group is created on the reading connection, so a running read can
+   * delay it by up to `blockTimeout`.
    */
-  public register(
+  public async register(
     stream: string,
     event: EventConstructor<any>,
     handler: string,
     callback: Callback,
-  ): void {
+  ): Promise<void> {
     let state = this.streams.get(stream);
 
+    if (state?.handlers.has(handler)) {
+      throw new Error(`Handler ${handler} is already subscribed to ${stream}`);
+    }
+
     if (!state) {
-      state = {
+      await this.createGroup(stream);
+
+      // Registered meanwhile by a concurrent call
+      state = this.streams.get(stream) ?? {
         stream,
         event,
         handlers: new Map(),
@@ -87,10 +98,6 @@ export class StreamsConsumer {
         free: this.options.batchSize,
       };
       this.streams.set(stream, state);
-    }
-
-    if (state.handlers.has(handler)) {
-      throw new Error(`Handler ${handler} is already subscribed to ${stream}`);
     }
 
     state.handlers.set(handler, callback);
@@ -104,9 +111,7 @@ export class StreamsConsumer {
     }
 
     this.started = true;
-    // XREADGROUP BLOCK occupies the connection, so it has its own
-    this.client = await this.createClient();
-    await this.client.connect();
+    await this.connect();
 
     const { delay } = this.options.retries;
 
@@ -447,6 +452,34 @@ export class StreamsConsumer {
     }
   }
 
+  /**
+   * Connects the client used for reading. XREADGROUP BLOCK occupies the
+   * connection, so it is separate from the one of the transport.
+   */
+  private connect(): Promise<RedisClientType> {
+    this.connecting ??= this.createClient().then((client) => {
+      this.client = client;
+
+      return client;
+    });
+
+    return this.connecting;
+  }
+
+  private async createGroup(stream: string): Promise<void> {
+    const client = await this.connect();
+
+    try {
+      await client.xGroupCreate(stream, this.options.group, '$', {
+        MKSTREAM: true,
+      });
+    } catch (err) {
+      if (!String(err).includes('BUSYGROUP')) {
+        throw err;
+      }
+    }
+  }
+
   private async createClient(): Promise<RedisClientType> {
     const { createClient } = await import('redis');
     const client = createClient({ url: this.options.url });
@@ -457,6 +490,8 @@ export class StreamsConsumer {
         err instanceof Error ? err.stack : undefined,
       );
     });
+
+    await client.connect();
 
     return client;
   }

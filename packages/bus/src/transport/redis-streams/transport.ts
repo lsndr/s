@@ -159,9 +159,12 @@ export class RedisStreamsTransport
     const consumer = this.getConsumer();
 
     for (const { event, handler: handlerName, callback: cb } of subscriptions) {
-      await this.createGroup(this.getStream(event.name));
-
-      consumer.register(this.getStream(event.name), event, handlerName, cb);
+      await consumer.register(
+        this.getStream(event.name),
+        event,
+        handlerName,
+        cb,
+      );
 
       this.logger.log(
         `Subscribed to event ${event.name} (handler: ${handlerName})`,
@@ -197,18 +200,6 @@ export class RedisStreamsTransport
     );
 
     this.logger.debug(`Event ${payload.name} added to the stream`);
-  }
-
-  private async createGroup(stream: string): Promise<void> {
-    try {
-      await this.getClient().xGroupCreate(stream, this.busConfig.group, '$', {
-        MKSTREAM: true,
-      });
-    } catch (err) {
-      if (!String(err).includes('BUSYGROUP')) {
-        throw err;
-      }
-    }
   }
 
   private getConsumer(): StreamsConsumer {
