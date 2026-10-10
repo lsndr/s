@@ -27,10 +27,6 @@ export class Streams {
     return this.streams.has(name);
   }
 
-  public get(name: string): Stream | undefined {
-    return this.streams.get(name);
-  }
-
   public all(): Stream[] {
     return [...this.streams.values()];
   }
@@ -81,13 +77,25 @@ export class Streams {
    * Starts an entry of a stream without waiting for it. It holds a slot of the
    * stream and is listed as in flight until `work` settles, see
    * {@link Streams.inflight}. `work` must not reject.
+   *
+   * @throws If the stream is not registered.
    */
-  public run(stream: Stream, id: string, work: () => Promise<void>): void {
-    this.slots.take(stream.name);
+  public run(
+    name: string,
+    id: string,
+    work: (stream: Stream) => Promise<void>,
+  ): void {
+    const stream = this.streams.get(name);
 
-    const promise = work().finally(() => {
+    if (!stream) {
+      throw new Error(`Stream ${name} is not registered`);
+    }
+
+    this.slots.take(name);
+
+    const promise = work(stream).finally(() => {
       stream.inflight.delete(id);
-      this.slots.release(stream.name);
+      this.slots.release(name);
     });
 
     stream.inflight.set(id, promise);

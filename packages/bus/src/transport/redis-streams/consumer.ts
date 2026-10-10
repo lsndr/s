@@ -149,10 +149,9 @@ export class StreamsConsumer {
       }
 
       try {
+        const client = await this.clients.get('read');
         const reply =
-          (await (
-            await this.clients.get('read')
-          ).xReadGroup(
+          (await client.xReadGroup(
             group,
             consumer,
             readable.map((key) => ({ key, id: '>' })),
@@ -160,12 +159,10 @@ export class StreamsConsumer {
           )) ?? [];
 
         for (const { name, messages } of reply) {
-          const state = this.streams.get(String(name));
-
           for (const entry of messages) {
-            if (state) {
-              this.run(state, entry, 1);
-            }
+            this.streams.run(String(name), entry.id, (stream) =>
+              this.process(stream, entry, 1),
+            );
           }
         }
       } catch (err) {
@@ -225,7 +222,11 @@ export class StreamsConsumer {
 
           for (const entry of claimed) {
             if (entry && !this.stopController.signal.aborted) {
-              this.run(state, entry, (deliveries.get(entry.id) ?? 0) + 1);
+              const attempt = (deliveries.get(entry.id) ?? 0) + 1;
+
+              this.streams.run(stream, entry.id, (current) =>
+                this.process(current, entry, attempt),
+              );
             }
           }
         } catch (err) {
@@ -240,13 +241,6 @@ export class StreamsConsumer {
         }
       }
     }
-  }
-
-  /** Runs the entry in its stream, holding one of its slots. */
-  private run(stream: Stream, entry: StreamEntry, attempt: number): void {
-    this.streams.run(stream, entry.id, () =>
-      this.process(stream, entry, attempt),
-    );
   }
 
   /**
