@@ -7,7 +7,7 @@ import {
   type EventPayload,
 } from '../../types.js';
 import { parseEventPayload } from '../event-dto.js';
-import { Signal } from './signal.js';
+import { Slots } from './slots.js';
 
 type Callback = (event: EventPayload<any>) => void | Promise<void>;
 
@@ -21,8 +21,6 @@ interface StreamState {
   event: EventConstructor<any>;
   handlers: Map<string, Callback>;
   inflight: Map<string, Promise<void>>;
-  /** Free slots. Can drop to zero or below, since overflow is accepted. */
-  free: number;
 }
 
 export interface StreamsConsumerOptions {
@@ -55,10 +53,12 @@ export class StreamsConsumer {
   private heartbeat: NodeJS.Timeout | undefined;
   private started = false;
   private lastCleanup = Date.now();
-  private readonly slotFreed = new Signal();
+  private readonly slots: Slots;
 
   public constructor(private readonly options: StreamsConsumerOptions) {
     const { retries, reclaimInterval } = options;
+
+    this.slots = new Slots(options.batchSize);
 
     // Long enough to outlive every retry of an entry
     this.doneTtl = Math.max(
@@ -88,16 +88,14 @@ export class StreamsConsumer {
         event,
         handlers: new Map(),
         inflight: new Map(),
-        free: this.options.batchSize,
       };
       this.streams.set(stream, state);
+      this.slots.register(stream);
     }
 
     state.handlers.set(handler, callback);
-    this.slotFreed.notify();
   }
 
-  /** Starts the loops. Does nothing when they are running already. */
   public async start(): Promise<void> {
     if (this.started) {
       return;
@@ -121,7 +119,7 @@ export class StreamsConsumer {
    */
   public async stop(): Promise<void> {
     this.stopController.abort();
-    this.slotFreed.notify();
+    this.slots.wake();
 
     // Interrupts a blocked XREADGROUP
     await this.client?.then(
@@ -179,13 +177,11 @@ export class StreamsConsumer {
     const signal = this.stopController.signal;
 
     while (!signal.aborted) {
-      const readable = [...this.streams.values()].filter(
-        (state) => state.free > 0,
-      );
+      const readable = this.slots.readable();
 
       if (readable.length === 0) {
         // Nothing to read, wait for a slot instead of calling Redis
-        await this.slotFreed.wait();
+        await this.slots.wait();
         continue;
       }
 
@@ -195,7 +191,7 @@ export class StreamsConsumer {
         ).xReadGroup(
           group,
           consumer,
-          readable.map(({ stream }) => ({ key: stream, id: '>' })),
+          readable.map((key) => ({ key, id: '>' })),
           { COUNT: batchSize, BLOCK: blockTimeout },
         );
 
@@ -294,12 +290,11 @@ export class StreamsConsumer {
     entry: StreamEntry,
     attempt: number,
   ): Promise<void> {
-    state.free -= 1;
+    this.slots.take(state.stream);
 
     const promise = this.process(state, entry, attempt).finally(() => {
       state.inflight.delete(entry.id);
-      state.free += 1;
-      this.slotFreed.notify();
+      this.slots.release(state.stream);
     });
 
     state.inflight.set(entry.id, promise);
