@@ -49,7 +49,6 @@ export class StreamsConsumer {
   private readonly doneTtl: number;
   private client: Promise<RedisClientType> | undefined;
   private loops: Promise<void>[] = [];
-  private heartbeat: NodeJS.Timeout | undefined;
   private started = false;
   private lastCleanup = Date.now();
   private readonly logger = new Logger(StreamsConsumer.name);
@@ -104,13 +103,7 @@ export class StreamsConsumer {
     this.started = true;
     await this.getClient();
 
-    const { delay } = this.options.retries;
-
-    this.heartbeat = setInterval(
-      () => void this.refreshInflight(),
-      Math.max(delay / 2, 10),
-    );
-    this.loops = [this.readLoop(), this.reclaimLoop()];
+    this.loops = [this.readLoop(), this.reclaimLoop(), this.refreshLoop()];
   }
 
   /**
@@ -129,10 +122,6 @@ export class StreamsConsumer {
 
     await Promise.all(this.loops);
     await this.drain();
-
-    if (this.heartbeat) {
-      clearInterval(this.heartbeat);
-    }
 
     for (const { stream } of this.streams.values()) {
       await this.removeConsumerIfIdle(stream).catch((err) =>
@@ -385,21 +374,27 @@ export class StreamsConsumer {
   }
 
   /** Keeps the entries in flight from looking abandoned. */
-  private async refreshInflight(): Promise<void> {
+  private async refreshLoop(): Promise<void> {
     const { client, group, consumer } = this.options;
+    const { delay } = this.options.retries;
+    const { signal } = this.stopController;
 
-    for (const { stream, inflight } of this.streams.values()) {
-      if (inflight.size === 0) {
-        continue;
+    while (!signal.aborted) {
+      await this.pause(Math.max(delay / 2, 10));
+
+      for (const { stream, inflight } of this.streams.values()) {
+        if (inflight.size === 0) {
+          continue;
+        }
+
+        await client
+          .xClaimJustId(stream, group, consumer, 0, [...inflight.keys()])
+          .catch((err) =>
+            this.logger.warn(
+              `Failed to refresh entries of ${stream}: ${String(err)}`,
+            ),
+          );
       }
-
-      await client
-        .xClaimJustId(stream, group, consumer, 0, [...inflight.keys()])
-        .catch((err) =>
-          this.logger.warn(
-            `Failed to refresh entries of ${stream}: ${String(err)}`,
-          ),
-        );
     }
   }
 
