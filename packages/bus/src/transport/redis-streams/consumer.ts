@@ -1,8 +1,8 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Logger } from '@nestjs/common';
-import { type RedisClientType } from 'redis';
 import { type BusRetriesConfig, type EventConstructor } from '../../types.js';
 import { parseEventPayload } from '../event-dto.js';
+import { Clients } from './clients.js';
 import { type Callback, type Stream, Streams } from './streams.js';
 
 interface StreamEntry {
@@ -15,8 +15,7 @@ export interface StreamsConsumerOptions {
   consumer: string;
   /** Prefix of all keys, the streams included. */
   keyPrefix: string;
-  client: RedisClientType;
-  /** Connection URL of the client used for reading streams. */
+  /** Connection URL. */
   url: string;
   retries: BusRetriesConfig;
   batchSize: number;
@@ -36,7 +35,7 @@ export class StreamsConsumer {
   private readonly streams: Streams;
   private readonly stopController = new AbortController();
   private readonly doneTtl: number;
-  private client: Promise<RedisClientType> | undefined;
+  private readonly clients: Clients<'read' | 'command'>;
   private loops: Promise<void>[] = [];
   private started = false;
   private readonly logger = new Logger(StreamsConsumer.name);
@@ -44,6 +43,7 @@ export class StreamsConsumer {
   public constructor(private readonly options: StreamsConsumerOptions) {
     const { retries, reclaimInterval } = options;
 
+    this.clients = new Clients(options.url);
     this.streams = new Streams(options.batchSize);
 
     // Long enough to outlive every retry of an entry
@@ -86,13 +86,15 @@ export class StreamsConsumer {
 
   /**
    * Stops reading and reclaiming, waits for the entries in flight and removes
-   * the consumer from the groups unless it owns pending entries.
+   * the consumer from the groups unless it owns pending entries, then closes
+   * its connections.
    */
   public async stop(): Promise<void> {
     this.stopController.abort();
     this.streams.wake();
 
-    await this.disconnect();
+    // Interrupts a blocked XREADGROUP
+    await this.clients.destroy('read');
 
     await Promise.all(this.loops);
     await this.drain();
@@ -104,6 +106,8 @@ export class StreamsConsumer {
         ),
       );
     }
+
+    await this.clients.close();
   }
 
   private async drain(): Promise<void> {
@@ -149,7 +153,7 @@ export class StreamsConsumer {
       try {
         const reply =
           (await (
-            await this.getClient()
+            await this.clients.get('read')
           ).xReadGroup(
             group,
             consumer,
@@ -181,8 +185,7 @@ export class StreamsConsumer {
   }
 
   private async reclaimLoop(): Promise<void> {
-    const { client, group, consumer, batchSize, reclaimInterval } =
-      this.options;
+    const { group, consumer, batchSize, reclaimInterval } = this.options;
     const { delay } = this.options.retries;
 
     while (!this.stopController.signal.aborted) {
@@ -197,6 +200,7 @@ export class StreamsConsumer {
         const { name: stream } = state;
 
         try {
+          const client = await this.clients.get('command');
           const pending = await client.xPendingRange(
             stream,
             group,
@@ -257,7 +261,7 @@ export class StreamsConsumer {
     entry: StreamEntry,
     attempt: number,
   ): Promise<void> {
-    const { client, group, keyPrefix } = this.options;
+    const { group, keyPrefix } = this.options;
     const { event, handlers } = stream;
     const { id, message } = entry;
     const { max } = this.options.retries;
@@ -268,6 +272,7 @@ export class StreamsConsumer {
     this.logger.log(`Received message for event ${eventName}`);
 
     try {
+      const client = await this.clients.get('command');
       const done = await client.hGetAll(doneKey);
       const pending = [...handlers].filter(([name]) => !(name in done));
       const payload = message['payload'] ?? '';
@@ -333,7 +338,7 @@ export class StreamsConsumer {
 
   /** Keeps the entries in flight from looking abandoned. */
   private async refreshLoop(): Promise<void> {
-    const { client, group, consumer } = this.options;
+    const { group, consumer } = this.options;
     const { delay } = this.options.retries;
     const { signal } = this.stopController;
 
@@ -345,13 +350,17 @@ export class StreamsConsumer {
           continue;
         }
 
-        await client
-          .xClaimJustId(stream, group, consumer, 0, [...inflight.keys()])
-          .catch((err) =>
-            this.logger.warn(
-              `Failed to refresh entries of ${stream}: ${String(err)}`,
-            ),
+        try {
+          const client = await this.clients.get('command');
+
+          await client.xClaimJustId(stream, group, consumer, 0, [
+            ...inflight.keys(),
+          ]);
+        } catch (err) {
+          this.logger.warn(
+            `Failed to refresh entries of ${stream}: ${String(err)}`,
           );
+        }
       }
     }
   }
@@ -362,7 +371,7 @@ export class StreamsConsumer {
    * `consumerTtl`.
    */
   private async cleanupLoop(): Promise<void> {
-    const { client, group, consumer, consumerTtl } = this.options;
+    const { group, consumer, consumerTtl } = this.options;
 
     while (!this.stopController.signal.aborted) {
       await this.pause(consumerTtl / 2);
@@ -372,6 +381,8 @@ export class StreamsConsumer {
       }
 
       try {
+        const client = await this.clients.get('command');
+
         for (const { name: stream } of this.streams.all()) {
           const consumers = await client.xInfoConsumers(stream, group);
 
@@ -396,7 +407,8 @@ export class StreamsConsumer {
    * which still have to be retried.
    */
   private async removeConsumerIfIdle(stream: string): Promise<void> {
-    const { client, group, consumer } = this.options;
+    const { group, consumer } = this.options;
+    const client = await this.clients.get('command');
     const owned = await client.xPendingRange(stream, group, '-', '+', 1, {
       consumer,
     });
@@ -406,50 +418,10 @@ export class StreamsConsumer {
     }
   }
 
-  /**
-   * Connects the client used for reading. XREADGROUP BLOCK occupies the
-   * connection, so it is separate from the one of the transport.
-   */
-  private async connect(): Promise<RedisClientType> {
-    const { createClient } = await import('redis');
-    const client = createClient({ url: this.options.url });
-
-    client.on('error', (err: unknown) => {
-      this.logger.error(
-        `Redis connection error: ${err instanceof Error ? err.message : String(err)}`,
-        err instanceof Error ? err.stack : undefined,
-      );
-    });
-
-    await client.connect();
-
-    return client;
-  }
-
-  /** Interrupts a blocked XREADGROUP by destroying the client. */
-  private async disconnect(): Promise<void> {
-    await this.client?.then(
-      (client) => client.destroy(),
-      () => undefined,
-    );
-  }
-
-  /** The client used for reading, connected when it is first requested. */
-  private getClient(): Promise<RedisClientType> {
-    this.client ??= this.connect().catch((err) => {
-      // Let the next call connect again
-      this.client = undefined;
-
-      throw err;
-    });
-
-    return this.client;
-  }
-
   private async createGroup(stream: string): Promise<void> {
     try {
       await (
-        await this.getClient()
+        await this.clients.get('read')
       ).xGroupCreate(stream, this.options.group, '$', {
         MKSTREAM: true,
       });

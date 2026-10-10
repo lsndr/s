@@ -6,12 +6,16 @@ import {
   Logger,
   type OnModuleInit,
 } from '@nestjs/common';
-import { type RedisClientType } from 'redis';
 import { type EventConstructor, BusConfig } from '../../types.js';
-import { Transport, type TransportPublishOptions } from '../transport.js';
+import {
+  Transport,
+  TransportConfig,
+  type TransportPublishOptions,
+} from '../transport.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent } from '../dispatcher.js';
 import { createEventDto } from '../event-dto.js';
+import { Clients } from './clients.js';
 import { StreamsConsumer } from './consumer.js';
 
 export interface RedisStreamsTransportConfig {
@@ -86,35 +90,50 @@ export interface RedisStreamsTransportConfig {
   shutdownTimeout?: number;
 }
 
-const MIN_REDIS_VERSION = [8, 2, 0] as const;
-
 @Injectable()
 export class RedisStreamsTransport
   extends Transport<RedisStreamsTransportConfig>
   implements OnModuleInit, BeforeApplicationShutdown
 {
-  private client: RedisClientType | undefined;
-  private consumer: StreamsConsumer | undefined;
+  private readonly clients: Clients;
+  private readonly consumer: StreamsConsumer;
+  private readonly keyPrefix: string;
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
-  public constructor(@Inject(BusConfig) private readonly busConfig: BusConfig) {
+  public constructor(
+    @Inject(BusConfig) busConfig: BusConfig,
+    @Inject(TransportConfig) config: RedisStreamsTransportConfig,
+  ) {
     super();
+
+    this.clients = new Clients(config.url);
+    this.keyPrefix = config.keyPrefix ?? 'events:';
+    this.consumer = new StreamsConsumer({
+      group: busConfig.group,
+      consumer: config.consumer ?? hostname(),
+      keyPrefix: this.keyPrefix,
+      url: config.url,
+      retries: busConfig.retries,
+      batchSize: config.batchSize ?? 10,
+      blockTimeout: config.blockTimeout ?? 5_000,
+      reclaimInterval:
+        config.reclaimInterval ?? Math.max(busConfig.retries.delay / 4, 1_000),
+      consumerTtl: config.consumerTtl ?? 3_600_000,
+      shutdownTimeout: config.shutdownTimeout,
+    });
   }
 
   public async onModuleInit(): Promise<void> {
-    this.client = await this.createClient(this.config);
-    await this.client.connect();
-
-    await this.assertVersion();
+    await this.clients.get();
   }
 
   public async beforeApplicationShutdown(): Promise<void> {
-    await this.consumer?.stop();
-    await this.getClient().close();
+    await this.consumer.stop();
+    await this.clients.close();
   }
 
   public async assertHealthy(): Promise<void> {
-    await this.getClient().ping();
+    await (await this.clients.get()).ping();
   }
 
   public publish(
@@ -157,10 +176,8 @@ export class RedisStreamsTransport
           },
         ];
 
-    const consumer = this.getConsumer();
-
     for (const { event, handler: handlerName, callback: cb } of subscriptions) {
-      await consumer.register(
+      await this.consumer.register(
         this.getStream(event.name),
         event,
         handlerName,
@@ -173,7 +190,7 @@ export class RedisStreamsTransport
     }
 
     // Consuming starts once the handlers are registered
-    consumer.start();
+    this.consumer.start();
   }
 
   private async publishEvent(
@@ -186,7 +203,9 @@ export class RedisStreamsTransport
     this.logger.log(`Publishing event ${payload.name}`);
     this.logger.verbose(`Event ${payload.name} payload:`, payload);
 
-    await this.getClient().xAdd(
+    const client = await this.clients.get();
+
+    await client.xAdd(
       this.getStream(payload.name),
       '*',
       { id: payload.id, payload: json },
@@ -203,78 +222,7 @@ export class RedisStreamsTransport
     this.logger.debug(`Event ${payload.name} added to the stream`);
   }
 
-  private getConsumer(): StreamsConsumer {
-    this.consumer ??= new StreamsConsumer({
-      group: this.busConfig.group,
-      consumer: this.getConsumerName(),
-      keyPrefix: this.getKeyPrefix(),
-      client: this.getClient(),
-      url: this.config.url,
-      retries: this.busConfig.retries,
-      batchSize: this.config.batchSize ?? 10,
-      blockTimeout: this.config.blockTimeout ?? 5_000,
-      reclaimInterval:
-        this.config.reclaimInterval ??
-        Math.max(this.busConfig.retries.delay / 4, 1_000),
-      consumerTtl: this.config.consumerTtl ?? 3_600_000,
-      shutdownTimeout: this.config.shutdownTimeout,
-    });
-
-    return this.consumer;
-  }
-
-  private async assertVersion(): Promise<void> {
-    const info = await this.getClient().info('server');
-    const match = /redis_version:(\d+)\.(\d+)\.(\d+)/.exec(info);
-    const version = match?.slice(1).map(Number) ?? [];
-    const supported = MIN_REDIS_VERSION.reduce<boolean | undefined>(
-      (result, min, i) =>
-        result ?? ((version[i] ?? 0) === min ? undefined : version[i]! > min),
-      undefined,
-    );
-
-    if (!match || supported === false) {
-      await this.getClient().close();
-
-      throw new Error(
-        `${this.constructor.name} requires Redis >= ${MIN_REDIS_VERSION.join('.')}, got ${version.join('.') || 'unknown version'}`,
-      );
-    }
-  }
-
-  private getClient(): RedisClientType {
-    if (!this.client) {
-      throw new Error('Redis client is not initialized');
-    }
-
-    return this.client;
-  }
-
-  private async createClient(
-    config: RedisStreamsTransportConfig,
-  ): Promise<RedisClientType> {
-    const { createClient } = await import('redis');
-    const client = createClient({ url: config.url });
-
-    client.on('error', (err: unknown) => {
-      this.logger.error(
-        `Redis connection error: ${err instanceof Error ? err.message : String(err)}`,
-        err instanceof Error ? err.stack : undefined,
-      );
-    });
-
-    return client;
-  }
-
-  private getKeyPrefix(): string {
-    return this.config.keyPrefix ?? 'events:';
-  }
-
   private getStream(eventName: string): string {
-    return `${this.getKeyPrefix()}${eventName}`;
-  }
-
-  private getConsumerName(): string {
-    return this.config.consumer ?? hostname();
+    return `${this.keyPrefix}${eventName}`;
   }
 }

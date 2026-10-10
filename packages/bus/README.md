@@ -267,8 +267,6 @@ BusModule.forRoot({
 });
 ```
 
-The transport checks the server version on startup and fails if Redis is older than 8.2.
-
 Config options: `url` (required), `consumer`, `keyPrefix` (`events:`), `maxLength` (`1000`), `batchSize` (`10`), `blockTimeout` (`5000` ms), `reclaimInterval` (`max(retries.delay / 4, 1000)` ms), `consumerTtl` (`3600000` ms), `shutdownTimeout` (not set: wait for all entries in flight).
 
 - Each event class has its own stream, `<keyPrefix><EventClass>`.
