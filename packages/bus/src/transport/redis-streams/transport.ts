@@ -172,7 +172,7 @@ export class RedisStreamsTransport
     }
 
     // Consuming starts once the handlers are registered
-    await consumer.start();
+    consumer.start();
   }
 
   private async publishEvent(
