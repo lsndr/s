@@ -47,7 +47,7 @@ export class StreamsConsumer {
   private readonly streams = new Map<string, StreamState>();
   private readonly stopController = new AbortController();
   private readonly doneTtl: number;
-  private client: Promise<RedisClientType> | undefined;
+  private client: RedisClientType | undefined;
   private loops: Promise<void>[] = [];
   private started = false;
   private readonly logger = new Logger(StreamsConsumer.name);
@@ -78,7 +78,10 @@ export class StreamsConsumer {
     }
 
     if (!state) {
-      await this.createGroup(stream);
+      // Before start the groups are created by `start()`
+      if (this.client) {
+        await this.createGroup(stream);
+      }
 
       // Registered meanwhile by a concurrent call
       state = this.streams.get(stream) ?? {
@@ -94,13 +97,22 @@ export class StreamsConsumer {
     state.handlers.set(handler, callback);
   }
 
+  /**
+   * Connects, creates the groups of the registered streams and starts the
+   * loops. Does nothing when they are running already.
+   */
   public async start(): Promise<void> {
     if (this.started) {
       return;
     }
 
     this.started = true;
-    await this.getClient();
+
+    await this.connect();
+
+    for (const stream of this.streams.keys()) {
+      await this.createGroup(stream);
+    }
 
     this.loops = [
       this.readLoop(),
@@ -118,11 +130,7 @@ export class StreamsConsumer {
     this.stopController.abort();
     this.slots.wake();
 
-    // Interrupts a blocked XREADGROUP
-    await this.client?.then(
-      (client) => client.destroy(),
-      () => undefined,
-    );
+    this.disconnect();
 
     await Promise.all(this.loops);
     await this.drain();
@@ -179,9 +187,7 @@ export class StreamsConsumer {
       }
 
       try {
-        const reply = await (
-          await this.getClient()
-        ).xReadGroup(
+        const reply = await this.getClient().xReadGroup(
           group,
           consumer,
           readable.map((key) => ({ key, id: '>' })),
@@ -447,30 +453,10 @@ export class StreamsConsumer {
   }
 
   /**
-   * The client used for reading, connected on first use. XREADGROUP BLOCK
-   * occupies the connection, so it is separate from the one of the transport.
+   * Connects the client used for reading. XREADGROUP BLOCK occupies the
+   * connection, so it is separate from the one of the transport.
    */
-  private getClient(): Promise<RedisClientType> {
-    this.client ??= this.createClient();
-
-    return this.client;
-  }
-
-  private async createGroup(stream: string): Promise<void> {
-    const client = await this.getClient();
-
-    try {
-      await client.xGroupCreate(stream, this.options.group, '$', {
-        MKSTREAM: true,
-      });
-    } catch (err) {
-      if (!String(err).includes('BUSYGROUP')) {
-        throw err;
-      }
-    }
-  }
-
-  private async createClient(): Promise<RedisClientType> {
+  private async connect(): Promise<void> {
     const { createClient } = await import('redis');
     const client = createClient({ url: this.options.url });
 
@@ -483,7 +469,32 @@ export class StreamsConsumer {
 
     await client.connect();
 
-    return client;
+    this.client = client;
+  }
+
+  /** Interrupts a blocked XREADGROUP by destroying the client. */
+  private disconnect(): void {
+    this.client?.destroy();
+  }
+
+  private getClient(): RedisClientType {
+    if (!this.client) {
+      throw new Error(`${this.constructor.name} is not connected`);
+    }
+
+    return this.client;
+  }
+
+  private async createGroup(stream: string): Promise<void> {
+    try {
+      await this.getClient().xGroupCreate(stream, this.options.group, '$', {
+        MKSTREAM: true,
+      });
+    } catch (err) {
+      if (!String(err).includes('BUSYGROUP')) {
+        throw err;
+      }
+    }
   }
 
   private pause(ms: number): Promise<void> {
