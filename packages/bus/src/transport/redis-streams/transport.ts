@@ -216,7 +216,6 @@ export class RedisStreamsTransport
         Math.max(this.busConfig.retries.delay / 4, 1_000),
       consumerTtl: this.config.consumerTtl ?? 3_600_000,
       shutdownTimeout: this.config.shutdownTimeout,
-      logger: this.logger,
     });
 
     return this.consumer;

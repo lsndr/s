@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { type Logger } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { type RedisClientType } from 'redis';
 import {
   type BusRetriesConfig,
@@ -35,7 +35,6 @@ export interface StreamsConsumerOptions {
   reclaimInterval: number;
   consumerTtl: number;
   shutdownTimeout: number | undefined;
-  logger: Logger;
 }
 
 /**
@@ -53,6 +52,7 @@ export class StreamsConsumer {
   private heartbeat: NodeJS.Timeout | undefined;
   private started = false;
   private lastCleanup = Date.now();
+  private readonly logger = new Logger(StreamsConsumer.name);
   private readonly slots: Slots;
 
   public constructor(private readonly options: StreamsConsumerOptions) {
@@ -136,7 +136,7 @@ export class StreamsConsumer {
 
     for (const { stream } of this.streams.values()) {
       await this.removeConsumerIfIdle(stream).catch((err) =>
-        this.options.logger.warn(
+        this.logger.warn(
           `Failed to remove consumer from ${stream}: ${String(err)}`,
         ),
       );
@@ -144,7 +144,7 @@ export class StreamsConsumer {
   }
 
   private async drain(): Promise<void> {
-    const { shutdownTimeout, logger } = this.options;
+    const { shutdownTimeout } = this.options;
     const pending = [...this.streams.values()].flatMap((state) => [
       ...state.inflight.values(),
     ]);
@@ -166,14 +166,14 @@ export class StreamsConsumer {
     ]);
 
     if (!finished) {
-      logger.warn(
+      this.logger.warn(
         `Shutdown timeout reached with entries still in flight, they stay pending`,
       );
     }
   }
 
   private async readLoop(): Promise<void> {
-    const { group, consumer, batchSize, blockTimeout, logger } = this.options;
+    const { group, consumer, batchSize, blockTimeout } = this.options;
     const signal = this.stopController.signal;
 
     while (!signal.aborted) {
@@ -209,7 +209,7 @@ export class StreamsConsumer {
           return;
         }
 
-        logger.error(
+        this.logger.error(
           `Failed to read from streams: ${String(err)}`,
           err instanceof Error ? err.stack : undefined,
         );
@@ -219,7 +219,7 @@ export class StreamsConsumer {
   }
 
   private async reclaimLoop(): Promise<void> {
-    const { client, group, consumer, batchSize, reclaimInterval, logger } =
+    const { client, group, consumer, batchSize, reclaimInterval } =
       this.options;
     const { delay } = this.options.retries;
 
@@ -234,7 +234,7 @@ export class StreamsConsumer {
       try {
         await this.removeStaleConsumers();
       } catch (err) {
-        logger.warn(`Failed to remove stale consumers: ${String(err)}`);
+        this.logger.warn(`Failed to remove stale consumers: ${String(err)}`);
       }
 
       for (const state of this.streams.values()) {
@@ -275,7 +275,7 @@ export class StreamsConsumer {
             return;
           }
 
-          logger.error(
+          this.logger.error(
             `Failed to reclaim entries of ${stream}: ${String(err)}`,
             err instanceof Error ? err.stack : undefined,
           );
@@ -312,20 +312,20 @@ export class StreamsConsumer {
     { id, message }: StreamEntry,
     attempt: number,
   ): Promise<void> {
-    const { client, group, logger } = this.options;
+    const { client, group } = this.options;
     const { max } = this.options.retries;
     const retryCount = attempt - 1;
     const eventName = event.name;
     const doneKey = `bus:done:${group}:${stream}:${id}`;
 
-    logger.log(`Received message for event ${eventName}`);
+    this.logger.log(`Received message for event ${eventName}`);
 
     try {
       const done = await client.hGetAll(doneKey);
       const pending = [...handlers].filter(([name]) => !(name in done));
       const payload = message['payload'] ?? '';
 
-      logger.verbose(`Event ${eventName} payload: ${payload}`);
+      this.logger.verbose(`Event ${eventName} payload: ${payload}`);
 
       const results = await Promise.all(
         pending.map(async ([name, callback]) => {
@@ -341,7 +341,7 @@ export class StreamsConsumer {
             .pExpire(doneKey, this.doneTtl)
             .exec()
             .catch((err) =>
-              logger.warn(
+              this.logger.warn(
                 `Failed to record handler ${name} of ${id}: ${String(err)}`,
               ),
             );
@@ -352,7 +352,7 @@ export class StreamsConsumer {
       const failed = results.filter(({ error }) => error !== undefined);
 
       for (const { name, error } of failed) {
-        logger.error(
+        this.logger.error(
           `Error handling event ${eventName} (handler: ${name}, retryCount: ${retryCount}): ${String(error)}`,
           error instanceof Error ? error.stack : undefined,
         );
@@ -364,7 +364,7 @@ export class StreamsConsumer {
       }
 
       for (const { name, error } of failed) {
-        logger.error(
+        this.logger.error(
           `Event ${eventName} (handler: ${name}) failed permanently after ${retryCount} retries: ${String(error)}`,
           error instanceof Error ? error.stack : undefined,
         );
@@ -373,11 +373,11 @@ export class StreamsConsumer {
       await client.multi().xAck(stream, group, id).del(doneKey).exec();
 
       if (failed.length === 0) {
-        logger.log(`Event ${eventName} handled successfully`);
+        this.logger.log(`Event ${eventName} handled successfully`);
       }
     } catch (err) {
       // Redis failure, the entry stays pending
-      logger.error(
+      this.logger.error(
         `Failed to process entry ${id} of ${stream}: ${String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
@@ -386,7 +386,7 @@ export class StreamsConsumer {
 
   /** Keeps the entries in flight from looking abandoned. */
   private async refreshInflight(): Promise<void> {
-    const { client, group, consumer, logger } = this.options;
+    const { client, group, consumer } = this.options;
 
     for (const { stream, inflight } of this.streams.values()) {
       if (inflight.size === 0) {
@@ -396,7 +396,9 @@ export class StreamsConsumer {
       await client
         .xClaimJustId(stream, group, consumer, 0, [...inflight.keys()])
         .catch((err) =>
-          logger.warn(`Failed to refresh entries of ${stream}: ${String(err)}`),
+          this.logger.warn(
+            `Failed to refresh entries of ${stream}: ${String(err)}`,
+          ),
         );
     }
   }
@@ -407,7 +409,7 @@ export class StreamsConsumer {
    * of `consumerTtl`.
    */
   private async removeStaleConsumers(): Promise<void> {
-    const { client, group, consumer, consumerTtl, logger } = this.options;
+    const { client, group, consumer, consumerTtl } = this.options;
 
     if (Date.now() - this.lastCleanup < consumerTtl / 2) {
       return;
@@ -425,7 +427,7 @@ export class StreamsConsumer {
 
         await client.xGroupDelConsumer(stream, group, name);
 
-        logger.log(`Removed stale consumer ${name} of group ${group}`);
+        this.logger.log(`Removed stale consumer ${name} of group ${group}`);
       }
     }
   }
@@ -474,7 +476,7 @@ export class StreamsConsumer {
     const client = createClient({ url: this.options.url });
 
     client.on('error', (err: unknown) => {
-      this.options.logger.error(
+      this.logger.error(
         `Redis connection error: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
