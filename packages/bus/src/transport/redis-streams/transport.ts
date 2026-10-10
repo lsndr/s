@@ -33,11 +33,12 @@ export interface RedisStreamsTransportConfig {
    */
   consumer?: string;
   /**
-   * Prefix of the stream keys.
+   * Prefix of all keys the transport uses: the streams, and the hashes that
+   * record the handlers that have succeeded (`<keyPrefix>done:…`).
    *
    * @default 'events:'
    */
-  streamPrefix?: string;
+  keyPrefix?: string;
   /**
    * Approximate stream length above which acknowledged entries are trimmed.
    * Unacknowledged entries are never trimmed, so it is a soft cap.
@@ -206,6 +207,7 @@ export class RedisStreamsTransport
     this.consumer ??= new StreamsConsumer({
       group: this.busConfig.group,
       consumer: this.getConsumerName(),
+      keyPrefix: this.getKeyPrefix(),
       client: this.getClient(),
       url: this.config.url,
       retries: this.busConfig.retries,
@@ -264,8 +266,12 @@ export class RedisStreamsTransport
     return client;
   }
 
+  private getKeyPrefix(): string {
+    return this.config.keyPrefix ?? 'events:';
+  }
+
   private getStream(eventName: string): string {
-    return `${this.config.streamPrefix ?? 'events:'}${eventName}`;
+    return `${this.getKeyPrefix()}${eventName}`;
   }
 
   private getConsumerName(): string {

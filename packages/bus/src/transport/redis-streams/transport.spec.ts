@@ -88,7 +88,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
     });
 
     expect(ok).toHaveBeenCalledTimes(1);
-    expect(await redis.keys(`bus:done:${group}:*`)).toEqual([]);
+    expect(await redis.keys(`events:done:${group}:*`)).toEqual([]);
   });
 
   it('caps the entries in flight per stream below 2 * batchSize', async () => {

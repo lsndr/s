@@ -269,13 +269,13 @@ BusModule.forRoot({
 
 The transport checks the server version on startup and fails if Redis is older than 8.2.
 
-Config options: `url` (required), `consumer`, `streamPrefix` (`events:`), `maxLength` (`1000`), `batchSize` (`10`), `blockTimeout` (`5000` ms), `reclaimInterval` (`max(retries.delay / 4, 1000)` ms), `consumerTtl` (`3600000` ms), `shutdownTimeout` (not set: wait for all entries in flight).
+Config options: `url` (required), `consumer`, `keyPrefix` (`events:`), `maxLength` (`1000`), `batchSize` (`10`), `blockTimeout` (`5000` ms), `reclaimInterval` (`max(retries.delay / 4, 1000)` ms), `consumerTtl` (`3600000` ms), `shutdownTimeout` (not set: wait for all entries in flight).
 
-- Each event class has its own stream, `<streamPrefix><EventClass>`.
+- Each event class has its own stream, `<keyPrefix><EventClass>`.
 - Each stream has one consumer group, named after the bus `group` and created at the stream's tail (`$`). Instances of the group share it, so an entry goes to a single instance, which runs all of its handlers for the event in parallel. Every instance of a group must therefore register the same handlers.
 - An instance reads all its streams with one blocking `XREADGROUP` (`COUNT = batchSize`). Each stream has `batchSize` slots, and a stream is part of the next read only while it has a free slot. Entries run as soon as they are read and free their slot on their own, so a stream runs at most `2 * batchSize - 1` entries at once; there is no global limit. When no stream has a free slot, Redis is not called until one frees.
 - Consuming starts when `subscribe` is called, which the discovery does once after all handlers are found.
-- Successful handlers of an entry are recorded in the hash `bus:done:<group>:<stream>:<id>` (with a TTL), so a redelivery only runs the handlers that haven't succeeded. The entry is acknowledged, and the hash deleted, once every handler has succeeded or failed permanently.
+- Successful handlers of an entry are recorded in the hash `<keyPrefix>done:<group>:<EventClass>:<id>` (with a TTL), so a redelivery only runs the handlers that haven't succeeded. The entry is acknowledged, and the hash deleted, once every handler has succeeded or failed permanently.
 - Shutdown stops reading and reclaiming, waits for the entries in flight (up to `shutdownTimeout`), then removes the consumer from the groups unless it still has pending entries.
 - The consumer name defaults to the host name. A stable name avoids leaving stale consumers behind after restarts; it doesn't change recovery, since pending entries are reclaimed by any consumer after `retries.delay`. Set `consumer` explicitly if several instances share a host, since instances with the same name share their pending entries. A consumer is removed from its groups on graceful shutdown unless it still has pending entries.
 - Consumers that crashed or were renamed stay registered in the group. Running consumers delete the ones that have no pending entries and have been idle for longer than `consumerTtl`; keep it longer than `blockTimeout`.

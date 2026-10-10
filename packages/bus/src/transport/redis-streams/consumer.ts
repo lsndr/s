@@ -13,6 +13,8 @@ interface StreamEntry {
 export interface StreamsConsumerOptions {
   group: string;
   consumer: string;
+  /** Prefix of all keys, the streams included. */
+  keyPrefix: string;
   client: RedisClientType;
   /** Connection URL of the client used for reading streams. */
   url: string;
@@ -254,11 +256,11 @@ export class StreamsConsumer {
     { id, message }: StreamEntry,
     attempt: number,
   ): Promise<void> {
-    const { client, group } = this.options;
+    const { client, group, keyPrefix } = this.options;
     const { max } = this.options.retries;
     const retryCount = attempt - 1;
     const eventName = event.name;
-    const doneKey = `bus:done:${group}:${stream}:${id}`;
+    const doneKey = `${keyPrefix}done:${group}:${eventName}:${id}`;
 
     this.logger.log(`Received message for event ${eventName}`);
 
