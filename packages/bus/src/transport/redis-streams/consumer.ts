@@ -159,7 +159,7 @@ export class StreamsConsumer {
 
           for (const entry of messages as StreamEntry[]) {
             if (state) {
-              void this.run(state, entry, 1);
+              this.run(state, entry, 1);
             }
           }
         }
@@ -220,7 +220,7 @@ export class StreamsConsumer {
 
           for (const entry of claimed) {
             if (entry && !this.stopController.signal.aborted) {
-              void this.run(state, entry, (deliveries.get(entry.id) ?? 0) + 1);
+              this.run(state, entry, (deliveries.get(entry.id) ?? 0) + 1);
             }
           }
         } catch (err) {
@@ -238,12 +238,8 @@ export class StreamsConsumer {
   }
 
   /** Runs the entry in its stream, holding one of its slots. */
-  private run(
-    stream: Stream,
-    entry: StreamEntry,
-    attempt: number,
-  ): Promise<void> {
-    return this.streams.run(stream, entry.id, () =>
+  private run(stream: Stream, entry: StreamEntry, attempt: number): void {
+    this.streams.run(stream, entry.id, () =>
       this.process(stream, entry, attempt),
     );
   }

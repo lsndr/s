@@ -81,14 +81,11 @@ export class Streams {
   }
 
   /**
-   * Runs an entry of a stream. It holds a slot of the stream and is listed as
-   * in flight until `work` settles.
+   * Starts an entry of a stream without waiting for it. It holds a slot of the
+   * stream and is listed as in flight until `work` settles, see
+   * {@link Streams.inflight}. `work` must not reject.
    */
-  public run(
-    stream: Stream,
-    id: string,
-    work: () => Promise<void>,
-  ): Promise<void> {
+  public run(stream: Stream, id: string, work: () => Promise<void>): void {
     this.slots.take(stream.name);
 
     const promise = work().finally(() => {
@@ -97,7 +94,5 @@ export class Streams {
     });
 
     stream.inflight.set(id, promise);
-
-    return promise;
   }
 }
