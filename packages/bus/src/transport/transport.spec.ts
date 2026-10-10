@@ -315,17 +315,17 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('delivers message to multiple handlers in the same group', async () => {
-      const group = crypto.randomUUID();
       const config: BusConfig = {
-        group,
+        group: crypto.randomUUID(),
         retries: { max: 0, delay: 100 },
       };
       const handler1 = vi.fn();
       const handler2 = vi.fn();
-      const transport1 = await createTransport(config);
-      const transport2 = await createTransport(config);
-      await transport1.subscribe(TestEvent, 'HandlerA', handler1);
-      await transport2.subscribe(TestEvent, 'HandlerB', handler2);
+      const transport = await createTransport(config);
+      await transport.subscribe([
+        { event: TestEvent, handler: 'HandlerA', callback: handler1 },
+        { event: TestEvent, handler: 'HandlerB', callback: handler2 },
+      ]);
 
       const publisher = await createTransport(config);
       const event = new TestEvent({ value: 'multi-handler' });

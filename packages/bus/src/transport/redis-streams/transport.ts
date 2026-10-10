@@ -11,8 +11,8 @@ import { type EventConstructor, BusConfig } from '../../types.js';
 import { Transport, type TransportPublishOptions } from '../transport.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent } from '../dispatcher.js';
-import { createEventDto, parseEventPayload } from '../event-dto.js';
-import { StreamConsumer } from './stream-consumer.js';
+import { createEventDto } from '../event-dto.js';
+import { StreamsConsumer } from './consumer.js';
 
 export interface RedisStreamsTransportConfig {
   /**
@@ -46,7 +46,9 @@ export interface RedisStreamsTransportConfig {
    */
   maxLength?: number;
   /**
-   * Maximum number of entries read from a stream at once.
+   * Number of slots of each stream. A stream is read while it has a free slot,
+   * and a read returns at most this many entries of a stream, so a stream runs
+   * up to `2 * batchSize - 1` entries at once.
    *
    * @default 10
    */
@@ -75,6 +77,12 @@ export interface RedisStreamsTransportConfig {
    * @default 3600000
    */
   consumerTtl?: number;
+  /**
+   * How long shutdown waits for the entries in flight, in milliseconds. Entries
+   * that are not finished by then stay pending and are retried later. Waits
+   * for all of them when not set.
+   */
+  shutdownTimeout?: number;
 }
 
 const MIN_REDIS_VERSION = [8, 2, 0] as const;
@@ -85,7 +93,7 @@ export class RedisStreamsTransport
   implements OnModuleInit, BeforeApplicationShutdown
 {
   private client: RedisClientType | undefined;
-  private readonly consumers: StreamConsumer[] = [];
+  private consumer: StreamsConsumer | undefined;
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
   public constructor(@Inject(BusConfig) private readonly busConfig: BusConfig) {
@@ -100,17 +108,7 @@ export class RedisStreamsTransport
   }
 
   public async beforeApplicationShutdown(): Promise<void> {
-    await Promise.all(this.consumers.map((consumer) => consumer.stop()));
-
-    // Don't leave unique consumers behind, unless they own entries to retry
-    for (const consumer of this.consumers) {
-      await consumer
-        .removeConsumerIfIdle()
-        .catch((err) =>
-          this.logger.warn(`Failed to remove consumer: ${String(err)}`),
-        );
-    }
-
+    await this.consumer?.stop();
     await this.getClient().close();
   }
 
@@ -158,13 +156,20 @@ export class RedisStreamsTransport
           },
         ];
 
-    for (const subscription of subscriptions) {
-      await this.subscribeEvent(
-        subscription.event,
-        subscription.handler,
-        subscription.callback,
+    const consumer = this.getConsumer();
+
+    for (const { event, handler: handlerName, callback: cb } of subscriptions) {
+      await this.createGroup(this.getStream(event.name));
+
+      consumer.register(this.getStream(event.name), event, handlerName, cb);
+
+      this.logger.log(
+        `Subscribed to event ${event.name} (handler: ${handlerName})`,
       );
     }
+
+    // Consuming starts once the handlers are registered
+    await consumer.start();
   }
 
   private async publishEvent(
@@ -175,7 +180,7 @@ export class RedisStreamsTransport
     const json = JSON.stringify(payload);
 
     this.logger.log(`Publishing event ${payload.name}`);
-    this.logger.verbose(`Event ${payload.name} payload: ${json}`);
+    this.logger.verbose(`Event ${payload.name} payload:`, payload);
 
     await this.getClient().xAdd(
       this.getStream(payload.name),
@@ -194,15 +199,9 @@ export class RedisStreamsTransport
     this.logger.debug(`Event ${payload.name} added to the stream`);
   }
 
-  private async subscribeEvent<
-    C extends EventConstructor<any>,
-    E extends InstanceType<C> = InstanceType<C>,
-  >(event: C, handlerName: string, callback: EventCallback<E>): Promise<void> {
-    const stream = this.getStream(event.name);
-    const group = `${this.busConfig.group}.${handlerName}`;
-
+  private async createGroup(stream: string): Promise<void> {
     try {
-      await this.getClient().xGroupCreate(stream, group, '$', {
+      await this.getClient().xGroupCreate(stream, this.busConfig.group, '$', {
         MKSTREAM: true,
       });
     } catch (err) {
@@ -210,18 +209,20 @@ export class RedisStreamsTransport
         throw err;
       }
     }
+  }
 
-    // XREADGROUP BLOCK occupies the connection, so each consumer has its own
-    const blockingClient = await this.createClient(this.config);
-    await blockingClient.connect();
-
-    const consumer = new StreamConsumer({
-      stream,
-      group,
+  private getConsumer(): StreamsConsumer {
+    this.consumer ??= new StreamsConsumer({
+      group: this.busConfig.group,
       consumer: this.getConsumerName(),
-      eventName: event.name,
       client: this.getClient(),
-      blockingClient,
+      // XREADGROUP BLOCK occupies the connection, so it has its own
+      createBlockingClient: async () => {
+        const client = await this.createClient(this.config);
+        await client.connect();
+
+        return client;
+      },
       retries: this.busConfig.retries,
       batchSize: this.config.batchSize ?? 10,
       blockTimeout: this.config.blockTimeout ?? 5_000,
@@ -229,16 +230,11 @@ export class RedisStreamsTransport
         this.config.reclaimInterval ??
         Math.max(this.busConfig.retries.delay / 4, 1_000),
       consumerTtl: this.config.consumerTtl ?? 3_600_000,
+      shutdownTimeout: this.config.shutdownTimeout,
       logger: this.logger,
-      handle: (payload) => callback(parseEventPayload(event, payload)),
     });
 
-    this.consumers.push(consumer);
-    consumer.start();
-
-    this.logger.log(
-      `Subscribed to event ${event.name} (handler: ${handlerName})`,
-    );
+    return this.consumer;
   }
 
   private async assertVersion(): Promise<void> {
