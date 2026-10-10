@@ -1,8 +1,8 @@
-import { setTimeout as sleep } from 'node:timers/promises';
 import { Logger } from '@nestjs/common';
 import { type EventConstructor } from '../../types.js';
 import { parseEventPayload } from '../event-dto.js';
 import { Clients } from './clients.js';
+import { Loops } from './loops.js';
 import { type Callback, type Stream, Streams } from './streams.js';
 
 interface StreamEntry {
@@ -33,9 +33,8 @@ export interface StreamsConsumerOptions {
  */
 export class StreamsConsumer {
   private readonly streams: Streams;
-  private readonly stopController = new AbortController();
   private readonly clients: Clients<'read' | 'command'>;
-  private readonly loops: Promise<void>[] = [];
+  private readonly loops = new Loops();
   private readonly logger = new Logger(StreamsConsumer.name);
 
   public constructor(private readonly options: StreamsConsumerOptions) {
@@ -60,16 +59,26 @@ export class StreamsConsumer {
    * Starts the loops. Does nothing when they are running already.
    */
   public start(): void {
-    if (this.loops.length > 0) {
+    if (this.loops.running) {
       return;
     }
 
-    this.loops.push(
-      this.readLoop(),
-      this.reclaimLoop(),
-      this.refreshLoop(),
-      this.cleanupLoop(),
-    );
+    const { reclaimInterval, consumerTtl } = this.options;
+    const { delay } = this.options.retries;
+
+    this.loops.start('read from streams', () => this.read(), {
+      retryDelay: 1_000,
+    });
+    this.loops.start('reclaim entries', () => this.reclaim(), {
+      // Jitter keeps instances from polling at the same moment
+      interval: () => reclaimInterval * (0.9 + Math.random() * 0.2),
+    });
+    this.loops.start('refresh entries', () => this.refresh(), {
+      interval: () => Math.max(delay / 2, 10),
+    });
+    this.loops.start('remove stale consumers', () => this.removeStale(), {
+      interval: () => consumerTtl / 2,
+    });
   }
 
   /**
@@ -78,12 +87,12 @@ export class StreamsConsumer {
    * its connections.
    */
   public async stop(): Promise<void> {
-    this.stopController.abort();
+    this.loops.abort();
 
     // Interrupts a blocked XREADGROUP
     await this.clients.destroy('read');
 
-    await Promise.all(this.loops);
+    await this.loops.wait();
 
     const drained = await this.streams.drain(this.options.shutdownTimeout);
 
@@ -102,113 +111,89 @@ export class StreamsConsumer {
     }
 
     await this.clients.close();
-
-    this.loops.length = 0;
   }
 
-  private async readLoop(): Promise<void> {
+  /** Reads the streams that have a free slot, and starts the entries. */
+  private async read(): Promise<void> {
     const { group, consumer, batchSize, blockTimeout } = this.options;
-    const signal = this.stopController.signal;
 
-    while (!signal.aborted) {
-      // Waits for a free slot instead of calling Redis when all are full
-      const readable = await this.streams.readable(signal);
+    // Waits for a free slot instead of calling Redis when all are full
+    const readable = await this.streams.readable(this.loops.signal);
 
-      if (readable.length === 0) {
-        continue;
-      }
+    if (readable.length === 0) {
+      return;
+    }
 
-      try {
-        const client = await this.clients.get('read');
-        const reply =
-          (await client.xReadGroup(
-            group,
-            consumer,
-            readable.map((key) => ({ key, id: '>' })),
-            { COUNT: batchSize, BLOCK: blockTimeout },
-          )) ?? [];
+    const client = await this.clients.get('read');
+    const reply =
+      (await client.xReadGroup(
+        group,
+        consumer,
+        readable.map((key) => ({ key, id: '>' })),
+        { COUNT: batchSize, BLOCK: blockTimeout },
+      )) ?? [];
 
-        for (const { name, messages } of reply) {
-          for (const entry of messages) {
-            this.streams.run(String(name), entry.id, (stream) =>
-              this.process(stream, entry, 1),
-            );
-          }
-        }
-      } catch (err) {
-        if (signal.aborted) {
-          return;
-        }
-
-        this.logger.error(
-          `Failed to read from streams: ${String(err)}`,
-          err instanceof Error ? err.stack : undefined,
+    for (const { name, messages } of reply) {
+      for (const entry of messages) {
+        this.streams.run(String(name), entry.id, (stream) =>
+          this.process(stream, entry, 1),
         );
-        await this.pause(1_000);
       }
     }
   }
 
-  private async reclaimLoop(): Promise<void> {
-    const { group, consumer, batchSize, reclaimInterval } = this.options;
+  /** Claims the entries that have been pending for too long, and runs them. */
+  private async reclaim(): Promise<void> {
+    const { group, consumer, batchSize } = this.options;
     const { delay } = this.options.retries;
 
-    while (!this.stopController.signal.aborted) {
-      // Jitter keeps instances from polling at the same moment
-      await this.pause(reclaimInterval * (0.9 + Math.random() * 0.2));
+    for (const state of this.streams.all()) {
+      const { name: stream } = state;
 
-      if (this.stopController.signal.aborted) {
-        return;
-      }
+      try {
+        const client = await this.clients.get('command');
+        const pending = await client.xPendingRange(
+          stream,
+          group,
+          '-',
+          '+',
+          batchSize,
+          { IDLE: delay },
+        );
+        const deliveries = new Map(
+          pending
+            .filter(({ id }) => !state.inflight.has(id))
+            .map((entry) => [entry.id, entry.deliveriesCounter]),
+        );
 
-      for (const state of this.streams.all()) {
-        const { name: stream } = state;
-
-        try {
-          const client = await this.clients.get('command');
-          const pending = await client.xPendingRange(
-            stream,
-            group,
-            '-',
-            '+',
-            batchSize,
-            { IDLE: delay },
-          );
-          const deliveries = new Map(
-            pending
-              .filter(({ id }) => !state.inflight.has(id))
-              .map((entry) => [entry.id, entry.deliveriesCounter]),
-          );
-
-          if (deliveries.size === 0) {
-            continue;
-          }
-
-          // min-idle makes sure only one of the competing consumers wins an
-          // entry
-          const claimed = await client.xClaim(stream, group, consumer, delay, [
-            ...deliveries.keys(),
-          ]);
-
-          for (const entry of claimed) {
-            if (entry && !this.stopController.signal.aborted) {
-              const attempt = (deliveries.get(entry.id) ?? 0) + 1;
-
-              this.streams.run(stream, entry.id, (current) =>
-                this.process(current, entry, attempt),
-              );
-            }
-          }
-        } catch (err) {
-          if (this.stopController.signal.aborted) {
-            return;
-          }
-
-          this.logger.error(
-            `Failed to reclaim entries of ${stream}: ${String(err)}`,
-            err instanceof Error ? err.stack : undefined,
-          );
+        if (deliveries.size === 0) {
+          continue;
         }
+
+        // min-idle makes sure only one of the competing consumers wins an
+        // entry
+        const claimed = await client.xClaim(stream, group, consumer, delay, [
+          ...deliveries.keys(),
+        ]);
+
+        for (const entry of claimed) {
+          if (entry && !this.loops.signal.aborted) {
+            const attempt = (deliveries.get(entry.id) ?? 0) + 1;
+
+            this.streams.run(stream, entry.id, (current) =>
+              this.process(current, entry, attempt),
+            );
+          }
+        }
+      } catch (err) {
+        if (this.loops.signal.aborted) {
+          return;
+        }
+
+        this.logger.error(
+          `Failed to reclaim entries of ${stream}: ${String(err)}`,
+          err instanceof Error ? err.stack : undefined,
+        );
       }
     }
   }
@@ -304,67 +289,47 @@ export class StreamsConsumer {
   }
 
   /** Keeps the entries in flight from looking abandoned. */
-  private async refreshLoop(): Promise<void> {
+  private async refresh(): Promise<void> {
     const { group, consumer } = this.options;
-    const { delay } = this.options.retries;
-    const { signal } = this.stopController;
 
-    while (!signal.aborted) {
-      await this.pause(Math.max(delay / 2, 10));
+    for (const { name: stream, inflight } of this.streams.all()) {
+      if (inflight.size === 0) {
+        continue;
+      }
 
-      for (const { name: stream, inflight } of this.streams.all()) {
-        if (inflight.size === 0) {
-          continue;
-        }
+      try {
+        const client = await this.clients.get('command');
 
-        try {
-          const client = await this.clients.get('command');
-
-          await client.xClaimJustId(stream, group, consumer, 0, [
-            ...inflight.keys(),
-          ]);
-        } catch (err) {
-          this.logger.warn(
-            `Failed to refresh entries of ${stream}: ${String(err)}`,
-          );
-        }
+        await client.xClaimJustId(stream, group, consumer, 0, [
+          ...inflight.keys(),
+        ]);
+      } catch (err) {
+        this.logger.warn(
+          `Failed to refresh entries of ${stream}: ${String(err)}`,
+        );
       }
     }
   }
 
   /**
    * Deletes the other consumers of the groups that have no pending entries and
-   * have been idle for longer than `consumerTtl`. Runs once per half of
-   * `consumerTtl`.
+   * have been idle for longer than `consumerTtl`.
    */
-  private async cleanupLoop(): Promise<void> {
+  private async removeStale(): Promise<void> {
     const { group, consumer, consumerTtl } = this.options;
+    const client = await this.clients.get('command');
 
-    while (!this.stopController.signal.aborted) {
-      await this.pause(consumerTtl / 2);
+    for (const { name: stream } of this.streams.all()) {
+      const consumers = await client.xInfoConsumers(stream, group);
 
-      if (this.stopController.signal.aborted) {
-        return;
-      }
-
-      try {
-        const client = await this.clients.get('command');
-
-        for (const { name: stream } of this.streams.all()) {
-          const consumers = await client.xInfoConsumers(stream, group);
-
-          for (const { name, pending, idle } of consumers) {
-            if (name === consumer || pending > 0 || idle <= consumerTtl) {
-              continue;
-            }
-
-            await client.xGroupDelConsumer(stream, group, name);
-
-            this.logger.log(`Removed stale consumer ${name} of group ${group}`);
-          }
+      for (const { name, pending, idle } of consumers) {
+        if (name === consumer || pending > 0 || idle <= consumerTtl) {
+          continue;
         }
-      } catch (err) {
-        this.logger.warn(`Failed to remove stale consumers: ${String(err)}`);
+
+        await client.xGroupDelConsumer(stream, group, name);
+
+        this.logger.log(`Removed stale consumer ${name} of group ${group}`);
       }
     }
   }
@@ -396,14 +361,6 @@ export class StreamsConsumer {
       if (!String(err).includes('BUSYGROUP')) {
         throw err;
       }
-    }
-  }
-
-  private async pause(ms: number): Promise<void> {
-    try {
-      await sleep(ms, undefined, { signal: this.stopController.signal });
-    } catch {
-      // Aborted on shutdown, which is how the loops are woken up
     }
   }
 }
