@@ -7,6 +7,7 @@ import {
   type EventPayload,
 } from '../../types.js';
 import { parseEventPayload } from '../event-dto.js';
+import { Signal } from './signal.js';
 
 type Callback = (event: EventPayload<any>) => void | Promise<void>;
 
@@ -54,7 +55,7 @@ export class StreamsConsumer {
   private heartbeat: NodeJS.Timeout | undefined;
   private started = false;
   private lastCleanup = Date.now();
-  private wakeUp: (() => void) | undefined;
+  private readonly slotFreed = new Signal();
 
   public constructor(private readonly options: StreamsConsumerOptions) {
     const { retries, reclaimInterval } = options;
@@ -93,7 +94,7 @@ export class StreamsConsumer {
     }
 
     state.handlers.set(handler, callback);
-    this.signal();
+    this.slotFreed.notify();
   }
 
   /** Starts the loops. Does nothing when they are running already. */
@@ -120,7 +121,7 @@ export class StreamsConsumer {
    */
   public async stop(): Promise<void> {
     this.stopController.abort();
-    this.signal();
+    this.slotFreed.notify();
 
     // Interrupts a blocked XREADGROUP
     await this.client?.then(
@@ -184,7 +185,7 @@ export class StreamsConsumer {
 
       if (readable.length === 0) {
         // Nothing to read, wait for a slot instead of calling Redis
-        await this.waitForSignal();
+        await this.slotFreed.wait();
         continue;
       }
 
@@ -298,7 +299,7 @@ export class StreamsConsumer {
     const promise = this.process(state, entry, attempt).finally(() => {
       state.inflight.delete(entry.id);
       state.free += 1;
-      this.signal();
+      this.slotFreed.notify();
     });
 
     state.inflight.set(entry.id, promise);
@@ -487,19 +488,6 @@ export class StreamsConsumer {
     await client.connect();
 
     return client;
-  }
-
-  private waitForSignal(): Promise<void> {
-    return new Promise((resolve) => {
-      this.wakeUp = resolve;
-    });
-  }
-
-  private signal(): void {
-    const wakeUp = this.wakeUp;
-
-    this.wakeUp = undefined;
-    wakeUp?.();
   }
 
   private pause(ms: number): Promise<void> {
