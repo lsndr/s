@@ -33,10 +33,9 @@ import { BusModule, RabbitmqTransport } from '@lsndr/bus';
 @Module({
   imports: [
     BusModule.forRoot({
-      group: 'billing',
       transport: {
         provider: RabbitmqTransport,
-        config: { url: 'amqp://localhost' },
+        config: { url: 'amqp://localhost', group: 'billing' },
       },
       providers: [OrderPlacedHandler],
     }),
@@ -123,10 +122,9 @@ export class BillingModule {}
   imports: [
     BillingModule,
     BusModule.forRoot({
-      group: 'billing',
       transport: {
         provider: RabbitmqTransport,
-        config: { url: 'amqp://localhost' },
+        config: { url: 'amqp://localhost', group: 'billing' },
       },
     }),
   ],
@@ -216,13 +214,12 @@ class PostgresOutbox extends Outbox<PostgresOutboxConfig> {
 }
 
 BusModule.forRoot({
-  group: 'billing',
   transport: {
     provider: PostgresOutbox,
     config: {
       transport: {
         provider: RabbitmqTransport,
-        config: { url: 'amqp://localhost' },
+        config: { url: 'amqp://localhost', group: 'billing' },
       },
       interval: 1000, // optional, ms to wait when idle or after a failure
       batchSize: 100, // your own option
@@ -241,12 +238,17 @@ BusModule.forRoot({
 
 `BusModule.forRoot()` options:
 
-- `group` — required. Consumer group name, used as a prefix for queue names.
-- `transport` — required. `{ provider, config }`; for RabbitMQ, `config` is `{ url }`, for Redis Streams see [Redis Streams topology](#redis-streams-topology).
+- `transport` — required. `{ provider, config }`, see the options below.
 - `middlewares` — global middleware classes. They must be provided in a module of the application.
 - `imports`, `providers` — additional Nest imports and providers for the module.
+
+Every transport takes these in its `config`:
+
+- `group` — required. Consumer group name. RabbitMQ uses it as a prefix for queue names, Redis Streams as the name of the consumer group of every stream.
 - `retries.max` — maximum retries before a message is dropped. Defaults to `5`.
 - `retries.delay` — delay between retries in milliseconds. Defaults to `5000`.
+
+RabbitMQ adds `url` (required). Redis Streams has more options, see [Redis Streams topology](#redis-streams-topology).
 
 ## RabbitMQ topology
 
@@ -259,18 +261,17 @@ BusModule.forRoot({
 
 ```typescript
 BusModule.forRoot({
-  group: 'billing',
   transport: {
     provider: RedisStreamsTransport,
-    config: { url: 'redis://localhost:6379' },
+    config: { url: 'redis://localhost:6379', group: 'billing' },
   },
 });
 ```
 
-Config options: `url` (required), `consumer`, `keyPrefix` (`events:`), `maxLength` (`1000`), `batchSize` (`10`), `blockTimeout` (`5000` ms), `reclaimInterval` (`max(retries.delay / 4, 1000)` ms), `consumerTtl` (`3600000` ms), `shutdownTimeout` (not set: wait for all entries in flight).
+Config options: `url` and `group` (required), `retries`, `consumer`, `keyPrefix` (`events:`), `maxLength` (`1000`), `batchSize` (`10`), `blockTimeout` (`5000` ms), `reclaimInterval` (`max(retries.delay / 4, 1000)` ms), `consumerTtl` (`3600000` ms), `shutdownTimeout` (not set: wait for all entries in flight).
 
 - Each event class has its own stream, `<keyPrefix><EventClass>`.
-- Each stream has one consumer group, named after the bus `group` and created at the stream's tail (`$`). Instances of the group share it, so an entry goes to a single instance, which runs all of its handlers for the event in parallel. Every instance of a group must therefore register the same handlers.
+- Each stream has one consumer group, named after `group` and created at the stream's tail (`$`). Instances of the group share it, so an entry goes to a single instance, which runs all of its handlers for the event in parallel. Every instance of a group must therefore register the same handlers.
 - An instance reads all its streams with one blocking `XREADGROUP` (`COUNT = batchSize`). Each stream has `batchSize` slots, and a stream is part of the next read only while it has a free slot. Entries run as soon as they are read and free their slot on their own, so a stream runs at most `2 * batchSize - 1` entries at once; there is no global limit. When no stream has a free slot, Redis is not called until one frees.
 - Consuming starts when `subscribe` is called, which the discovery does once after all handlers are found.
 - Successful handlers of an entry are recorded in the hash `<keyPrefix>done:<group>:<EventClass>:<id>` (with a TTL), so a redelivery only runs the handlers that haven't succeeded. The entry is acknowledged, and the hash deleted, once every handler has succeeded or failed permanently.

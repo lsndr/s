@@ -18,7 +18,6 @@ import {
 } from './redis-streams/transport.js';
 import { TransportConfig, type Transport } from './transport.js';
 import { setTimeout } from 'node:timers/promises';
-import { BusConfig } from '../types.js';
 import { IsDate, IsString } from 'class-validator';
 import { Test, TestingModule } from '@nestjs/testing';
 
@@ -39,10 +38,16 @@ class OtherEvent {
   public readonly kind = 'other';
 }
 
+/** Options that every transport takes. */
+interface CommonConfig {
+  group: string;
+  retries: { max: number; delay: number };
+}
+
 interface TransportTest {
   name: string;
   setup: () => Promise<{
-    createTransport: (config: BusConfig) => Promise<Transport>;
+    createTransport: (config: CommonConfig) => Promise<Transport>;
     teardown: () => Promise<void>;
   }>;
 }
@@ -63,19 +68,16 @@ describe('Transport', { timeout: 60_000 }, () => {
         const url = `amqp://${container.getHost()}:${container.getMappedPort(5672)}`;
         const modules: TestingModule[] = [];
 
-        const createTransport = async (busConfig: BusConfig) => {
+        const createTransport = async (busConfig: CommonConfig) => {
           const module = await Test.createTestingModule({
             imports: [],
             providers: [
               RabbitmqTransport,
               {
-                provide: BusConfig,
-                useValue: busConfig,
-              },
-              {
                 provide: TransportConfig,
                 useValue: {
                   url,
+                  ...busConfig,
                 } satisfies RabbitmqTransportConfig,
               },
             ],
@@ -106,15 +108,15 @@ describe('Transport', { timeout: 60_000 }, () => {
         const url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
         const modules: TestingModule[] = [];
 
-        const createTransport = async (busConfig: BusConfig) => {
+        const createTransport = async (busConfig: CommonConfig) => {
           const module = await Test.createTestingModule({
             providers: [
               RedisStreamsTransport,
-              { provide: BusConfig, useValue: busConfig },
               {
                 provide: TransportConfig,
                 useValue: {
                   url,
+                  ...busConfig,
                   blockTimeout: 1_000,
                   reclaimInterval: 25,
                 } satisfies RedisStreamsTransportConfig,
@@ -139,7 +141,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     },
   ])('$name', ({ setup }) => {
     let teardown: () => Promise<void>;
-    let createTransport: (config: BusConfig) => Promise<Transport>;
+    let createTransport: (config: CommonConfig) => Promise<Transport>;
 
     beforeAll(async () => {
       const setupResult = await setup();
@@ -153,7 +155,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('republishes persisted data under its original id, name and time', async () => {
-      const config: BusConfig = {
+      const config: CommonConfig = {
         group: crypto.randomUUID(),
         retries: { max: 0, delay: 100 },
       };
@@ -211,7 +213,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     it('delivers message to multiple groups', async () => {
       const subscribe = async () => {
         const handler = vi.fn();
-        const config: BusConfig = {
+        const config: CommonConfig = {
           group: crypto.randomUUID(),
           retries: { max: 0, delay: 100 },
         };
@@ -262,7 +264,7 @@ describe('Transport', { timeout: 60_000 }, () => {
 
     it('distributes messages between multiple instances of the same consumers in the same group', async () => {
       const group = crypto.randomUUID();
-      const config: BusConfig = {
+      const config: CommonConfig = {
         group,
         retries: { max: 0, delay: 100 },
       };
@@ -315,7 +317,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('delivers message to multiple handlers in the same group', async () => {
-      const config: BusConfig = {
+      const config: CommonConfig = {
         group: crypto.randomUUID(),
         retries: { max: 0, delay: 100 },
       };
@@ -345,7 +347,7 @@ describe('Transport', { timeout: 60_000 }, () => {
       'retries a failing callback up to %s times',
       async (max) => {
         const delay = 100;
-        const config: BusConfig = {
+        const config: CommonConfig = {
           group: crypto.randomUUID(),
           retries: { max, delay },
         };
@@ -377,16 +379,11 @@ describe('Transport', { timeout: 60_000 }, () => {
           providers: [
             RabbitmqTransport,
             {
-              provide: BusConfig,
-              useValue: {
-                group: crypto.randomUUID(),
-                retries: { max: 0, delay: 100 },
-              },
-            },
-            {
               provide: TransportConfig,
               useValue: {
                 url: 'amqp://localhost',
+                group: crypto.randomUUID(),
+                retries: { max: 0, delay: 100 },
               } satisfies RabbitmqTransportConfig,
             },
           ],

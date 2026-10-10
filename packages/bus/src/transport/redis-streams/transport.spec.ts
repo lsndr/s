@@ -3,7 +3,6 @@ import { GenericContainer, Wait } from 'testcontainers';
 import { setTimeout } from 'node:timers/promises';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { createClient, type RedisClientType } from 'redis';
-import { BusConfig } from '../../types.js';
 import { TransportConfig } from '../transport.js';
 import {
   RedisStreamsTransport,
@@ -32,11 +31,12 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
     const module = await Test.createTestingModule({
       providers: [
         RedisStreamsTransport,
-        { provide: BusConfig, useValue: { group, retries } },
         {
           provide: TransportConfig,
           useValue: {
             url,
+            group,
+            retries,
             blockTimeout: 500,
             reclaimInterval: 25,
             ...config,

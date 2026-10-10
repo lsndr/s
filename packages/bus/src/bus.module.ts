@@ -10,7 +10,6 @@ import {
 import { Outbox, type OutboxConfig } from './transport/outbox/outbox.js';
 import { OutboxTransportModule } from './transport/outbox/outbox-transport.module.js';
 import { Dispatcher } from './transport/dispatcher.js';
-import { BusConfig, BusRetriesConfig } from './types.js';
 import { Subscriber } from './transport/subscriber.js';
 import { Health } from './transport/health.js';
 import { GlobalEventHandlerMiddlewares } from './middleware/middleware.js';
@@ -18,12 +17,10 @@ import { GlobalEventHandlerMiddlewares } from './middleware/middleware.js';
 export { type BusTransport };
 
 export interface BusModuleOptions<T extends Transport> {
-  group: string;
   middlewares?: GlobalEventHandlerMiddlewares;
   transport: BusTransport<T>;
   imports?: any[];
   providers?: Provider[];
-  retries?: Partial<BusRetriesConfig>;
 }
 
 @Module({})
@@ -32,25 +29,13 @@ export class BusModule {
     options: BusModuleOptions<T>,
   ): DynamicModule {
     const middlewares = options.middlewares ?? [];
-    const busConfig = {
-      retries: {
-        max: options.retries?.max ?? 5,
-        delay: options.retries?.delay ?? 5000,
-      },
-      group: options.group,
-    } satisfies BusConfig;
     return {
       global: true,
       module: BusModule,
       imports: [
         DiscoveryModule,
         ...(this.isOutbox(options.transport)
-          ? [
-              OutboxTransportModule.register(
-                options.transport.config.transport,
-                busConfig,
-              ),
-            ]
+          ? [OutboxTransportModule.register(options.transport.config.transport)]
           : []),
         ...(options.imports ?? []),
       ],
@@ -75,10 +60,6 @@ export class BusModule {
         {
           provide: Health,
           useExisting: options.transport.provider,
-        },
-        {
-          provide: BusConfig,
-          useValue: busConfig,
         },
         HandlerInvoker,
         HandlerDiscoveryService,

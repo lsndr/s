@@ -100,7 +100,6 @@ describe('BusModule', () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
-          group: 'test-app',
           transport: {
             provider: MockTransport,
             config: {},
@@ -132,7 +131,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -161,7 +159,6 @@ describe('BusModule', () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
-          group: 'test-app',
           transport: {
             provider: MockTransport,
             config: {},
@@ -202,7 +199,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -239,7 +235,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -294,7 +289,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -351,7 +345,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [TestMiddleware],
             transport: {
               provider: MockTransport,
@@ -412,7 +405,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [MiddlewareA, MiddlewareB],
             transport: {
               provider: MockTransport,
@@ -470,7 +462,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -528,7 +519,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [BusLevelMiddleware],
             transport: {
               provider: MockTransport,
@@ -568,7 +558,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [PayloadModifyingMiddleware],
             transport: {
               provider: MockTransport,
@@ -604,7 +593,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [ShortCircuitMiddleware],
             transport: {
               provider: MockTransport,
@@ -651,7 +639,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [DependentMiddleware],
             transport: {
               provider: MockTransport,
@@ -681,7 +668,6 @@ describe('BusModule', () => {
         Test.createTestingModule({
           imports: [
             BusModule.forRoot({
-              group: 'test-app',
               middlewares: [middleware],
               transport: {
                 provider: MockTransport,
@@ -911,7 +897,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [NotProvidedMiddleware],
             transport: {
               provider: MockTransport,
@@ -943,7 +928,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [DuplicatedMiddleware],
             transport: {
               provider: MockTransport,
@@ -968,7 +952,6 @@ describe('BusModule', () => {
       Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},

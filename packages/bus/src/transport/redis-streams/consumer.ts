@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Logger } from '@nestjs/common';
-import { type BusRetriesConfig, type EventConstructor } from '../../types.js';
+import { type EventConstructor } from '../../types.js';
 import { parseEventPayload } from '../event-dto.js';
 import { Clients } from './clients.js';
 import { type Callback, type Stream, Streams } from './streams.js';
@@ -17,7 +17,7 @@ export interface StreamsConsumerOptions {
   keyPrefix: string;
   /** Connection URL. */
   url: string;
-  retries: BusRetriesConfig;
+  retries: { max: number; delay: number };
   batchSize: number;
   blockTimeout: number;
   reclaimInterval: number;

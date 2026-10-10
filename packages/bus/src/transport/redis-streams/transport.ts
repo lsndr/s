@@ -6,7 +6,7 @@ import {
   Logger,
   type OnModuleInit,
 } from '@nestjs/common';
-import { type EventConstructor, BusConfig } from '../../types.js';
+import { type EventConstructor } from '../../types.js';
 import {
   Transport,
   TransportConfig,
@@ -25,6 +25,27 @@ export interface RedisStreamsTransportConfig {
    * @example 'redis://localhost:6379'
    */
   url: string;
+  /**
+   * Consumer group name. Every stream has one group with this name, so
+   * instances with the same group share the entries, and every instance of a
+   * group must register the same handlers.
+   */
+  group: string;
+  retries?: {
+    /**
+     * Maximum retries before an entry is dropped.
+     *
+     * @default 5
+     */
+    max?: number;
+    /**
+     * How long an entry has to be pending before it is claimed again, in
+     * milliseconds.
+     *
+     * @default 5000
+     */
+    delay?: number;
+  };
   /**
    * Consumer name used in every consumer group.
    *
@@ -101,23 +122,27 @@ export class RedisStreamsTransport
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
   public constructor(
-    @Inject(BusConfig) busConfig: BusConfig,
     @Inject(TransportConfig) config: RedisStreamsTransportConfig,
   ) {
     super();
 
+    const retries = {
+      max: config.retries?.max ?? 5,
+      delay: config.retries?.delay ?? 5_000,
+    };
+
     this.clients = new Clients(config.url);
     this.keyPrefix = config.keyPrefix ?? 'events:';
     this.consumer = new StreamsConsumer({
-      group: busConfig.group,
+      group: config.group,
       consumer: config.consumer ?? hostname(),
       keyPrefix: this.keyPrefix,
       url: config.url,
-      retries: busConfig.retries,
+      retries,
       batchSize: config.batchSize ?? 10,
       blockTimeout: config.blockTimeout ?? 5_000,
       reclaimInterval:
-        config.reclaimInterval ?? Math.max(busConfig.retries.delay / 4, 1_000),
+        config.reclaimInterval ?? Math.max(retries.delay / 4, 1_000),
       consumerTtl: config.consumerTtl ?? 3_600_000,
       shutdownTimeout: config.shutdownTimeout,
     });

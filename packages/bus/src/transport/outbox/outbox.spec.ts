@@ -115,7 +115,6 @@ async function createModule(batchSize = 10) {
   const module = await Test.createTestingModule({
     imports: [
       BusModule.forRoot({
-        group: 'test-app',
         transport: {
           provider: MemoryOutbox,
           config: {
