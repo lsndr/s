@@ -147,19 +147,20 @@ export class StreamsConsumer {
       }
 
       try {
-        const reply = await (
-          await this.getClient()
-        ).xReadGroup(
-          group,
-          consumer,
-          readable.map((key) => ({ key, id: '>' })),
-          { COUNT: batchSize, BLOCK: blockTimeout },
-        );
+        const reply =
+          (await (
+            await this.getClient()
+          ).xReadGroup(
+            group,
+            consumer,
+            readable.map((key) => ({ key, id: '>' })),
+            { COUNT: batchSize, BLOCK: blockTimeout },
+          )) ?? [];
 
-        for (const { name, messages } of reply ?? []) {
+        for (const { name, messages } of reply) {
           const state = this.streams.get(String(name));
 
-          for (const entry of messages as StreamEntry[]) {
+          for (const entry of messages) {
             if (state) {
               this.run(state, entry, 1);
             }
@@ -216,9 +217,9 @@ export class StreamsConsumer {
 
           // min-idle makes sure only one of the competing consumers wins an
           // entry
-          const claimed = (await client.xClaim(stream, group, consumer, delay, [
+          const claimed = await client.xClaim(stream, group, consumer, delay, [
             ...deliveries.keys(),
-          ])) as (StreamEntry | null)[];
+          ]);
 
           for (const entry of claimed) {
             if (entry && !this.stopController.signal.aborted) {
@@ -252,11 +253,13 @@ export class StreamsConsumer {
    * otherwise it stays pending and is retried by the reclaim loop.
    */
   private async process(
-    { name: stream, event, handlers }: Stream,
-    { id, message }: StreamEntry,
+    stream: Stream,
+    entry: StreamEntry,
     attempt: number,
   ): Promise<void> {
     const { client, group, keyPrefix } = this.options;
+    const { event, handlers } = stream;
+    const { id, message } = entry;
     const { max } = this.options.retries;
     const retryCount = attempt - 1;
     const eventName = event.name;
@@ -314,7 +317,7 @@ export class StreamsConsumer {
         );
       }
 
-      await client.multi().xAck(stream, group, id).del(doneKey).exec();
+      await client.multi().xAck(stream.name, group, id).del(doneKey).exec();
 
       if (failed.length === 0) {
         this.logger.log(`Event ${eventName} handled successfully`);
@@ -322,7 +325,7 @@ export class StreamsConsumer {
     } catch (err) {
       // Redis failure, the entry stays pending
       this.logger.error(
-        `Failed to process entry ${id} of ${stream}: ${String(err)}`,
+        `Failed to process entry ${id} of ${stream.name}: ${String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
     }
