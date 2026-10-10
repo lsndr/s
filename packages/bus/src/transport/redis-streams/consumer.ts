@@ -50,7 +50,6 @@ export class StreamsConsumer {
   private client: Promise<RedisClientType> | undefined;
   private loops: Promise<void>[] = [];
   private started = false;
-  private lastCleanup = Date.now();
   private readonly logger = new Logger(StreamsConsumer.name);
   private readonly slots: Slots;
 
@@ -103,7 +102,12 @@ export class StreamsConsumer {
     this.started = true;
     await this.getClient();
 
-    this.loops = [this.readLoop(), this.reclaimLoop(), this.refreshLoop()];
+    this.loops = [
+      this.readLoop(),
+      this.reclaimLoop(),
+      this.refreshLoop(),
+      this.cleanupLoop(),
+    ];
   }
 
   /**
@@ -218,12 +222,6 @@ export class StreamsConsumer {
 
       if (this.stopController.signal.aborted) {
         return;
-      }
-
-      try {
-        await this.removeStaleConsumers();
-      } catch (err) {
-        this.logger.warn(`Failed to remove stale consumers: ${String(err)}`);
       }
 
       for (const state of this.streams.values()) {
@@ -400,29 +398,35 @@ export class StreamsConsumer {
 
   /**
    * Deletes the other consumers of the groups that have no pending entries and
-   * have been idle for longer than `consumerTtl`. Runs at most once per half
-   * of `consumerTtl`.
+   * have been idle for longer than `consumerTtl`. Runs once per half of
+   * `consumerTtl`.
    */
-  private async removeStaleConsumers(): Promise<void> {
+  private async cleanupLoop(): Promise<void> {
     const { client, group, consumer, consumerTtl } = this.options;
 
-    if (Date.now() - this.lastCleanup < consumerTtl / 2) {
-      return;
-    }
+    while (!this.stopController.signal.aborted) {
+      await this.pause(consumerTtl / 2);
 
-    this.lastCleanup = Date.now();
+      if (this.stopController.signal.aborted) {
+        return;
+      }
 
-    for (const stream of this.streams.keys()) {
-      const consumers = await client.xInfoConsumers(stream, group);
+      try {
+        for (const stream of this.streams.keys()) {
+          const consumers = await client.xInfoConsumers(stream, group);
 
-      for (const { name, pending, idle } of consumers) {
-        if (name === consumer || pending > 0 || idle <= consumerTtl) {
-          continue;
+          for (const { name, pending, idle } of consumers) {
+            if (name === consumer || pending > 0 || idle <= consumerTtl) {
+              continue;
+            }
+
+            await client.xGroupDelConsumer(stream, group, name);
+
+            this.logger.log(`Removed stale consumer ${name} of group ${group}`);
+          }
         }
-
-        await client.xGroupDelConsumer(stream, group, name);
-
-        this.logger.log(`Removed stale consumer ${name} of group ${group}`);
+      } catch (err) {
+        this.logger.warn(`Failed to remove stale consumers: ${String(err)}`);
       }
     }
   }
