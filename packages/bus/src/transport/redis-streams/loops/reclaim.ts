@@ -38,6 +38,10 @@ export class ReclaimLoop implements Loop {
     for (const state of streams.all()) {
       const { name: stream } = state;
 
+      if (signal.aborted) {
+        return;
+      }
+
       try {
         const client = await clients.get('command');
         const pending = await client.xPendingRange(
