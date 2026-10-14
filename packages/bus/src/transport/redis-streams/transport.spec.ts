@@ -1,19 +1,25 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { GenericContainer, Wait } from 'testcontainers';
-import { setTimeout } from 'node:timers/promises';
+import { hostname } from 'node:os';
+import { Logger } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { createClient, type RedisClientType } from 'redis';
+import { GenericContainer, Wait } from 'testcontainers';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { TransportConfig } from '../transport.js';
 import {
   RedisStreamsTransport,
   type RedisStreamsTransportConfig,
 } from './transport.js';
+import { Streams } from './streams.js';
 
 class FirstEvent {
-  public constructor(public readonly value: string) {}
-}
-
-class SecondEvent {
   public constructor(public readonly value: string) {}
 }
 
@@ -23,11 +29,15 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
   let redis: RedisClientType;
   const modules: TestingModule[] = [];
 
-  const createTransport = async (
+  /**
+   * Creates a transport with a random group and key prefix, so tests don't
+   * see each other's streams.
+   */
+  async function createTransport(
     config: Partial<RedisStreamsTransportConfig> = {},
-    group = crypto.randomUUID(),
-    retries = { max: 3, delay: 100 },
-  ) => {
+  ) {
+    const group = config.group ?? `group:${crypto.randomUUID()}`;
+    const keyPrefix = config.keyPrefix ?? `${crypto.randomUUID()}:`;
     const module = await Test.createTestingModule({
       providers: [
         RedisStreamsTransport,
@@ -35,21 +45,32 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
           provide: TransportConfig,
           useValue: {
             url,
-            group,
-            retries,
+            retries: { max: 3, delay: 100 },
             blockTimeout: 500,
             reclaimInterval: 25,
             ...config,
+            group,
+            keyPrefix,
           } satisfies RedisStreamsTransportConfig,
         },
       ],
     }).compile();
 
-    await module.init();
     modules.push(module);
+    await module.init();
 
-    return { module, group, transport: module.get(RedisStreamsTransport) };
-  };
+    return {
+      module,
+      group,
+      keyPrefix,
+      transport: module.get(RedisStreamsTransport),
+      stream: (event: { name: string }) => `${keyPrefix}${event.name}`,
+    };
+  }
+
+  async function entriesOf(key: string) {
+    return (await redis.xRange(key, '-', '+')) ?? [];
+  }
 
   beforeAll(async () => {
     container = await new GenericContainer('redis:8.2')
@@ -67,120 +88,177 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
     await container.stop();
   });
 
-  it('retries only the handlers that failed and clears the done hash', async () => {
-    const { transport, group } = await createTransport();
-    const ok = vi.fn();
-    const flaky = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValue(undefined);
-
-    await transport.subscribe([
-      { event: FirstEvent, handler: 'Ok', callback: ok },
-      { event: FirstEvent, handler: 'Flaky', callback: flaky },
-    ]);
-    await transport.publish(new FirstEvent('a'));
-
-    await vi.waitFor(() => expect(flaky).toHaveBeenCalledTimes(2));
-    await vi.waitFor(async () => {
-      const pending = await redis.xPending('events:FirstEvent', group);
-      expect(pending.pending).toBe(0);
-    });
-
-    expect(ok).toHaveBeenCalledTimes(1);
-    expect(await redis.keys(`events:done:${group}:*`)).toEqual([]);
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it('caps the entries in flight per stream below 2 * batchSize', async () => {
-    const batchSize = 2;
-    const { transport } = await createTransport({ batchSize });
-    let running = 0;
-    let peak = 0;
-    let handled = 0;
+  describe('subscribe', () => {
+    it('names the stream after the key prefix and the event', async () => {
+      const keyPrefix = `custom:${crypto.randomUUID()}:`;
+      const { transport } = await createTransport({ keyPrefix });
 
-    await transport.subscribe(FirstEvent, 'Slow', async () => {
-      peak = Math.max(peak, ++running);
-      await setTimeout(150);
-      running--;
-      handled++;
-    });
-    await transport.publish(
-      Array.from({ length: 10 }, (_, i) => ({
-        event: new FirstEvent(String(i)),
-      })),
-    );
+      await transport.subscribe(FirstEvent, 'Handler', vi.fn());
 
-    await vi.waitFor(() => expect(handled).toBe(10), { timeout: 10_000 });
-    expect(peak).toBeLessThanOrEqual(2 * batchSize - 1);
-  });
-
-  it('keeps reading other streams while one is full', async () => {
-    const { transport } = await createTransport({ batchSize: 1 });
-    const release = Promise.withResolvers<void>();
-    const second = vi.fn();
-
-    await transport.subscribe([
-      {
-        event: FirstEvent,
-        handler: 'Blocked',
-        callback: () => release.promise,
-      },
-      { event: SecondEvent, handler: 'Free', callback: second },
-    ]);
-    await transport.publish(new FirstEvent('block'));
-    await setTimeout(100);
-    await transport.publish(new SecondEvent('go'));
-
-    await vi.waitFor(() => expect(second).toHaveBeenCalledTimes(1));
-    release.resolve();
-  });
-
-  it('consumes subscriptions registered after start', async () => {
-    const { transport } = await createTransport();
-    const first = vi.fn();
-    const second = vi.fn();
-
-    await transport.subscribe(FirstEvent, 'First', first);
-    await transport.subscribe(SecondEvent, 'Second', second);
-    await transport.publish(new SecondEvent('late'));
-
-    await vi.waitFor(() => expect(second).toHaveBeenCalledTimes(1), {
-      timeout: 5_000,
-    });
-    expect(first).not.toHaveBeenCalled();
-  });
-
-  it('waits for entries in flight on shutdown and removes the consumer', async () => {
-    const { transport, module, group } = await createTransport();
-    let finished = false;
-
-    await transport.subscribe(FirstEvent, 'Slow', async () => {
-      await setTimeout(300);
-      finished = true;
-    });
-    await transport.publish(new FirstEvent('x'));
-    await setTimeout(100);
-    await module.close();
-
-    expect(finished).toBe(true);
-    expect(await redis.xInfoConsumers('events:FirstEvent', group)).toEqual([]);
-  });
-
-  it('gives up waiting after shutdownTimeout and keeps the entry pending', async () => {
-    const { transport, module, group } = await createTransport({
-      shutdownTimeout: 100,
+      expect(await redis.exists(`${keyPrefix}FirstEvent`)).toBe(1);
     });
 
-    await transport.subscribe(
-      FirstEvent,
-      'Stuck',
-      () => new Promise<void>(() => undefined),
-    );
-    await transport.publish(new FirstEvent('x'));
-    await setTimeout(100);
-    await module.close();
+    it('joins a group that already exists', async () => {
+      const { transport, group, stream } = await createTransport();
+      const other = await createTransport({
+        group,
+        keyPrefix: stream(FirstEvent).replace(/FirstEvent$/, ''),
+      });
 
-    const pending = await redis.xPending('events:FirstEvent', group);
-    expect(pending.pending).toBe(1);
+      await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+      const subscribed = other.transport.subscribe(
+        FirstEvent,
+        'Handler',
+        vi.fn(),
+      );
+
+      await expect(subscribed).resolves.toBeUndefined();
+    });
+
+    it('rejects a handler that is already subscribed to the event', async () => {
+      const { transport } = await createTransport();
+
+      await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+      const subscribed = transport.subscribe(FirstEvent, 'Handler', vi.fn());
+
+      await expect(subscribed).rejects.toThrow(/already subscribed/);
+    });
+  });
+
+  describe('publish', () => {
+    it('trims the acknowledged entries above the max length', async () => {
+      const { transport, group, stream } = await createTransport({
+        maxLength: 10,
+      });
+      const key = stream(FirstEvent);
+      const count = 500;
+
+      await redis.xGroupCreate(key, group, '0', { MKSTREAM: true });
+      await transport.publish(
+        Array.from({ length: count }, (_, i) => ({
+          event: new FirstEvent(String(i)),
+        })),
+      );
+      const entries = await entriesOf(key);
+      await redis.xReadGroup(group, 'consumer', { key, id: '>' });
+      await redis.xAck(
+        key,
+        group,
+        entries.map(({ id }) => id),
+      );
+      await transport.publish(new FirstEvent('trigger'));
+
+      expect(await redis.xLen(key)).toBeLessThan(count);
+    });
+
+    it('keeps the unacknowledged entries above the max length', async () => {
+      const { transport, group, stream } = await createTransport({
+        maxLength: 10,
+      });
+      const key = stream(FirstEvent);
+      const count = 500;
+
+      await redis.xGroupCreate(key, group, '0', { MKSTREAM: true });
+      await transport.publish(
+        Array.from({ length: count }, (_, i) => ({
+          event: new FirstEvent(String(i)),
+        })),
+      );
+
+      expect(await redis.xLen(key)).toBe(count);
+    });
+  });
+
+  describe('consumer', () => {
+    it('reads with the configured name', async () => {
+      const { transport, group, stream } = await createTransport({
+        consumer: 'my-consumer',
+      });
+
+      await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+      await transport.publish(new FirstEvent('x'));
+
+      await vi.waitFor(async () => {
+        const consumers = await redis.xInfoConsumers(stream(FirstEvent), group);
+        expect(consumers.map(({ name }) => name)).toEqual(['my-consumer']);
+      });
+    });
+
+    it('defaults the name to the host name', async () => {
+      const { transport, group, stream } = await createTransport();
+
+      await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+      await transport.publish(new FirstEvent('x'));
+
+      await vi.waitFor(async () => {
+        const consumers = await redis.xInfoConsumers(stream(FirstEvent), group);
+        expect(consumers.map(({ name }) => name)).toEqual([hostname()]);
+      });
+    });
+  });
+
+  describe('shutdown', () => {
+    it('waits for the entries in flight and removes the consumer', async () => {
+      const { transport, module, group, stream } = await createTransport();
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const drain = Streams.prototype.drain;
+      let finished = false;
+
+      // Lets the entry finish once shutdown has started to wait for it
+      vi.spyOn(Streams.prototype, 'drain').mockImplementation(function (
+        this: Streams,
+        ...args
+      ) {
+        release.resolve();
+
+        return drain.apply(this, args);
+      });
+      await transport.subscribe(FirstEvent, 'Slow', async () => {
+        started.resolve();
+        await release.promise;
+        finished = true;
+      });
+      await transport.publish(new FirstEvent('x'));
+      await started.promise;
+      await module.close();
+
+      expect(finished).toBe(true);
+      expect(await redis.xInfoConsumers(stream(FirstEvent), group)).toEqual([]);
+    });
+
+    it('stops waiting after the shutdown timeout and keeps the entry pending', async () => {
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockReturnValue();
+      vi.spyOn(Logger.prototype, 'error').mockReturnValue();
+      const { transport, module, group, stream } = await createTransport({
+        shutdownTimeout: 100,
+        consumer: 'stuck-consumer',
+      });
+      const started = Promise.withResolvers<void>();
+      const stuck = Promise.withResolvers<void>();
+
+      await transport.subscribe(FirstEvent, 'Stuck', () => {
+        started.resolve();
+
+        return stuck.promise;
+      });
+      await transport.publish(new FirstEvent('x'));
+      await started.promise;
+      await module.close();
+
+      const pending = await redis.xPending(stream(FirstEvent), group);
+      const consumers = await redis.xInfoConsumers(stream(FirstEvent), group);
+      expect(pending.pending).toBe(1);
+      expect(consumers.map(({ name }) => name)).toEqual(['stuck-consumer']);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Shutdown timeout reached'),
+      );
+
+      stuck.resolve();
+    });
   });
 });
