@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { Logger } from '@nestjs/common';
+import { type RedisClientType } from 'redis';
 import { type Clients } from '../clients.js';
 import { type Streams } from '../streams.js';
 import { type Loop } from './loop.js';
@@ -33,6 +35,10 @@ end
 return deleted
 `;
 
+const DELETE_STALE_CONSUMERS_SHA = createHash('sha1')
+  .update(DELETE_STALE_CONSUMERS)
+  .digest('hex');
+
 export interface StaleConsumersLoopOptions {
   group: string;
   consumer: string;
@@ -59,7 +65,7 @@ export class StaleConsumersLoop implements Loop {
 
   public async next(signal: AbortSignal): Promise<void> {
     const { clients, streams } = this;
-    const { group, consumer, consumerTtl } = this.options;
+    const { group } = this.options;
 
     for (const { name: stream } of streams.all()) {
       if (signal.aborted) {
@@ -68,10 +74,7 @@ export class StaleConsumersLoop implements Loop {
 
       try {
         const client = await clients.get('command');
-        const deleted = (await client.eval(DELETE_STALE_CONSUMERS, {
-          keys: [stream],
-          arguments: [group, consumer, String(consumerTtl)],
-        })) as string[];
+        const deleted = await this.deleteStale(client, stream);
 
         for (const name of deleted) {
           this.logger.log(`Removed stale consumer ${name} of group ${group}`);
@@ -86,6 +89,36 @@ export class StaleConsumersLoop implements Loop {
           err instanceof Error ? err.stack : undefined,
         );
       }
+    }
+  }
+
+  /**
+   * Runs the script for a stream.
+   *
+   * @returns Names of the deleted consumers.
+   */
+  private async deleteStale(
+    client: RedisClientType,
+    stream: string,
+  ): Promise<string[]> {
+    const { group, consumer, consumerTtl } = this.options;
+    const options = {
+      keys: [stream],
+      arguments: [group, consumer, String(consumerTtl)],
+    };
+
+    try {
+      return (await client.evalSha(
+        DELETE_STALE_CONSUMERS_SHA,
+        options,
+      )) as string[];
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.startsWith('NOSCRIPT')) {
+        throw err;
+      }
+
+      // Not cached by the server yet, EVAL caches it for the next call
+      return (await client.eval(DELETE_STALE_CONSUMERS, options)) as string[];
     }
   }
 }

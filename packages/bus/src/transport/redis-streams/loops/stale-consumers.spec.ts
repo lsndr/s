@@ -4,6 +4,7 @@ import {
   afterAll,
   afterEach,
   beforeAll,
+  beforeEach,
   describe,
   expect,
   it,
@@ -95,6 +96,10 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
     await container.stop();
   });
 
+  beforeEach(async () => {
+    await redis.scriptFlush();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -181,6 +186,7 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
       const { next, idle, stale, consumers, names } = await setup();
       const [name] = names as [string];
       const client = await clients.get('command');
+      const evalSha = vi.spyOn(client, 'evalSha');
       const evalScript = vi.spyOn(client, 'eval');
       const controller = new AbortController();
 
@@ -189,6 +195,7 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
       controller.abort();
       await next(controller.signal);
 
+      expect(evalSha).not.toHaveBeenCalled();
       expect(evalScript).not.toHaveBeenCalled();
       expect(await consumers(name)).toEqual(['gone']);
     });
@@ -199,17 +206,17 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
       });
       const [first, second] = names as [string, string];
       const client = await clients.get('command');
-      const original = client.eval.bind(client);
+      const original = client.evalSha.bind(client);
       const controller = new AbortController();
 
       await idle(first, 'gone');
       await idle(second, 'gone');
-      vi.spyOn(client, 'eval').mockImplementation(async (...args) => {
-        const reply = await original(...args);
-
-        controller.abort();
-
-        return reply;
+      vi.spyOn(client, 'evalSha').mockImplementation(async (...args) => {
+        try {
+          return await original(...args);
+        } finally {
+          controller.abort();
+        }
       });
       await stale();
       await next(controller.signal);
@@ -225,7 +232,7 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
       const error = vi.spyOn(Logger.prototype, 'error').mockReturnValue();
       const controller = new AbortController();
 
-      vi.spyOn(client, 'eval').mockImplementation(() => {
+      vi.spyOn(client, 'evalSha').mockImplementation(() => {
         controller.abort();
 
         return Promise.reject(new Error(`Connection lost: ${name}`));
