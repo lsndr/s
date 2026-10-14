@@ -80,7 +80,8 @@ export interface RedisStreamsTransportConfig {
   /**
    * Number of slots of each stream. A stream is read while it has a free slot,
    * and a read returns at most this many entries of a stream, so a stream runs
-   * up to `2 * batchSize - 1` entries at once.
+   * up to `2 * batchSize - 1` read entries at once. Reclaimed entries are not
+   * limited by the slots, so they come on top of that.
    *
    * @default 10
    */
