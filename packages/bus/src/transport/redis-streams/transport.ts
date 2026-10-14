@@ -128,6 +128,7 @@ interface Settings {
   blockTimeout: number;
   reclaimInterval: number;
   consumerTtl: number;
+  maxLength: number;
   shutdownTimeout: number | undefined;
 }
 
@@ -162,6 +163,7 @@ export class RedisStreamsTransport
       reclaimInterval:
         config.reclaimInterval ?? Math.max(retries.delay / 4, 1_000),
       consumerTtl: config.consumerTtl ?? 3_600_000,
+      maxLength: config.maxLength ?? 1_000,
       shutdownTimeout: config.shutdownTimeout,
     };
     this.clients = new Clients(config.url);
@@ -242,7 +244,7 @@ export class RedisStreamsTransport
       );
     }
 
-    await this.clients.close();
+    await this.clients.destroy();
   }
 
   public async assertHealthy(): Promise<void> {
@@ -327,7 +329,7 @@ export class RedisStreamsTransport
         TRIM: {
           strategy: 'MAXLEN',
           strategyModifier: '~',
-          threshold: this.config.maxLength ?? 1_000,
+          threshold: this.settings.maxLength,
           policy: 'ACKED',
         },
       },
@@ -355,7 +357,7 @@ export class RedisStreamsTransport
   private async createGroup(stream: string): Promise<void> {
     try {
       await (
-        await this.clients.get('read')
+        await this.clients.get('command')
       ).xGroupCreate(stream, this.settings.group, '$', {
         MKSTREAM: true,
       });
