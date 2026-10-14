@@ -12,16 +12,30 @@ type KindArgs<K extends string> = [K] extends [never] ? [] : [kind: K];
  * Without kinds there is a single client. With kinds, e.g.
  * `Clients<'read' | 'command'>`, there is one client per kind, so that a
  * blocking command doesn't hold up the others.
+ *
+ * A client that was destroyed or closed is not connected again: getting it
+ * rejects, so nothing opens a connection that nobody is left to close.
  */
 export class Clients<K extends string = never> {
   private readonly clients = new Map<string, Promise<RedisClientType>>();
+  private readonly destroyed = new Set<string>();
+  private closed = false;
   private readonly logger = new Logger(Clients.name);
 
   public constructor(private readonly url: string) {}
 
-  /** Returns the client of a kind, connecting it on the first request. */
+  /**
+   * Returns the client of a kind, connecting it on the first request.
+   *
+   * @throws If the client was destroyed or all clients were closed.
+   */
   public get(...args: KindArgs<K>): Promise<RedisClientType> {
     const kind = this.keyOf(args);
+
+    if (this.closed || this.destroyed.has(kind)) {
+      return Promise.reject(new Error(`Redis client ${kind} is closed`));
+    }
+
     let client = this.clients.get(kind);
 
     if (!client) {
@@ -39,12 +53,13 @@ export class Clients<K extends string = never> {
 
   /**
    * Drops the connection of a kind right away, which interrupts a command
-   * that is blocked on it.
+   * that is blocked on it. The client can't be got again.
    */
   public async destroy(...args: KindArgs<K>): Promise<void> {
     const kind = this.keyOf(args);
     const client = this.clients.get(kind);
 
+    this.destroyed.add(kind);
     this.clients.delete(kind);
 
     await client?.then(
@@ -53,10 +68,14 @@ export class Clients<K extends string = never> {
     );
   }
 
-  /** Closes all connections after their pending commands are done. */
+  /**
+   * Closes all connections after their pending commands are done. No client
+   * can be got afterwards.
+   */
   public async close(): Promise<void> {
     const clients = [...this.clients.values()];
 
+    this.closed = true;
     this.clients.clear();
 
     await Promise.all(
