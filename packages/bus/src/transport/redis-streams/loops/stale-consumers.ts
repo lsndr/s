@@ -3,6 +3,36 @@ import { type Clients } from '../clients.js';
 import { type Streams } from '../streams.js';
 import { type Loop } from './loop.js';
 
+/**
+ * Deletes the consumers of a group that have no pending entries and have been
+ * idle for longer than the given time.
+ *
+ * KEYS[1] - stream, ARGV[1] - group, ARGV[2] - consumer to keep, ARGV[3] -
+ * idle time in milliseconds a consumer has to exceed.
+ *
+ * Returns the names of the deleted consumers.
+ */
+const DELETE_STALE_CONSUMERS = `
+local deleted = {}
+
+for _, info in ipairs(redis.call('XINFO', 'CONSUMERS', KEYS[1], ARGV[1])) do
+  local fields = {}
+
+  for i = 1, #info, 2 do
+    fields[info[i]] = info[i + 1]
+  end
+
+  if fields.name ~= ARGV[2]
+    and fields.pending == 0
+    and fields.idle > tonumber(ARGV[3]) then
+    redis.call('XGROUP', 'DELCONSUMER', KEYS[1], ARGV[1], fields.name)
+    table.insert(deleted, fields.name)
+  end
+end
+
+return deleted
+`;
+
 export interface StaleConsumersLoopOptions {
   group: string;
   consumer: string;
@@ -27,22 +57,34 @@ export class StaleConsumersLoop implements Loop {
     return this.options.consumerTtl / 2;
   }
 
-  public async next(): Promise<void> {
+  public async next(signal: AbortSignal): Promise<void> {
     const { clients, streams } = this;
     const { group, consumer, consumerTtl } = this.options;
-    const client = await clients.get('command');
 
     for (const { name: stream } of streams.all()) {
-      const consumers = await client.xInfoConsumers(stream, group);
+      if (signal.aborted) {
+        return;
+      }
 
-      for (const { name, pending, idle } of consumers) {
-        if (name === consumer || pending > 0 || idle <= consumerTtl) {
-          continue;
+      try {
+        const client = await clients.get('command');
+        const deleted = (await client.eval(DELETE_STALE_CONSUMERS, {
+          keys: [stream],
+          arguments: [group, consumer, String(consumerTtl)],
+        })) as string[];
+
+        for (const name of deleted) {
+          this.logger.log(`Removed stale consumer ${name} of group ${group}`);
+        }
+      } catch (err) {
+        if (signal.aborted) {
+          return;
         }
 
-        await client.xGroupDelConsumer(stream, group, name);
-
-        this.logger.log(`Removed stale consumer ${name} of group ${group}`);
+        this.logger.error(
+          `Failed to delete stale consumers of ${stream}: ${String(err)}`,
+          err instanceof Error ? err.stack : undefined,
+        );
       }
     }
   }
