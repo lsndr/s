@@ -119,6 +119,9 @@ describe('Transport', { timeout: 60_000 }, () => {
                   ...busConfig,
                   blockTimeout: 1_000,
                   reclaimInterval: 25,
+                  // One entry at a time, so that a busy instance leaves the
+                  // next entries to the others
+                  batchSize: 1,
                 } satisfies RedisStreamsTransportConfig,
               },
             ],
@@ -269,7 +272,8 @@ describe('Transport', { timeout: 60_000 }, () => {
         retries: { max: 0, delay: 100 },
       };
       const subscribe = async () => {
-        const handler = vi.fn();
+        // Stays busy, so that the other entries go to the other instances
+        const handler = vi.fn((_payload: unknown) => setTimeout(1_000));
         const transport = await createTransport(config);
         await transport.subscribe(TestEvent, 'TestHandler', handler);
 
