@@ -63,7 +63,12 @@ describe('Transport', { timeout: 60_000 }, () => {
       setup: async () => {
         const container = await new GenericContainer('rabbitmq:3-management')
           .withExposedPorts(5672)
-          .withWaitStrategy(Wait.forLogMessage(/Server startup complete/))
+          .withWaitStrategy(
+            Wait.forAll([
+              Wait.forListeningPorts(),
+              Wait.forLogMessage(/Server startup complete/),
+            ]),
+          )
           .start();
         const url = `amqp://${container.getHost()}:${container.getMappedPort(5672)}`;
         const modules: TestingModule[] = [];
@@ -103,7 +108,12 @@ describe('Transport', { timeout: 60_000 }, () => {
       setup: async () => {
         const container = await new GenericContainer('redis:8.2')
           .withExposedPorts(6379)
-          .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
+          .withWaitStrategy(
+            Wait.forAll([
+              Wait.forListeningPorts(),
+              Wait.forLogMessage(/Ready to accept connections/),
+            ]),
+          )
           .start();
         const url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
         const modules: TestingModule[] = [];

@@ -18,7 +18,12 @@ describe('Clients', { timeout: 60_000 }, () => {
   beforeAll(async () => {
     container = await new GenericContainer('redis:8.2')
       .withExposedPorts(6379)
-      .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
+      .withWaitStrategy(
+        Wait.forAll([
+          Wait.forListeningPorts(),
+          Wait.forLogMessage(/Ready to accept connections/),
+        ]),
+      )
       .start();
     url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
   }, 60_000);
