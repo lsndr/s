@@ -24,7 +24,7 @@ describe('Clients', { timeout: 60_000 }, () => {
   }, 60_000);
 
   afterAll(async () => {
-    await Promise.all(created.map((clients) => clients.close()));
+    await Promise.all(created.map((clients) => clients.destroy()));
     await container.stop();
   });
 
@@ -97,23 +97,32 @@ describe('Clients', { timeout: 60_000 }, () => {
     });
   });
 
-  describe('close', () => {
+  describe('destroy without a kind', () => {
     it('disconnects every client', async () => {
       const clients = create<'read' | 'command'>();
       const read = await clients.get('read');
       const command = await clients.get('command');
 
-      await clients.close();
+      await clients.destroy();
 
       expect(read.isOpen).toBe(false);
       expect(command.isOpen).toBe(false);
     });
 
+    it('rejects getting the default client afterwards', async () => {
+      const clients = create();
+
+      await clients.destroy();
+
+      await expect(clients.get()).rejects.toThrow();
+    });
+
     it('rejects getting any client afterwards', async () => {
       const clients = create<'read' | 'command'>();
       await clients.get('read');
+      await clients.get('command');
 
-      await clients.close();
+      await clients.destroy();
 
       await expect(clients.get('read')).rejects.toThrow();
       await expect(clients.get('command')).rejects.toThrow();

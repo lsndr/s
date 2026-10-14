@@ -131,7 +131,7 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
 
   afterAll(async () => {
     await redis.close();
-    await clients.close();
+    await clients.destroy();
     await container.stop();
   });
 

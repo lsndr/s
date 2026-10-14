@@ -13,13 +13,12 @@ type KindArgs<K extends string> = [K] extends [never] ? [] : [kind: K];
  * `Clients<'read' | 'command'>`, there is one client per kind, so that a
  * blocking command doesn't hold up the others.
  *
- * A client that was destroyed or closed is not connected again: getting it
+ * A client that was destroyed is not connected again: getting it
  * rejects, so nothing opens a connection that nobody is left to close.
  */
 export class Clients<K extends string = never> {
   private readonly clients = new Map<string, Promise<RedisClientType>>();
   private readonly destroyed = new Set<string>();
-  private closed = false;
   private readonly logger = new Logger(Clients.name);
 
   public constructor(private readonly url: string) {}
@@ -27,12 +26,12 @@ export class Clients<K extends string = never> {
   /**
    * Returns the client of a kind, connecting it on the first request.
    *
-   * @throws If the client was destroyed or all clients were closed.
+   * @throws If the client was destroyed.
    */
   public get(...args: KindArgs<K>): Promise<RedisClientType> {
     const kind = this.keyOf(args);
 
-    if (this.closed || this.destroyed.has(kind)) {
+    if (this.destroyed.has(kind)) {
       return Promise.reject(new Error(`Redis client ${kind} is closed`));
     }
 
@@ -52,36 +51,32 @@ export class Clients<K extends string = never> {
   }
 
   /**
-   * Drops the connection of a kind right away, which interrupts a command
-   * that is blocked on it. The client can't be got again.
+   * Drops the connections right away, which interrupts a command that is
+   * blocked on one. The clients can't be got again.
+   *
+   * @param args - The kind to destroy. Everything is destroyed without it.
    */
-  public async destroy(...args: KindArgs<K>): Promise<void> {
-    const kind = this.keyOf(args);
-    const client = this.clients.get(kind);
+  public async destroy(...args: [] | KindArgs<K>): Promise<void> {
+    // Without a kind, the ones that were connected, and the default one that
+    // a `Clients` without kinds uses
+    const kinds =
+      args.length === 0
+        ? [...new Set([...this.clients.keys(), DEFAULT_KIND])]
+        : [this.keyOf(args)];
 
-    this.destroyed.add(kind);
-    this.clients.delete(kind);
+    const clients = kinds.flatMap((kind) => {
+      const client = this.clients.get(kind);
 
-    await client?.then(
-      (connected) => connected.destroy(),
-      () => undefined,
-    );
-  }
+      this.destroyed.add(kind);
+      this.clients.delete(kind);
 
-  /**
-   * Closes all connections after their pending commands are done. No client
-   * can be got afterwards.
-   */
-  public async close(): Promise<void> {
-    const clients = [...this.clients.values()];
-
-    this.closed = true;
-    this.clients.clear();
+      return client ? [client] : [];
+    });
 
     await Promise.all(
       clients.map((client) =>
         client.then(
-          (connected) => connected.close(),
+          (connected) => connected.destroy(),
           () => undefined,
         ),
       ),
