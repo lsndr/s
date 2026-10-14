@@ -62,6 +62,11 @@ export class ReclaimLoop implements Loop {
           continue;
         }
 
+        // Claiming counts as a delivery, so don't claim what will not run
+        if (signal.aborted) {
+          return;
+        }
+
         // min-idle makes sure only one of the competing consumers wins an
         // entry
         const claimed = await client.xClaim(
