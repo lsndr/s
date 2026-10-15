@@ -58,13 +58,13 @@ export class Processor {
     try {
       const client = await clients.get('command');
       const done = await client.hGetAll(doneKey);
-      const pending = [...handlers].filter(([name]) => !(name in done));
+      const pending = handlers.filter(({ name }) => !(name in done));
       const payload = message['payload'] ?? '';
 
       this.logger.verbose(`Event ${eventName} (${id}) payload: ${payload}`);
 
       const results = await Promise.all(
-        pending.map(async ([name, callback]) => {
+        pending.map(async ({ name, callback }) => {
           try {
             await callback(parseEventPayload(event, payload));
           } catch (err) {

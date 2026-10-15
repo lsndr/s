@@ -11,6 +11,7 @@ import {
 import { GenericContainer, Wait } from 'testcontainers';
 import { createClient, type RedisClientType } from 'redis';
 import { Clients } from '../clients.js';
+import { Handler } from '../handler.js';
 import { Streams } from '../streams.js';
 import { RefreshLoop } from './refresh.js';
 
@@ -42,7 +43,7 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
       const name = `stream:${crypto.randomUUID()}`;
 
       await redis.xGroupCreate(name, group, '0', { MKSTREAM: true });
-      streams.register(name, TestEvent, 'handler', vi.fn());
+      streams.register(name, TestEvent, new Handler('handler', vi.fn()));
       names.push(name);
     }
 

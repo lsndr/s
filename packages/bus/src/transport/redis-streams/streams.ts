@@ -1,16 +1,15 @@
-import { type EventConstructor, type EventPayload } from '../../types.js';
+import { type EventConstructor } from '../../types.js';
+import { type Handler } from './handler.js';
 import { Inflight } from './inflight.js';
-
-export type Callback = (event: EventPayload<any>) => void | Promise<void>;
 
 export interface Stream {
   readonly name: string;
   readonly event: EventConstructor<any>;
-  readonly handlers: ReadonlyMap<string, Callback>;
+  readonly handlers: readonly Handler[];
 }
 
 interface StreamState extends Stream {
-  readonly handlers: Map<string, Callback>;
+  readonly handlers: Handler[];
 }
 
 /**
@@ -36,27 +35,35 @@ export class Streams {
   /**
    * Adds a handler to a stream, which is added too if it is new.
    *
-   * @throws If the handler is already registered for the stream.
+   * @throws If the stream is registered for another event, or the handler is
+   * already registered for the stream.
    */
   public register(
     name: string,
     event: EventConstructor<any>,
-    handler: string,
-    callback: Callback,
+    handler: Handler,
   ): void {
     let stream = this.streams.get(name);
 
-    if (stream?.handlers.has(handler)) {
-      throw new Error(`Handler ${handler} is already subscribed to ${name}`);
+    if (stream && stream.event !== event) {
+      throw new Error(
+        `Stream ${name} is registered for ${stream.event.name}, not ${event.name}`,
+      );
+    }
+
+    if (stream?.handlers.some((existing) => existing.name === handler.name)) {
+      throw new Error(
+        `Handler ${handler.name} is already subscribed to ${name}`,
+      );
     }
 
     if (!stream) {
-      stream = { name, event, handlers: new Map() };
+      stream = { name, event, handlers: [] };
       this.streams.set(name, stream);
       this.entries.register(name);
     }
 
-    stream.handlers.set(handler, callback);
+    stream.handlers.push(handler);
   }
 
   /**

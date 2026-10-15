@@ -16,6 +16,7 @@ import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent } from '../dispatcher.js';
 import { createEventDto } from '../event-dto.js';
 import { Clients } from './clients.js';
+import { Handler } from './handler.js';
 import { Loops } from './loops/loops.js';
 import { ReadLoop } from './loops/read.js';
 import { ReclaimLoop } from './loops/reclaim.js';
@@ -298,7 +299,7 @@ export class RedisStreamsTransport
         await this.createGroup(stream);
       }
 
-      this.streams.register(stream, event, handlerName, cb);
+      this.streams.register(stream, event, new Handler(handlerName, cb));
 
       this.logger.log(
         `Subscribed to event ${event.name} (handler: ${handlerName})`,

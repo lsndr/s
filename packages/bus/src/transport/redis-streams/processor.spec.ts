@@ -14,7 +14,8 @@ import { createClient, type RedisClientType } from 'redis';
 import { createEventDto } from '../event-dto.js';
 import { Clients } from './clients.js';
 import { Processor, type ProcessorOptions } from './processor.js';
-import { type Callback, type Stream } from './streams.js';
+import { type Callback, Handler } from './handler.js';
+import { type Stream } from './streams.js';
 
 class TestEvent {
   public constructor(public readonly value: string) {}
@@ -79,7 +80,9 @@ describe('Processor', { timeout: 60_000 }, () => {
     const stream: Stream = {
       name,
       event: TestEvent,
-      handlers: new Map(Object.entries(handlers)),
+      handlers: Object.entries(handlers).map(
+        ([name, callback]) => new Handler(name, callback),
+      ),
     };
 
     return {
