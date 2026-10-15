@@ -3,6 +3,9 @@ import { type Processor } from '../processor.js';
 import { type Streams } from '../streams.js';
 import { type Loop } from './loop.js';
 
+/** How long a read blocks waiting for new entries, in milliseconds. */
+export const BLOCK_TIMEOUT = 5_000;
+
 export interface ReadLoopOptions {
   group: string;
   consumer: string;

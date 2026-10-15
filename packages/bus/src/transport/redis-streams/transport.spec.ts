@@ -46,7 +46,6 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
           useValue: {
             url,
             retries: { max: 3, delay: 100 },
-            blockTimeout: 500,
             reclaimInterval: 25,
             ...config,
             group,
@@ -137,7 +136,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
   describe('publish', () => {
     it('trims the acknowledged entries above the max length', async () => {
       const { transport, group, stream } = await createTransport({
-        maxLength: 10,
+        trim: { maxLength: 10 },
       });
       const key = stream(FirstEvent);
       const count = 500;
@@ -162,7 +161,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
 
     it('keeps the unacknowledged entries above the max length', async () => {
       const { transport, group, stream } = await createTransport({
-        maxLength: 10,
+        trim: { maxLength: 10 },
       });
       const key = stream(FirstEvent);
       const count = 500;
@@ -176,6 +175,47 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
 
       expect(await redis.xLen(key)).toBe(count);
     });
+
+    it('trims unacknowledged entries above the max length when not only acknowledged', async () => {
+      const { transport, group, stream } = await createTransport({
+        trim: { maxLength: 10, onlyAcked: false },
+      });
+      const key = stream(FirstEvent);
+      const count = 500;
+
+      await redis.xGroupCreate(key, group, '0', { MKSTREAM: true });
+      await transport.publish(
+        Array.from({ length: count }, (_, i) => ({
+          event: new FirstEvent(String(i)),
+        })),
+      );
+
+      expect(await redis.xLen(key)).toBeLessThan(count);
+    });
+  });
+
+  describe('config', () => {
+    it.each([
+      ['retries.max', { retries: { max: -1 } }],
+      ['retries.delay', { retries: { delay: 10 } }],
+      ['concurrency', { concurrency: 0 }],
+      ['trim.maxLength', { trim: { maxLength: 0 } }],
+      ['reclaimInterval', { reclaimInterval: 0 }],
+      ['shutdownTimeout', { shutdownTimeout: 0 }],
+      ['consumerTtl', { consumerTtl: 5_000 }],
+    ] satisfies [string, Partial<RedisStreamsTransportConfig>][])(
+      'rejects an invalid %s',
+      (option, config) => {
+        expect(
+          () =>
+            new RedisStreamsTransport({
+              url,
+              group: 'group',
+              ...config,
+            }),
+        ).toThrow(`Invalid Redis Streams option ${option}`);
+      },
+    );
   });
 
   describe('consumer', () => {
@@ -193,7 +233,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       });
     });
 
-    it('defaults the name to the host name', async () => {
+    it('defaults the name to the host name and the process id', async () => {
       const { transport, group, stream } = await createTransport();
 
       await transport.subscribe(FirstEvent, 'Handler', vi.fn());
@@ -201,7 +241,9 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
 
       await vi.waitFor(async () => {
         const consumers = await redis.xInfoConsumers(stream(FirstEvent), group);
-        expect(consumers.map(({ name }) => name)).toEqual([hostname()]);
+        expect(consumers.map(({ name }) => name)).toEqual([
+          `${hostname()}-${process.pid}`,
+        ]);
       });
     });
   });

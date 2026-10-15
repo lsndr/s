@@ -18,7 +18,7 @@ import { createEventDto } from '../event-dto.js';
 import { Clients } from './clients.js';
 import { Handler } from './handler.js';
 import { Loops } from './loops/loops.js';
-import { ReadLoop } from './loops/read.js';
+import { BLOCK_TIMEOUT, ReadLoop } from './loops/read.js';
 import { ReclaimLoop } from './loops/reclaim.js';
 import { RefreshLoop } from './loops/refresh.js';
 import { StaleConsumersLoop } from './loops/stale-consumers.js';
@@ -47,21 +47,23 @@ export interface RedisStreamsTransportConfig {
     max?: number;
     /**
      * How long an entry has to be pending before it is claimed again, in
-     * milliseconds.
+     * milliseconds. Also how long after a consumer crashed its entries are
+     * recovered.
      *
-     * @default 5000
+     * @default 300000
      */
     delay?: number;
   };
   /**
    * Consumer name used in every consumer group.
    *
-   * Keeping the name stable across restarts avoids leaving stale consumers in
+   * Instances with the same name share their pending entries, so the default
+   * includes the process id to keep instances on the same host apart. Set a
+   * name that is stable across restarts to avoid leaving stale consumers in
    * the groups. Pending entries are recovered after `retries.delay` whatever
-   * the name is. Set it explicitly when several instances run on the same
-   * host.
+   * the name is.
    *
-   * @default os.hostname()
+   * @default `${os.hostname()}-${process.pid}`
    */
   consumer?: string;
   /**
@@ -71,28 +73,32 @@ export interface RedisStreamsTransportConfig {
    * @default 'events:'
    */
   keyPrefix?: string;
-  /**
-   * Approximate stream length above which acknowledged entries are trimmed.
-   * Unacknowledged entries are never trimmed, so it is a soft cap.
-   *
-   * @default 1000
-   */
-  maxLength?: number;
+  trim?: {
+    /**
+     * Approximate stream length above which entries are trimmed.
+     *
+     * @default 100
+     */
+    maxLength?: number;
+    /**
+     * Whether only the entries that every consumer group has acknowledged are
+     * trimmed, which makes `maxLength` a soft cap that unacknowledged entries
+     * can exceed. When `false`, `maxLength` is a hard cap: entries are trimmed
+     * even if they were not handled yet, and a trimmed entry is lost.
+     *
+     * @default true
+     */
+    onlyAcked?: boolean;
+  };
   /**
    * Number of slots of each stream. A stream is read while it has a free slot,
    * and a read returns at most this many entries of a stream, so a stream runs
-   * up to `2 * batchSize - 1` read entries at once. Reclaimed entries are not
-   * limited by the slots, so they come on top of that.
+   * up to `2 * concurrency - 1` read entries at once. Reclaimed entries are
+   * not limited by the slots, so they come on top of that.
    *
    * @default 10
    */
-  batchSize?: number;
-  /**
-   * How long a stream read blocks waiting for new entries, in milliseconds.
-   *
-   * @default 5000
-   */
-  blockTimeout?: number;
+  concurrency?: number;
   /**
    * How often pending entries are checked for retries and abandoned entries,
    * in milliseconds. A retry happens between `retries.delay` and
@@ -105,8 +111,8 @@ export interface RedisStreamsTransportConfig {
   /**
    * How long a consumer of a group can stay idle before the other consumers
    * delete it, in milliseconds. Only consumers without pending entries are
-   * deleted. Must be longer than `blockTimeout`, which is how often a live
-   * consumer shows activity.
+   * deleted. Must be longer than 5000, which is how often a live consumer
+   * shows activity.
    *
    * @default 3600000
    */
@@ -121,16 +127,89 @@ export interface RedisStreamsTransportConfig {
 
 /** Values of the config with the defaults applied. */
 interface Settings {
+  url: string;
   group: string;
   consumer: string;
   keyPrefix: string;
   retries: { max: number; delay: number };
-  batchSize: number;
-  blockTimeout: number;
+  concurrency: number;
   reclaimInterval: number;
   consumerTtl: number;
-  maxLength: number;
+  trim: { maxLength: number; onlyAcked: boolean };
   shutdownTimeout: number | undefined;
+}
+
+/**
+ * Applies the defaults to the config and checks the values.
+ *
+ * @throws If a value is out of range.
+ */
+function resolveSettings(config: RedisStreamsTransportConfig): Settings {
+  const fail = (option: string, requirement: string): never => {
+    throw new Error(`Invalid Redis Streams option ${option}: ${requirement}`);
+  };
+  const atLeast = (
+    option: string,
+    value: number | undefined,
+    fallback: number,
+    min: number,
+  ): number => {
+    const result = value ?? fallback;
+
+    if (result < min) {
+      fail(option, `must be at least ${min}`);
+    }
+
+    return result;
+  };
+  const positive = <T extends number | undefined>(
+    option: string,
+    value: number | undefined,
+    fallback: T,
+  ): number | T => {
+    const result = value ?? fallback;
+
+    if (result !== undefined && result <= 0) {
+      fail(option, 'must be greater than 0');
+    }
+
+    return result as number | T;
+  };
+
+  // The entries in flight are refreshed every half of the delay
+  const delay = atLeast('retries.delay', config.retries?.delay, 300_000, 20);
+  const consumerTtl = positive('consumerTtl', config.consumerTtl, 3_600_000);
+
+  if (consumerTtl <= BLOCK_TIMEOUT) {
+    fail('consumerTtl', `must be greater than ${BLOCK_TIMEOUT}`);
+  }
+
+  return {
+    url: config.url,
+    group: config.group,
+    consumer: config.consumer ?? `${hostname()}-${process.pid}`,
+    keyPrefix: config.keyPrefix ?? 'events:',
+    retries: {
+      max: atLeast('retries.max', config.retries?.max, 5, 0),
+      delay,
+    },
+    concurrency: atLeast('concurrency', config.concurrency, 10, 1),
+    reclaimInterval: positive(
+      'reclaimInterval',
+      config.reclaimInterval,
+      Math.max(delay / 4, 1_000),
+    ),
+    consumerTtl,
+    trim: {
+      maxLength: atLeast('trim.maxLength', config.trim?.maxLength, 100, 1),
+      onlyAcked: config.trim?.onlyAcked ?? true,
+    },
+    shutdownTimeout: positive(
+      'shutdownTimeout',
+      config.shutdownTimeout,
+      undefined,
+    ),
+  };
 }
 
 @Injectable()
@@ -149,33 +228,15 @@ export class RedisStreamsTransport
   ) {
     super();
 
-    const retries = {
-      max: config.retries?.max ?? 5,
-      delay: config.retries?.delay ?? 5_000,
-    };
-
-    this.settings = {
-      group: config.group,
-      consumer: config.consumer ?? hostname(),
-      keyPrefix: config.keyPrefix ?? 'events:',
-      retries,
-      batchSize: config.batchSize ?? 10,
-      blockTimeout: config.blockTimeout ?? 5_000,
-      reclaimInterval:
-        config.reclaimInterval ?? Math.max(retries.delay / 4, 1_000),
-      consumerTtl: config.consumerTtl ?? 3_600_000,
-      maxLength: config.maxLength ?? 1_000,
-      shutdownTimeout: config.shutdownTimeout,
-    };
-    this.clients = new Clients(config.url);
-    this.streams = new Streams(this.settings.batchSize);
+    this.settings = resolveSettings(config);
+    this.clients = new Clients(this.settings.url);
+    this.streams = new Streams(this.settings.concurrency);
 
     const {
       group,
       consumer,
       keyPrefix,
-      batchSize,
-      blockTimeout,
+      concurrency,
       reclaimInterval,
       consumerTtl,
     } = this.settings;
@@ -193,13 +254,13 @@ export class RedisStreamsTransport
       new ReadLoop(clients, streams, processor, {
         group,
         consumer,
-        batchSize,
-        blockTimeout,
+        batchSize: concurrency,
+        blockTimeout: BLOCK_TIMEOUT,
       }),
       new ReclaimLoop(clients, streams, processor, {
         group,
         consumer,
-        batchSize,
+        batchSize: concurrency,
         retriesDelay,
         reclaimInterval,
       }),
@@ -330,8 +391,8 @@ export class RedisStreamsTransport
         TRIM: {
           strategy: 'MAXLEN',
           strategyModifier: '~',
-          threshold: this.settings.maxLength,
-          policy: 'ACKED',
+          threshold: this.settings.trim.maxLength,
+          policy: this.settings.trim.onlyAcked ? 'ACKED' : 'KEEPREF',
         },
       },
     );

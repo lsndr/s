@@ -127,11 +127,10 @@ describe('Transport', { timeout: 60_000 }, () => {
                 useValue: {
                   url,
                   ...busConfig,
-                  blockTimeout: 1_000,
                   reclaimInterval: 25,
                   // One entry at a time, so that a busy instance leaves the
                   // next entries to the others
-                  batchSize: 1,
+                  concurrency: 1,
                 } satisfies RedisStreamsTransportConfig,
               },
             ],
