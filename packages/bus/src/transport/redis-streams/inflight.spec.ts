@@ -137,6 +137,73 @@ describe('Inflight', () => {
       });
     });
 
+    describe('with excluded streams', () => {
+      it('skips the excluded streams that have a free slot', async () => {
+        const inflight = new Inflight(1);
+        inflight.register('a');
+        inflight.register('b');
+
+        const readable = await inflight.readable(never, { exclude: ['a'] });
+
+        expect(readable).toEqual(['b']);
+      });
+
+      it('waits while only the excluded streams have a free slot', async () => {
+        const inflight = new Inflight(1);
+        const onReadable = vi.fn();
+        inflight.register('a');
+        const waiting = inflight
+          .readable(never, { exclude: ['a'] })
+          .then(onReadable);
+        await setTimeout(10);
+
+        expect(onReadable).not.toHaveBeenCalled();
+
+        inflight.register('b');
+        await waiting;
+
+        expect(onReadable).toHaveBeenCalledExactlyOnceWith(['b']);
+      });
+
+      it('wakes when a slot of a stream that is not excluded is released', async () => {
+        const inflight = new Inflight(1);
+        const held = deferred();
+        const onReadable = vi.fn();
+        inflight.register('a');
+        inflight.register('b');
+        inflight.run('b', '1', () => held.promise);
+        const waiting = inflight
+          .readable(never, { exclude: ['a'] })
+          .then(onReadable);
+        await setTimeout(0);
+
+        held.resolve();
+        await waiting;
+
+        expect(onReadable).toHaveBeenCalledExactlyOnceWith(['b']);
+      });
+
+      it('keeps waiting when an excluded stream takes or releases a slot', async () => {
+        const inflight = new Inflight(2);
+        const held = deferred();
+        const onReadable = vi.fn();
+        inflight.register('a');
+        const waiting = inflight
+          .readable(never, { exclude: ['a'] })
+          .then(onReadable);
+        await setTimeout(0);
+
+        inflight.run('a', '1', () => held.promise);
+        held.resolve();
+        await setTimeout(10);
+
+        expect(onReadable).not.toHaveBeenCalled();
+
+        inflight.register('b');
+        await waiting;
+      });
+    });
+
     it('returns an empty list right away when the signal is already aborted', async () => {
       const inflight = new Inflight(1);
       inflight.register('a');
@@ -144,91 +211,6 @@ describe('Inflight', () => {
       const readable = await inflight.readable(AbortSignal.abort());
 
       expect(readable).toEqual([]);
-    });
-  });
-
-  describe('free', () => {
-    it('lists the streams that have a free slot without waiting', () => {
-      const inflight = new Inflight(1);
-      inflight.register('a');
-      inflight.register('b');
-      inflight.run('a', '1', () => deferred().promise);
-
-      expect(inflight.free()).toEqual(['b']);
-    });
-
-    it('is empty when no stream has a free slot', () => {
-      const inflight = new Inflight(1);
-      inflight.register('a');
-      inflight.run('a', '1', () => deferred().promise);
-
-      expect(inflight.free()).toEqual([]);
-    });
-  });
-
-  describe('changed', () => {
-    it('keeps waiting while nothing changes', async () => {
-      const inflight = new Inflight(2);
-      const onChanged = vi.fn();
-      inflight.register('a');
-
-      void inflight.changed(never).then(onChanged);
-      await setTimeout(10);
-
-      expect(onChanged).not.toHaveBeenCalled();
-    });
-
-    it('wakes when a stream is registered', async () => {
-      const inflight = new Inflight(1);
-      const waiting = inflight.changed(never);
-      await setTimeout(0);
-
-      inflight.register('a');
-
-      await expect(waiting).resolves.toBeUndefined();
-    });
-
-    it('wakes when an entry takes a slot', async () => {
-      const inflight = new Inflight(1);
-      inflight.register('a');
-      const waiting = inflight.changed(never);
-      await setTimeout(0);
-
-      inflight.run('a', '1', () => deferred().promise);
-
-      await expect(waiting).resolves.toBeUndefined();
-    });
-
-    it('wakes when an entry releases a slot', async () => {
-      const inflight = new Inflight(1);
-      const held = deferred();
-      inflight.register('a');
-      inflight.run('a', '1', () => held.promise);
-      const waiting = inflight.changed(never);
-      await setTimeout(0);
-
-      held.resolve();
-
-      await expect(waiting).resolves.toBeUndefined();
-    });
-
-    it('wakes when the signal is aborted', async () => {
-      const inflight = new Inflight(1);
-      const controller = new AbortController();
-      const waiting = inflight.changed(controller.signal);
-      await setTimeout(0);
-
-      controller.abort();
-
-      await expect(waiting).resolves.toBeUndefined();
-    });
-
-    it('returns right away when the signal is already aborted', async () => {
-      const inflight = new Inflight(1);
-
-      await expect(
-        inflight.changed(AbortSignal.abort()),
-      ).resolves.toBeUndefined();
     });
   });
 

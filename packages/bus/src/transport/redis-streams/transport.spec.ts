@@ -202,7 +202,6 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       ['trim.maxLength', { trim: { maxLength: 0 } }],
       ['reclaimInterval', { reclaimInterval: 0 }],
       ['shutdownTimeout', { shutdownTimeout: 0 }],
-      ['consumerTtl', { consumerTtl: 5_000 }],
     ] satisfies [string, Partial<RedisStreamsTransportConfig>][])(
       'rejects an invalid %s',
       (option, config) => {

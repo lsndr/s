@@ -9,6 +9,7 @@ import {
 } from 'vitest';
 import { GenericContainer, Wait } from 'testcontainers';
 import { createClient, type RedisClientType } from 'redis';
+import { Logger } from '@nestjs/common';
 import { Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { Handler } from '../handler.js';
@@ -22,11 +23,12 @@ interface SetupOptions {
   streams?: number;
   slotsPerStream?: number;
   batchSize?: number;
+  blockTimeout?: number;
 }
 
 describe('ReadLoop', { timeout: 60_000 }, () => {
   let container: Awaited<ReturnType<GenericContainer['start']>>;
-  let clients: Clients<'read'>;
+  let clients: Clients<'read' | 'command'>;
   let redis: RedisClientType;
 
   /** Creates streams that are registered in `Streams`, and a loop reading them. */
@@ -34,6 +36,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
     streams: count = 1,
     slotsPerStream = 10,
     batchSize = 10,
+    blockTimeout = 50,
   }: SetupOptions = {}) {
     const group = `group:${crypto.randomUUID()}`;
     const consumer = 'consumer';
@@ -56,7 +59,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
       clients,
       streams,
       { process } as unknown as Processor,
-      { group, consumer, batchSize, blockTimeout: 50 },
+      { group, consumer, batchSize, blockTimeout },
     );
 
     return {
@@ -76,6 +79,8 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
 
         return ids;
       },
+      register: (name: string) =>
+        streams.register(name, TestEvent, new Handler('handler', vi.fn())),
       pending: async (name: string) =>
         await redis.xPendingRange(name, group, '-', '+', 100),
       streamOf: (name: string) => {
@@ -88,6 +93,15 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
         return stream;
       },
     };
+  }
+
+  /** Resolves once Redis is blocked on a read. */
+  async function blocked() {
+    await vi.waitFor(async () => {
+      const list = await redis.clientList();
+
+      expect(list.some((c) => c.cmd === 'xreadgroup')).toBe(true);
+    });
   }
 
   beforeAll(async () => {
@@ -103,7 +117,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
 
     const url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
 
-    clients = new Clients<'read'>(url);
+    clients = new Clients<'read' | 'command'>(url);
     redis = createClient({ url });
     await redis.connect();
   }, 60_000);
@@ -260,5 +274,125 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
         expect(await pending(name)).toHaveLength(i);
       },
     );
+  });
+
+  describe('unblocking', () => {
+    const BLOCK = 10_000;
+
+    /** Starts a read that blocks for a long time, once Redis blocks on it. */
+    async function block(options: SetupOptions = {}) {
+      const ctx = await setup({ ...options, blockTimeout: BLOCK });
+      const started = performance.now();
+      const reading = ctx.next();
+
+      await blocked();
+
+      return { ...ctx, reading, elapsed: () => performance.now() - started };
+    }
+
+    it('returns right away when a stream is registered', async () => {
+      const { reading, register, elapsed } = await block();
+
+      register(`stream:${crypto.randomUUID()}`);
+      await reading;
+
+      expect(elapsed()).toBeLessThan(BLOCK / 2);
+    });
+
+    it('returns right away when a slot of a stream outside of the read is released', async () => {
+      const ctx = await setup({
+        streams: 2,
+        slotsPerStream: 1,
+        blockTimeout: BLOCK,
+      });
+      const [full] = ctx.names as [string];
+      const held = Promise.withResolvers<void>();
+
+      // Fills the slot of the first stream, so only the second one is read
+      await ctx.add(full);
+      ctx.process.mockReturnValueOnce(held.promise);
+      await ctx.next(AbortSignal.abort());
+      ctx.streams.run(full, 'held', () => held.promise);
+
+      const started = performance.now();
+      const reading = ctx.next();
+
+      await blocked();
+      held.resolve();
+      await reading;
+
+      expect(performance.now() - started).toBeLessThan(BLOCK / 2);
+    });
+
+    it('keeps blocking when a stream of the read becomes full', async () => {
+      const { reading, streams, names } = await block({ slotsPerStream: 1 });
+      const [name] = names as [string];
+      const never = new Promise<void>(() => undefined);
+
+      streams.run(name, '1', () => never);
+
+      const result = await Promise.race([
+        reading.then(() => 'returned'),
+        new Promise((resolve) => setTimeout(resolve, 300, 'blocked')),
+      ]);
+
+      expect(result).toBe('blocked');
+
+      // Ends the blocked read of the test
+      await redis.clientUnblock(clients.id('read')!, 'TIMEOUT');
+      await reading;
+    });
+
+    it('warns and waits for the timeout when the id of the read client is unknown', async () => {
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+
+      vi.spyOn(clients, 'id').mockReturnValue(undefined);
+
+      const { next, register } = await setup({ blockTimeout: 300 });
+      const reading = next();
+
+      await blocked();
+      register(`stream:${crypto.randomUUID()}`);
+      await reading;
+
+      expect(warn).toHaveBeenCalled();
+    });
+
+    it('unblocks again when the read was not blocked yet', async () => {
+      const command = await clients.get('command');
+      const clientUnblock = vi.spyOn(command, 'clientUnblock');
+
+      // As if the command reached Redis before the read blocked
+      clientUnblock.mockResolvedValueOnce(0);
+
+      const { reading, register, elapsed } = await block();
+
+      register(`stream:${crypto.randomUUID()}`);
+      await reading;
+
+      expect(clientUnblock).toHaveBeenCalledTimes(2);
+      expect(elapsed()).toBeLessThan(BLOCK / 2);
+    });
+
+    it('processes the entries when the unblock fails', async () => {
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      const command = await clients.get('command');
+
+      vi.spyOn(command, 'clientUnblock').mockRejectedValue(new Error('lost'));
+
+      const { reading, register, add, names, process } = await block();
+      const [name] = names as [string];
+
+      register(`stream:${crypto.randomUUID()}`);
+      await add(name);
+      await reading;
+
+      expect(warn).toHaveBeenCalledOnce();
+      expect(process).toHaveBeenCalledOnce();
+    });
   });
 });

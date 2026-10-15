@@ -18,11 +18,10 @@ import { createEventDto } from '../event-dto.js';
 import { Clients } from './clients.js';
 import { Handler } from './handler.js';
 import { Loops } from './loops/loops.js';
-import { BLOCK_TIMEOUT, ReadLoop } from './loops/read.js';
+import { ReadLoop } from './loops/read.js';
 import { ReclaimLoop } from './loops/reclaim.js';
 import { RefreshLoop } from './loops/refresh.js';
 import { StaleConsumersLoop } from './loops/stale-consumers.js';
-import { UnblockLoop } from './loops/unblock.js';
 import { Processor } from './processor.js';
 import { Streams } from './streams.js';
 
@@ -110,15 +109,6 @@ export interface RedisStreamsTransportConfig {
    */
   reclaimInterval?: number;
   /**
-   * How long a consumer of a group can stay idle before the other consumers
-   * delete it, in milliseconds. Only consumers without pending entries are
-   * deleted. Must be longer than 5000, which is how often a live consumer
-   * shows activity.
-   *
-   * @default 3600000
-   */
-  consumerTtl?: number;
-  /**
    * How long shutdown waits for the entries in flight, in milliseconds. Entries
    * that are not finished by then stay pending and are retried later. Waits
    * for all of them when not set.
@@ -135,6 +125,12 @@ interface Settings {
   retries: { max: number; delay: number };
   concurrency: number;
   reclaimInterval: number;
+  /** How long a read blocks waiting for new entries, in milliseconds. */
+  blockTimeout: number;
+  /**
+   * How long a consumer of a group can stay idle before the other consumers
+   * delete it, in milliseconds.
+   */
   consumerTtl: number;
   trim: { maxLength: number; onlyAcked: boolean };
   shutdownTimeout: number | undefined;
@@ -179,12 +175,6 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
 
   // The entries in flight are refreshed every half of the delay
   const delay = atLeast('retries.delay', config.retries?.delay, 300_000, 20);
-  const consumerTtl = positive('consumerTtl', config.consumerTtl, 3_600_000);
-
-  if (consumerTtl <= BLOCK_TIMEOUT) {
-    fail('consumerTtl', `must be greater than ${BLOCK_TIMEOUT}`);
-  }
-
   return {
     url: config.url,
     group: config.group,
@@ -200,7 +190,10 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
       config.reclaimInterval,
       Math.max(delay / 4, 1_000),
     ),
-    consumerTtl,
+    // Not configurable. The TTL has to stay longer than the block timeout,
+    // which is how often a live consumer shows activity
+    blockTimeout: 5_000,
+    consumerTtl: 3_600_000,
     trim: {
       maxLength: atLeast('trim.maxLength', config.trim?.maxLength, 100, 1),
       onlyAcked: config.trim?.onlyAcked ?? true,
@@ -239,6 +232,7 @@ export class RedisStreamsTransport
       keyPrefix,
       concurrency,
       reclaimInterval,
+      blockTimeout,
       consumerTtl,
     } = this.settings;
     const { clients, streams } = this;
@@ -256,7 +250,7 @@ export class RedisStreamsTransport
         group,
         consumer,
         batchSize: concurrency,
-        blockTimeout: BLOCK_TIMEOUT,
+        blockTimeout,
       }),
       new ReclaimLoop(clients, streams, processor, {
         group,
@@ -266,7 +260,6 @@ export class RedisStreamsTransport
         reclaimInterval,
       }),
       new RefreshLoop(clients, streams, { group, consumer, retriesDelay }),
-      new UnblockLoop(clients, streams),
       new StaleConsumersLoop(clients, streams, {
         group,
         consumer,

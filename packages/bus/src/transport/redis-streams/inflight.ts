@@ -68,23 +68,23 @@ export class Inflight {
     return this.inflight.get(stream)?.has(id) ?? false;
   }
 
-  /** Streams that have at least one free slot, if any. */
-  public free(): string[] {
-    return [...this.inflight]
-      .filter(([, entries]) => entries.size < this.size)
-      .map(([stream]) => stream);
-  }
-
   /**
    * Streams that have at least one free slot. When there are none, waits
    * until a slot is released or a stream is added.
    *
    * @param signal - Stops the wait.
+   * @param options.exclude - Streams that don't count, so it waits for a
+   * stream that isn't one of them.
    * @returns The streams, or an empty list once `signal` is aborted.
    */
-  public async readable(signal: AbortSignal): Promise<string[]> {
+  public async readable(
+    signal: AbortSignal,
+    options: { exclude?: readonly string[] } = {},
+  ): Promise<string[]> {
+    const exclude = new Set(options.exclude);
+
     while (!signal.aborted) {
-      const streams = this.free();
+      const streams = this.free().filter((stream) => !exclude.has(stream));
 
       if (streams.length > 0) {
         return streams;
@@ -94,29 +94,6 @@ export class Inflight {
     }
 
     return [];
-  }
-
-  /**
-   * Waits for the next change: an entry that takes or releases a slot, or a
-   * stream that is added. A change that happens while nobody waits is not
-   * remembered, so check the state right before waiting.
-   *
-   * @param signal - Stops the wait.
-   */
-  public async changed(signal: AbortSignal): Promise<void> {
-    if (signal.aborted) {
-      return;
-    }
-
-    const wake = () => this.changes.notify();
-
-    signal.addEventListener('abort', wake, { once: true });
-
-    try {
-      await this.changes.wait();
-    } finally {
-      signal.removeEventListener('abort', wake);
-    }
   }
 
   /**
@@ -152,6 +129,36 @@ export class Inflight {
     } finally {
       // Don't keep the process alive for a timeout that is not needed
       timer.abort();
+    }
+  }
+
+  /** Streams that have at least one free slot, if any. */
+  private free(): string[] {
+    return [...this.inflight]
+      .filter(([, entries]) => entries.size < this.size)
+      .map(([stream]) => stream);
+  }
+
+  /**
+   * Waits for the next change: an entry that takes or releases a slot, or a
+   * stream that is added. A change that happens while nobody waits is not
+   * remembered, so check the state right before waiting.
+   *
+   * @param signal - Stops the wait.
+   */
+  private async changed(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) {
+      return;
+    }
+
+    const wake = () => this.changes.notify();
+
+    signal.addEventListener('abort', wake, { once: true });
+
+    try {
+      await this.changes.wait();
+    } finally {
+      signal.removeEventListener('abort', wake);
     }
   }
 }

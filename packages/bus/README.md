@@ -268,7 +268,7 @@ BusModule.forRoot({
 });
 ```
 
-Config options: `url` and `group` (required), `retries`, `consumer` (`<hostname>-<pid>`), `keyPrefix` (`events:`), `trim.maxLength` (`100`), `trim.onlyAcked` (`true`), `concurrency` (`10`), `reclaimInterval` (`max(retries.delay / 4, 1000)` ms), `consumerTtl` (`3600000` ms), `shutdownTimeout` (not set: wait for all entries in flight).
+Config options: `url` and `group` (required), `retries`, `consumer` (`<hostname>-<pid>`), `keyPrefix` (`events:`), `trim.maxLength` (`100`), `trim.onlyAcked` (`true`), `concurrency` (`10`), `reclaimInterval` (`max(retries.delay / 4, 1000)` ms), `shutdownTimeout` (not set: wait for all entries in flight).
 
 - Each event class has its own stream, `<keyPrefix><EventClass>`.
 - Each stream has one consumer group, named after `group` and created at the stream's tail (`$`). Instances of the group share it, so an entry goes to a single instance, which runs all of its handlers for the event in parallel. Every instance of a group must therefore register the same handlers.
@@ -277,6 +277,6 @@ Config options: `url` and `group` (required), `retries`, `consumer` (`<hostname>
 - Successful handlers of an entry are recorded in the hash `<keyPrefix>done:<group>:<EventClass>:<id>` (with a TTL), so a redelivery only runs the handlers that haven't succeeded. The entry is acknowledged, and the hash deleted, once every handler has succeeded or failed permanently.
 - Shutdown stops reading and reclaiming, waits for the entries in flight (up to `shutdownTimeout`), then removes the consumer from the groups unless it still has pending entries.
 - The consumer name defaults to the host name and the process id, so instances on the same host don't share pending entries. A stable name avoids leaving stale consumers behind after restarts; it doesn't change recovery, since pending entries are reclaimed by any consumer after `retries.delay`. A consumer is removed from its groups on graceful shutdown unless it still has pending entries.
-- Consumers that crashed or were renamed stay registered in the group. Running consumers delete the ones that have no pending entries and have been idle for longer than `consumerTtl`; it must be longer than 5000 ms, which is how often a live consumer shows activity.
+- Consumers that crashed or were renamed stay registered in the group. Running consumers delete the ones that have no pending entries and have been idle for longer than an hour.
 - Delivery is at-least-once. Handled entries are acknowledged with `XACK`. Failed entries stay pending and are claimed again (by any instance) after `retries.delay` ms, up to `retries.max` retries, then logged as permanently failed and acknowledged. Entries of crashed consumers are recovered the same way. While handlers are running their entry is kept from being reclaimed. Reclaimed entries take a slot of their stream while they run, but are not held back by the slots.
 - Publishing uses `XADD … MAXLEN ~ <trim.maxLength> ACKED`: entries are trimmed only once every consumer group has acknowledged them, so `trim.maxLength` is a soft cap that unacknowledged entries can exceed. With `trim.onlyAcked: false` the policy is `KEEPREF` and the cap is hard: unhandled entries are trimmed too, and lost. Trimming is approximate, so it removes whole stream nodes (100 entries each by default).

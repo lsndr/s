@@ -1,10 +1,12 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+import { Logger } from '@nestjs/common';
 import { type Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { type Streams } from '../streams.js';
 import { type Loop } from './loop.js';
 
-/** How long a read blocks waiting for new entries, in milliseconds. */
-export const BLOCK_TIMEOUT = 5_000;
+/** How long to wait before unblocking the read again, in milliseconds. */
+const UNBLOCK_RETRY_DELAY = 50;
 
 export interface ReadLoopOptions {
   group: string;
@@ -15,34 +17,27 @@ export interface ReadLoopOptions {
   blockTimeout: number;
 }
 
-/** Reads the streams that have a free slot, and starts the entries. */
+/**
+ * Reads the streams that have a free slot, and starts the entries.
+ *
+ * A blocked read only covers the streams that were readable when it started,
+ * so while it blocks, the loop watches the streams that are not part of it.
+ * When one of them gets a free slot, or is registered, the read is
+ * interrupted with CLIENT UNBLOCK, instead of waiting for the block timeout.
+ */
 export class ReadLoop implements Loop {
+  private readonly logger = new Logger(ReadLoop.name);
+
   public constructor(
-    private readonly clients: Clients<'read'>,
+    private readonly clients: Clients<'read' | 'command'>,
     private readonly streams: Streams,
     private readonly processor: Processor,
     private readonly options: ReadLoopOptions,
   ) {}
 
   public async next(signal: AbortSignal): Promise<void> {
-    const { clients, streams, processor } = this;
-    const { group, consumer, batchSize, blockTimeout } = this.options;
-
-    // Waits for a free slot instead of calling Redis when all are full
-    const readable = await streams.readable(signal);
-
-    if (readable.length === 0) {
-      return;
-    }
-
-    const client = await clients.get('read');
-    const reply =
-      (await client.xReadGroup(
-        group,
-        consumer,
-        readable.map((key) => ({ key, id: '>' })),
-        { COUNT: batchSize, BLOCK: blockTimeout },
-      )) ?? [];
+    const { streams, processor } = this;
+    const reply = await this.read(signal);
 
     for (const { name, messages } of reply) {
       for (const entry of messages) {
@@ -50,6 +45,94 @@ export class ReadLoop implements Loop {
           processor.process(stream, entry, 1),
         );
       }
+    }
+  }
+
+  /**
+   * Reads the streams that have a free slot, and interrupts the read while it
+   * blocks if a stream outside of it becomes readable.
+   *
+   * @returns The entries, none once `signal` is aborted.
+   */
+  private async read(signal: AbortSignal) {
+    const { clients, streams } = this;
+    const { group, consumer, batchSize, blockTimeout } = this.options;
+
+    // Connected before the streams are known, so that nothing is awaited
+    // between taking them and starting the read
+    const client = await clients.get('read');
+
+    // Waits for a free slot instead of calling Redis when all are full
+    const keys = await streams.readable(signal);
+
+    if (keys.length === 0) {
+      return [];
+    }
+
+    const done = new AbortController();
+    // Both start in the same tick, so the watcher can only unblock a read
+    // that was sent
+    const reading = client.xReadGroup(
+      group,
+      consumer,
+      keys.map((key) => ({ key, id: '>' })),
+      { COUNT: batchSize, BLOCK: blockTimeout },
+    );
+    const unblocking = this.unblockOnReadable(
+      keys,
+      AbortSignal.any([signal, done.signal]),
+    );
+
+    try {
+      return (await reading) ?? [];
+    } finally {
+      done.abort();
+      // Settles before the next read, so an unblock can't hit it
+      await unblocking;
+    }
+  }
+
+  /**
+   * Unblocks the read once a stream that it doesn't cover has a free slot,
+   * and keeps trying until that worked. Gives up when `stop` is aborted. It
+   * never rejects, a read that couldn't be interrupted is only slower.
+   */
+  private async unblockOnReadable(
+    keys: string[],
+    stop: AbortSignal,
+  ): Promise<void> {
+    const { clients, streams } = this;
+
+    try {
+      // Waits for a stream that the read doesn't cover
+      const [stream] = await streams.readable(stop, { exclude: keys });
+
+      if (stream === undefined) {
+        return;
+      }
+
+      const client = await clients.get('command');
+
+      // Retried until a read was unblocked: the command can reach Redis
+      // before the read blocks on it, and then it does nothing
+      while (!stop.aborted) {
+        const id = clients.id('read');
+
+        if (id === undefined) {
+          this.logger.warn(
+            'Cannot unblock the read: the id of the read client is unknown',
+          );
+        } else if ((await client.clientUnblock(id, 'TIMEOUT')) > 0) {
+          // Makes the blocked read return as if it timed out
+          return;
+        }
+
+        await sleep(UNBLOCK_RETRY_DELAY, undefined, { signal: stop }).catch(
+          () => undefined,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to unblock the read: ${String(err)}`);
     }
   }
 }

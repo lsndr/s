@@ -66,31 +66,20 @@ export class Streams {
     stream.handlers.push(handler);
   }
 
-  /** Names of the streams that have a free slot, if any. */
-  public free(): string[] {
-    return this.entries.free();
-  }
-
   /**
    * Names of the streams that have a free slot. Waits while there are none,
    * so nothing is read from a full stream.
    *
    * @param signal - Stops the wait.
+   * @param options.exclude - Streams that don't count, so it waits for a
+   * stream that isn't one of them.
    * @returns The streams, or an empty list once `signal` is aborted.
    */
-  public readable(signal: AbortSignal): Promise<string[]> {
-    return this.entries.readable(signal);
-  }
-
-  /**
-   * Waits for the next change of the slots or the streams. A change that
-   * happens while nobody waits is not remembered, so check {@link Streams.free}
-   * right before waiting.
-   *
-   * @param signal - Stops the wait.
-   */
-  public changed(signal: AbortSignal): Promise<void> {
-    return this.entries.changed(signal);
+  public readable(
+    signal: AbortSignal,
+    options?: { exclude?: readonly string[] },
+  ): Promise<string[]> {
+    return this.entries.readable(signal, options);
   }
 
   /**
