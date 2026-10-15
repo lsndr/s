@@ -80,7 +80,6 @@ describe('Processor', { timeout: 60_000 }, () => {
       name,
       event: TestEvent,
       handlers: new Map(Object.entries(handlers)),
-      inflight: new Map(),
     };
 
     return {

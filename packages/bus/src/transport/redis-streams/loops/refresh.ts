@@ -27,17 +27,17 @@ export class RefreshLoop implements Loop {
   public async next(): Promise<void> {
     const { group, consumer } = this.options;
 
-    for (const { name: stream, inflight } of this.streams.all()) {
-      if (inflight.size === 0) {
+    for (const { name: stream } of this.streams.all()) {
+      const inflight = this.streams.inflight(stream);
+
+      if (inflight.length === 0) {
         continue;
       }
 
       try {
         const client = await this.clients.get('command');
 
-        await client.xClaimJustId(stream, group, consumer, 0, [
-          ...inflight.keys(),
-        ]);
+        await client.xClaimJustId(stream, group, consumer, 0, inflight);
       } catch (err) {
         this.logger.warn(
           `Failed to refresh entries of ${stream}: ${String(err)}`,

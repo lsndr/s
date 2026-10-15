@@ -35,9 +35,7 @@ export class ReclaimLoop implements Loop {
     const { clients, streams, processor } = this;
     const { group, consumer, batchSize, retriesDelay } = this.options;
 
-    for (const state of streams.all()) {
-      const { name: stream } = state;
-
+    for (const { name: stream } of streams.all()) {
       if (signal.aborted) {
         return;
       }
@@ -54,7 +52,7 @@ export class ReclaimLoop implements Loop {
         );
         const deliveries = new Map(
           pending
-            .filter(({ id }) => !state.inflight.has(id))
+            .filter(({ id }) => !streams.isInflight(stream, id))
             .map((entry) => [entry.id, entry.deliveriesCounter]),
         );
 

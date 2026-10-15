@@ -1,27 +1,28 @@
-import { setTimeout as sleep } from 'node:timers/promises';
 import { type EventConstructor, type EventPayload } from '../../types.js';
-import { Slots } from './slots.js';
+import { Inflight } from './inflight.js';
 
 export type Callback = (event: EventPayload<any>) => void | Promise<void>;
 
 export interface Stream {
-  name: string;
-  event: EventConstructor<any>;
-  handlers: Map<string, Callback>;
-  /** Entries that are running, by id. */
-  inflight: Map<string, Promise<void>>;
+  readonly name: string;
+  readonly event: EventConstructor<any>;
+  readonly handlers: ReadonlyMap<string, Callback>;
+}
+
+interface StreamState extends Stream {
+  readonly handlers: Map<string, Callback>;
 }
 
 /**
- * The streams an instance consumes, with their handlers, the entries in
- * flight and the slots that decide which streams can be read.
+ * The streams an instance consumes, with their handlers. The entries in flight,
+ * and the slots they hold, are kept by {@link Inflight}.
  */
 export class Streams {
-  private readonly streams = new Map<string, Stream>();
-  private readonly slots: Slots;
+  private readonly streams = new Map<string, StreamState>();
+  private readonly entries: Inflight;
 
   public constructor(slotsPerStream: number) {
-    this.slots = new Slots(slotsPerStream);
+    this.entries = new Inflight(slotsPerStream);
   }
 
   public has(name: string): boolean {
@@ -50,48 +51,12 @@ export class Streams {
     }
 
     if (!stream) {
-      stream = { name, event, handlers: new Map(), inflight: new Map() };
+      stream = { name, event, handlers: new Map() };
       this.streams.set(name, stream);
-      this.slots.register(name);
+      this.entries.register(name);
     }
 
     stream.handlers.set(handler, callback);
-  }
-
-  /**
-   * Waits for the entries that are running now, of all streams, to finish.
-   *
-   * @param timeout - Gives up after this many milliseconds. Without it, waits
-   * for as long as it takes.
-   * @returns `false` if the timeout was reached with entries still running.
-   */
-  public async drain(timeout?: number): Promise<boolean> {
-    const pending = this.all().flatMap(({ inflight }) => [
-      ...inflight.values(),
-    ]);
-
-    if (pending.length === 0) {
-      return true;
-    }
-
-    const drained = Promise.allSettled(pending).then(() => true);
-
-    if (timeout === undefined) {
-      return drained;
-    }
-
-    const timer = new AbortController();
-    const timedOut = sleep(timeout, undefined, { signal: timer.signal }).then(
-      () => false,
-      () => false,
-    );
-
-    try {
-      return await Promise.race([drained, timedOut]);
-    } finally {
-      // Don't keep the process alive for a timeout that is not needed
-      timer.abort();
-    }
   }
 
   /**
@@ -102,13 +67,13 @@ export class Streams {
    * @returns The streams, or an empty list once `signal` is aborted.
    */
   public readable(signal: AbortSignal): Promise<string[]> {
-    return this.slots.readable(signal);
+    return this.entries.readable(signal);
   }
 
   /**
-   * Starts an entry of a stream without waiting for it. It holds a slot of the
-   * stream and is listed as in flight until `work` settles, see
-   * {@link Streams.drain}. `work` must not reject.
+   * Starts an entry of a stream without waiting for it. It is in flight until
+   * `work` settles, see {@link Streams.drain}. Does nothing if the entry is in
+   * flight already. A failure of `work` is logged.
    *
    * @throws If the stream is not registered.
    */
@@ -123,13 +88,26 @@ export class Streams {
       throw new Error(`Stream ${name} is not registered`);
     }
 
-    this.slots.take(name);
+    this.entries.run(name, id, () => work(stream));
+  }
 
-    const promise = work(stream).finally(() => {
-      stream.inflight.delete(id);
-      this.slots.release(name);
-    });
+  /** Ids of the entries of a stream that are in flight. */
+  public inflight(name: string): string[] {
+    return this.entries.ids(name);
+  }
 
-    stream.inflight.set(id, promise);
+  public isInflight(name: string, id: string): boolean {
+    return this.entries.has(name, id);
+  }
+
+  /**
+   * Waits for the entries that are in flight now, of all streams, to finish.
+   *
+   * @param timeout - Gives up after this many milliseconds. Without it, waits
+   * for as long as it takes.
+   * @returns `false` if the timeout was reached with entries still running.
+   */
+  public drain(timeout?: number): Promise<boolean> {
+    return this.entries.drain(timeout);
   }
 }
