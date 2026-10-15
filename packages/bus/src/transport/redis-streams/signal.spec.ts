@@ -37,6 +37,21 @@ describe('Signal', () => {
     expect(wait).toHaveBeenCalledTimes(1);
   });
 
+  it('wakes every waiter', async () => {
+    const signal = new Signal();
+    const first = vi.fn();
+    const second = vi.fn();
+    void signal.wait().then(first);
+    void signal.wait().then(second);
+
+    signal.notify();
+
+    await setTimeout(0);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
   it('can be waited on again after a notification', async () => {
     const signal = new Signal();
 

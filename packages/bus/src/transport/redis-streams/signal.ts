@@ -1,24 +1,27 @@
 /**
- * Lets a loop sleep until another part of the app has something for it.
+ * Lets loops sleep until another part of the app has something for them.
  *
- * A notification that arrives while nobody waits is dropped, so the waiter
+ * A notification that arrives while nobody waits is dropped, so a waiter
  * has to check its condition right before it calls {@link Signal.wait}.
  */
 export class Signal {
-  private resolve: (() => void) | undefined;
+  private waiters = new Set<() => void>();
 
   /** Resolves on the next {@link Signal.notify}. */
   public wait(): Promise<void> {
     return new Promise((resolve) => {
-      this.resolve = resolve;
+      this.waiters.add(resolve);
     });
   }
 
-  /** Wakes the waiter, if there is one. */
+  /** Wakes every waiter, if there are any. */
   public notify(): void {
-    const resolve = this.resolve;
+    const waiters = this.waiters;
 
-    this.resolve = undefined;
-    resolve?.();
+    this.waiters = new Set();
+
+    for (const resolve of waiters) {
+      resolve();
+    }
   }
 }

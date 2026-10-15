@@ -19,6 +19,7 @@ type KindArgs<K extends string> = [K] extends [never] ? [] : [kind: K];
 export class Clients<K extends string = never> {
   private readonly clients = new Map<string, Promise<RedisClientType>>();
   private readonly destroyed = new Set<string>();
+  private readonly ids = new Map<string, number>();
   private readonly logger = new Logger(Clients.name);
 
   public constructor(private readonly url: string) {}
@@ -38,7 +39,7 @@ export class Clients<K extends string = never> {
     let client = this.clients.get(kind);
 
     if (!client) {
-      client = this.connect().catch((err) => {
+      client = this.connect(kind).catch((err) => {
         // Let the next call connect again
         this.clients.delete(kind);
 
@@ -48,6 +49,15 @@ export class Clients<K extends string = never> {
     }
 
     return client;
+  }
+
+  /**
+   * The id of the connection of a kind (`CLIENT ID`). It follows reconnects.
+   *
+   * @returns `undefined` while the client is not connected.
+   */
+  public id(...args: KindArgs<K>): number | undefined {
+    return this.ids.get(this.keyOf(args));
   }
 
   /**
@@ -69,6 +79,7 @@ export class Clients<K extends string = never> {
 
       this.destroyed.add(kind);
       this.clients.delete(kind);
+      this.ids.delete(kind);
 
       return client ? [client] : [];
     });
@@ -87,9 +98,10 @@ export class Clients<K extends string = never> {
     return args[0] ?? DEFAULT_KIND;
   }
 
-  private async connect(): Promise<RedisClientType> {
+  private async connect(kind: string): Promise<RedisClientType> {
     const { createClient } = await import('redis');
     const client = createClient({ url: this.url });
+    let identified: Promise<void> = Promise.resolve();
 
     client.on('error', (err: unknown) => {
       this.logger.error(
@@ -98,7 +110,25 @@ export class Clients<K extends string = never> {
       );
     });
 
+    // Ready on the first connection and after every reconnect, and the id
+    // changes with each connection
+    client.on('ready', () => {
+      identified = client.clientId().then(
+        (id) => {
+          if (!this.destroyed.has(kind)) {
+            this.ids.set(kind, id);
+          }
+        },
+        (err: unknown) => {
+          this.logger.warn(
+            `Failed to get the id of Redis client ${kind}: ${String(err)}`,
+          );
+        },
+      );
+    });
+
     await client.connect();
+    await identified;
 
     return client;
   }

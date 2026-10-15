@@ -22,6 +22,7 @@ import { BLOCK_TIMEOUT, ReadLoop } from './loops/read.js';
 import { ReclaimLoop } from './loops/reclaim.js';
 import { RefreshLoop } from './loops/refresh.js';
 import { StaleConsumersLoop } from './loops/stale-consumers.js';
+import { UnblockLoop } from './loops/unblock.js';
 import { Processor } from './processor.js';
 import { Streams } from './streams.js';
 
@@ -265,6 +266,7 @@ export class RedisStreamsTransport
         reclaimInterval,
       }),
       new RefreshLoop(clients, streams, { group, consumer, retriesDelay }),
+      new UnblockLoop(clients, streams),
       new StaleConsumersLoop(clients, streams, {
         group,
         consumer,

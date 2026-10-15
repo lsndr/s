@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { GenericContainer, Wait } from 'testcontainers';
 import { Clients } from './clients.js';
 
@@ -58,6 +58,43 @@ describe('Clients', { timeout: 60_000 }, () => {
       const command = await clients.get('command');
 
       expect(command).not.toBe(read);
+    });
+  });
+
+  describe('id', () => {
+    it('is undefined before the client is connected', () => {
+      const clients = create<'read'>();
+
+      expect(clients.id('read')).toBeUndefined();
+    });
+
+    it('is the id of the connection', async () => {
+      const clients = create<'read' | 'command'>();
+      const read = await clients.get('read');
+
+      expect(clients.id('read')).toBe(await read.clientId());
+    });
+
+    it('follows a reconnect', async () => {
+      const clients = create<'read' | 'command'>();
+      const command = await clients.get('command');
+      const read = await clients.get('read');
+      const before = clients.id('read');
+
+      await command.sendCommand(['CLIENT', 'KILL', 'ID', String(before)]);
+      await vi.waitFor(() => expect(read.isReady).toBe(true));
+      await vi.waitFor(() => expect(clients.id('read')).not.toBe(before));
+
+      expect(clients.id('read')).toBe(await read.clientId());
+    });
+
+    it('is forgotten once the client is destroyed', async () => {
+      const clients = create<'read'>();
+      await clients.get('read');
+
+      await clients.destroy('read');
+
+      expect(clients.id('read')).toBeUndefined();
     });
   });
 
