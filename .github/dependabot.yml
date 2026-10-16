@@ -4,9 +4,40 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns: ['*']
 
   - package-ecosystem: npm
     directory: /
     versioning-strategy: increase-if-necessary
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3
+      semver-major-days: 14
+    commit-message:
+      prefix: build
+      include: scope
+    ignore:
+      # Typings must match the minimum supported Node (engines >=24).
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+    groups:
+      nx:
+        patterns: ['nx', '@nx/*']
+      nestjs:
+        patterns: ['@nestjs/*']
+      lint:
+        patterns:
+          - 'eslint'
+          - '@eslint/*'
+          - 'typescript-eslint'
+          - 'eslint-*'
+          - '@eslint-community/*'
+      commitlint:
+        patterns: ['@commitlint/*']
