@@ -183,6 +183,24 @@ import { Health } from '@lsndr/bus';
 await this.health.assertHealthy(); // throws if the broker is unreachable
 ```
 
+### Transport lifecycle
+
+A custom `Transport` can implement two optional hooks, which the bus calls when they are present:
+
+```typescript
+import { Transport, type OnBusBootstrap, type OnBusShutdown } from '@lsndr/bus';
+
+class MyTransport extends Transport implements OnBusBootstrap, OnBusShutdown {
+  // Called once all the handlers are subscribed
+  onBusBootstrap() {}
+
+  // Called when the bus shuts down
+  async onBusShutdown() {}
+}
+```
+
+The Redis Streams transport starts consuming in `onBusBootstrap`, so calling `subscribe` yourself, without the bus, needs `onBusBootstrap()` afterwards to start reading. Its shutdown logic runs in `onBusShutdown`. `Outbox` forwards both hooks to its inner transport.
+
 ## Outbox
 
 `Outbox` is a transport that stores events instead of publishing them, so the event can be written in the same database transaction as your data. A background loop then relays the stored events to a real transport (RabbitMQ, Redis Streams, or your own `Transport`). Subscriptions and health checks go straight to that transport.

@@ -1,12 +1,7 @@
 import { hostname } from 'node:os';
-import {
-  BeforeApplicationShutdown,
-  Inject,
-  Injectable,
-  Logger,
-  type OnModuleInit,
-} from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { type EventConstructor } from '../../types.js';
+import { type OnBusBootstrap, type OnBusShutdown } from '../../lifecycle.js';
 import {
   Transport,
   TransportConfig,
@@ -209,7 +204,7 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
 @Injectable()
 export class RedisStreamsTransport
   extends Transport<RedisStreamsTransportConfig>
-  implements OnModuleInit, BeforeApplicationShutdown
+  implements OnModuleInit, OnBusBootstrap, OnBusShutdown
 {
   private readonly clients: Clients<'read' | 'command'>;
   private readonly streams: Streams;
@@ -272,18 +267,18 @@ export class RedisStreamsTransport
     await this.clients.get('command');
   }
 
+  /** Starts consuming, once all the handlers are registered. */
+  public onBusBootstrap(): void {
+    this.loops.start();
+  }
+
   /**
-   * Stops reading and reclaiming, waits for the entries in flight and removes
-   * the consumer from the groups unless it owns pending entries, then closes
-   * the connections.
+   * Stops the loops, waits for the entries in flight and removes the consumer
+   * from the groups unless it owns pending entries, then closes the
+   * connections.
    */
-  public async beforeApplicationShutdown(): Promise<void> {
-    this.loops.abort();
-
-    // Interrupts a blocked XREADGROUP
-    await this.clients.destroy('read');
-
-    await this.loops.wait();
+  public async onBusShutdown(): Promise<void> {
+    await this.loops.onTransportShutdown();
 
     const drained = await this.streams.drain(this.settings.shutdownTimeout);
 
@@ -293,6 +288,7 @@ export class RedisStreamsTransport
       );
     }
 
+    // After the drain, so that the consumer doesn't own what was in flight
     for (const { name } of this.streams.all()) {
       await this.removeConsumerIfIdle(name).catch((err) =>
         this.logger.warn(
@@ -361,9 +357,6 @@ export class RedisStreamsTransport
         `Subscribed to event ${event.name} (handler: ${handlerName})`,
       );
     }
-
-    // Consuming starts once the handlers are registered
-    this.loops.start();
   }
 
   private async publishEvent(

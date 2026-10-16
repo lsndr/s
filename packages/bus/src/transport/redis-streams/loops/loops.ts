@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Logger } from '@nestjs/common';
+import { type OnTransportShutdown } from '../lifecycle.js';
 import { type Loop } from './loop.js';
 
 /** How long a loop waits after a failed iteration, in milliseconds. */
@@ -11,7 +12,7 @@ const FAILURE_DELAY = 1_000;
  * An iteration that throws is logged and the loop carries on, so a loop only
  * ends when {@link Loops.abort} is called.
  */
-export class Loops {
+export class Loops implements OnTransportShutdown {
   private readonly controller = new AbortController();
   private readonly running: Promise<void>[] = [];
   private readonly logger = new Logger(Loops.name);
@@ -29,14 +30,22 @@ export class Loops {
     }
   }
 
-  /** Tells the loops to stop. Iterations that are running are not interrupted. */
-  public abort(): void {
+  public async onTransportShutdown(): Promise<void> {
     this.controller.abort();
-  }
 
-  /** Resolves once all loops have ended. */
-  public async wait(): Promise<void> {
-    await Promise.allSettled(this.running);
+    await Promise.all([
+      Promise.allSettled(this.running),
+      ...this.loops.map(async (loop) => {
+        try {
+          await loop.onTransportShutdown?.();
+        } catch (err) {
+          this.logger.error(
+            `${loop.constructor.name} failed to shut down: ${String(err)}`,
+            err instanceof Error ? err.stack : undefined,
+          );
+        }
+      }),
+    ]);
   }
 
   private async run(loop: Loop): Promise<void> {

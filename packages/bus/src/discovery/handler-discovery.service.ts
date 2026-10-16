@@ -1,9 +1,4 @@
-import {
-  Inject,
-  Injectable,
-  Type,
-  type OnApplicationBootstrap,
-} from '@nestjs/common';
+import { Inject, Injectable, Type } from '@nestjs/common';
 import { DiscoveryService, Reflector } from '@nestjs/core';
 import { type InstanceWrapper } from '@nestjs/core/injector/instance-wrapper.js';
 import {
@@ -26,7 +21,7 @@ interface DiscoveredHandler {
 }
 
 @Injectable()
-export class HandlerDiscoveryService implements OnApplicationBootstrap {
+export class HandlerDiscoveryService {
   public constructor(
     @Inject(DiscoveryService)
     private readonly discoveryService: DiscoveryService,
@@ -37,7 +32,7 @@ export class HandlerDiscoveryService implements OnApplicationBootstrap {
     @Inject(HandlerInvoker) private readonly invoker: HandlerInvoker,
   ) {}
 
-  public async onApplicationBootstrap(): Promise<void> {
+  public async subscribeHandlers(): Promise<void> {
     const subscriptions: Subscription[] = [];
 
     for (const {

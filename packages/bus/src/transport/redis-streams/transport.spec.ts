@@ -28,6 +28,15 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
   let url: string;
   let redis: RedisClientType;
   const modules: TestingModule[] = [];
+  const shutDown = new WeakSet<RedisStreamsTransport>();
+
+  /** Shuts the transport down once, as the bus does. */
+  async function shutdown(transport: RedisStreamsTransport) {
+    if (!shutDown.has(transport)) {
+      shutDown.add(transport);
+      await transport.onBusShutdown();
+    }
+  }
 
   /**
    * Creates a transport with a random group and key prefix, so tests don't
@@ -88,6 +97,10 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
 
   afterAll(async () => {
     await redis.close();
+    for (const m of modules) {
+      await shutdown(m.get(RedisStreamsTransport));
+    }
+
     await Promise.all(modules.map((m) => m.close()));
     await container.stop();
   });
@@ -224,6 +237,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       });
 
       await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+      transport.onBusBootstrap();
       await transport.publish(new FirstEvent('x'));
 
       await vi.waitFor(async () => {
@@ -236,6 +250,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       const { transport, group, stream } = await createTransport();
 
       await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+      transport.onBusBootstrap();
       await transport.publish(new FirstEvent('x'));
 
       await vi.waitFor(async () => {
@@ -269,8 +284,10 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
         await release.promise;
         finished = true;
       });
+      transport.onBusBootstrap();
       await transport.publish(new FirstEvent('x'));
       await started.promise;
+      await shutdown(transport);
       await module.close();
 
       expect(finished).toBe(true);
@@ -292,8 +309,10 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
 
         return stuck.promise;
       });
+      transport.onBusBootstrap();
       await transport.publish(new FirstEvent('x'));
       await started.promise;
+      await shutdown(transport);
       await module.close();
 
       const pending = await redis.xPending(stream(FirstEvent), group);

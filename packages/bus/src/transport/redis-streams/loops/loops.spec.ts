@@ -53,6 +53,11 @@ class BlockingLoop implements Loop {
   });
 }
 
+/** Iterates like {@link CountingLoop}, and has a shutdown hook. */
+class ShuttingDownLoop extends CountingLoop {
+  public onTransportShutdown = vi.fn<() => void | Promise<void>>();
+}
+
 class FailingLoop implements Loop {
   public readonly next = vi.fn(async (_signal: AbortSignal) => {
     await Promise.resolve();
@@ -89,18 +94,17 @@ describe('Loops', () => {
 
   afterEach(async () => {
     for (const loops of started.splice(0)) {
-      loops.abort();
-      await Promise.all([loops.wait(), vi.runAllTimersAsync()]);
+      await Promise.all([loops.onTransportShutdown(), vi.runAllTimersAsync()]);
     }
 
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it('resolves wait right away when it was never started', async () => {
+  it('resolves shutdown right away when it was never started', async () => {
     const loops = create([new CountingLoop()]);
 
-    await expect(loops.wait()).resolves.toBeUndefined();
+    await expect(loops.onTransportShutdown()).resolves.toBeUndefined();
   });
 
   it('runs every loop again and again', async () => {
@@ -124,10 +128,9 @@ describe('Loops', () => {
 
     const signal = loop.next.mock.calls[0]?.[0];
 
-    expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal?.aborted).toBe(false);
 
-    loops.abort();
+    await loops.onTransportShutdown();
 
     expect(signal?.aborted).toBe(true);
   });
@@ -137,14 +140,13 @@ describe('Loops', () => {
     const loops = create([loop]);
 
     loops.start();
-    await vi.advanceTimersByTimeAsync(10);
-    loops.abort();
+    await vi.advanceTimersByTimeAsync(0);
     // The running iteration is not interrupted, it needs its timer to fire
-    await Promise.all([loops.wait(), vi.runAllTimersAsync()]);
+    await Promise.all([loops.onTransportShutdown(), vi.runAllTimersAsync()]);
 
     const calls = loop.next.mock.calls.length;
 
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(loop.next).toHaveBeenCalledTimes(calls);
   });
@@ -173,17 +175,16 @@ describe('Loops', () => {
 
     it('does not interrupt the iteration', async () => {
       const { loops, resolve } = start();
+      await vi.advanceTimersByTimeAsync(0);
       const ended = vi.fn();
 
+      void loops.onTransportShutdown().then(ended);
       await vi.advanceTimersByTimeAsync(0);
-      loops.abort();
-      void loops.wait().then(ended);
-      await vi.advanceTimersByTimeAsync(10);
 
       expect(ended).not.toHaveBeenCalled();
 
       resolve();
-      await loops.wait();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(ended).toHaveBeenCalledTimes(1);
     });
@@ -192,9 +193,10 @@ describe('Loops', () => {
       const { loop, loops, resolve } = start();
 
       await vi.advanceTimersByTimeAsync(0);
-      loops.abort();
+      const shutdown = loops.onTransportShutdown();
+
       resolve();
-      await loops.wait();
+      await shutdown;
 
       expect(loop.next).toHaveBeenCalledTimes(1);
     });
@@ -218,8 +220,7 @@ describe('Loops', () => {
       loop.interval.mockReturnValue(10_000);
       loops.start();
       await vi.advanceTimersByTimeAsync(0);
-      loops.abort();
-      await loops.wait();
+      await loops.onTransportShutdown();
 
       expect(loop.next).not.toHaveBeenCalled();
     });
@@ -265,6 +266,93 @@ describe('Loops', () => {
       await vi.advanceTimersByTimeAsync(30);
 
       expect(healthy.next.mock.calls.length).toBeGreaterThan(1);
+    });
+  });
+
+  describe('onTransportShutdown', () => {
+    it('shuts all the loops down at once, skipping those without a hook', async () => {
+      const first = new ShuttingDownLoop();
+      const second = new ShuttingDownLoop();
+      const release = Promise.withResolvers<void>();
+
+      first.onTransportShutdown.mockReturnValue(release.promise);
+
+      const loops = create([first, new BlockingLoop(), second]);
+      const shutdown = loops.onTransportShutdown();
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The second loop doesn't wait for the first
+      expect(second.onTransportShutdown).toHaveBeenCalledOnce();
+
+      release.resolve();
+      await shutdown;
+
+      expect(first.onTransportShutdown).toHaveBeenCalledOnce();
+    });
+
+    it('calls the hooks while the loops are still running', async () => {
+      const loop = new ShuttingDownLoop();
+      const iterating = Promise.withResolvers<void>();
+
+      loop.next.mockImplementation(() => iterating.promise);
+
+      const loops = create([loop]);
+
+      loops.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const ended = vi.fn();
+      const shutdown = loops.onTransportShutdown().then(ended);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(loop.onTransportShutdown).toHaveBeenCalledOnce();
+      expect(ended).not.toHaveBeenCalled();
+
+      iterating.resolve();
+      await shutdown;
+
+      expect(ended).toHaveBeenCalledOnce();
+    });
+
+    it('lets a hook end its loop', async () => {
+      const loop = new BlockingLoop();
+      const release = Promise.withResolvers<void>();
+      const hooked = Object.assign(loop, {
+        onTransportShutdown: vi.fn(() => release.resolve()),
+      });
+
+      loop.next.mockImplementation(() => release.promise);
+
+      const loops = create([hooked]);
+
+      loops.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(loops.onTransportShutdown()).resolves.toBeUndefined();
+    });
+
+    it('logs a failure and shuts the other loops down', async () => {
+      const error = mockLogger();
+      const failing = new ShuttingDownLoop();
+      const other = new ShuttingDownLoop();
+
+      failing.onTransportShutdown = vi.fn(() =>
+        Promise.reject(new Error('boom')),
+      );
+      other.onTransportShutdown = vi.fn();
+
+      const loops = create([failing, other]);
+
+      await expect(loops.onTransportShutdown()).resolves.toBeUndefined();
+
+      expect(error).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          'ShuttingDownLoop failed to shut down: Error: boom',
+        ),
+        expect.stringContaining('boom'),
+      );
+      expect(other.onTransportShutdown).toHaveBeenCalledOnce();
     });
   });
 });

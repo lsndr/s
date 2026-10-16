@@ -17,6 +17,7 @@ import {
   RedisStreamsTransportConfig,
 } from './redis-streams/transport.js';
 import { TransportConfig, type Transport } from './transport.js';
+import { hasOnBusBootstrap } from '../lifecycle.js';
 import { setTimeout } from 'node:timers/promises';
 import { IsDate, IsString } from 'class-validator';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -50,6 +51,13 @@ interface TransportTest {
     createTransport: (config: CommonConfig) => Promise<Transport>;
     teardown: () => Promise<void>;
   }>;
+}
+
+/** Does what the bus does once the handlers are subscribed. */
+async function bootstrap(transport: Transport) {
+  if (hasOnBusBootstrap(transport)) {
+    await transport.onBusBootstrap();
+  }
 }
 
 describe('Transport', { timeout: 60_000 }, () => {
@@ -144,6 +152,10 @@ describe('Transport', { timeout: 60_000 }, () => {
         };
 
         const teardown = async () => {
+          for (const m of modules) {
+            await m.get(RedisStreamsTransport).onBusShutdown();
+          }
+
           await Promise.all(modules.map((m) => m.close()));
           await container.stop();
         };
@@ -176,6 +188,8 @@ describe('Transport', { timeout: 60_000 }, () => {
       const publishedAt = new Date('2026-01-02T03:04:05.000Z');
 
       await transport.subscribe(TestEvent, 'TestHandler', handler);
+
+      await bootstrap(transport);
       await transport.publish(
         { value: 'hello' },
         { id: 'persisted-id', name: 'TestEvent', meta: { a: 1 }, publishedAt },
@@ -205,6 +219,8 @@ describe('Transport', { timeout: 60_000 }, () => {
         { event: TestEvent, handler: 'TestHandler', callback: testHandler },
         { event: OtherEvent, handler: 'OtherHandler', callback: otherHandler },
       ]);
+
+      await bootstrap(transport);
       await transport.publish([
         { event: new TestEvent({ value: 'first' }), options: { id: 'id-1' } },
         { event: new OtherEvent(), options: { id: 'id-2' } },
@@ -231,6 +247,7 @@ describe('Transport', { timeout: 60_000 }, () => {
         };
         const transport = await createTransport(config);
         await transport.subscribe(TestEvent, 'TestHandler', handler);
+        await bootstrap(transport);
 
         return handler;
       };
@@ -285,6 +302,7 @@ describe('Transport', { timeout: 60_000 }, () => {
         const handler = vi.fn((_payload: unknown) => setTimeout(1_000));
         const transport = await createTransport(config);
         await transport.subscribe(TestEvent, 'TestHandler', handler);
+        await bootstrap(transport);
 
         return handler;
       };
@@ -341,6 +359,7 @@ describe('Transport', { timeout: 60_000 }, () => {
         { event: TestEvent, handler: 'HandlerA', callback: handler1 },
         { event: TestEvent, handler: 'HandlerB', callback: handler2 },
       ]);
+      await bootstrap(transport);
 
       const publisher = await createTransport(config);
       const event = new TestEvent({ value: 'multi-handler' });
@@ -369,6 +388,7 @@ describe('Transport', { timeout: 60_000 }, () => {
           throw new Error();
         });
         await transport.subscribe(TestEvent, 'TestHandler', handler);
+        await bootstrap(transport);
 
         await transport.publish(new TestEvent({ value: 'retry-me' }));
 

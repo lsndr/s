@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import { type Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { type Streams } from '../streams.js';
+import { type OnTransportShutdown } from '../lifecycle.js';
 import { type Loop } from './loop.js';
 
 /** How long to wait before unblocking the read again, in milliseconds. */
@@ -24,9 +25,14 @@ export interface ReadLoopOptions {
  * so while it blocks, the loop watches the streams that are not part of it.
  * When one of them gets a free slot, or is registered, the read is
  * interrupted with CLIENT UNBLOCK, instead of waiting for the block timeout.
+ * The same happens on shutdown, so that the loop doesn't wait for the block
+ * timeout to end.
+
  */
-export class ReadLoop implements Loop {
+export class ReadLoop implements Loop, OnTransportShutdown {
   private readonly logger = new Logger(ReadLoop.name);
+  /** Aborted once the current read is over. Unset while nothing is read. */
+  private readDone: AbortController | undefined;
 
   public constructor(
     private readonly clients: Clients<'read' | 'command'>,
@@ -45,6 +51,21 @@ export class ReadLoop implements Loop {
           processor.process(stream, entry, 1),
         );
       }
+    }
+  }
+
+  /** Interrupts the read that is blocked, so that the loop can end. */
+  public async onTransportShutdown(): Promise<void> {
+    const done = this.readDone?.signal;
+
+    if (!done) {
+      return;
+    }
+
+    try {
+      await this.unblock(done);
+    } catch (err) {
+      this.logger.warn(`Failed to unblock the read: ${String(err)}`);
     }
   }
 
@@ -70,6 +91,9 @@ export class ReadLoop implements Loop {
     }
 
     const done = new AbortController();
+
+    this.readDone = done;
+
     // Both start in the same tick, so the watcher can only unblock a read
     // that was sent
     const reading = client.xReadGroup(
@@ -87,52 +111,58 @@ export class ReadLoop implements Loop {
       return (await reading) ?? [];
     } finally {
       done.abort();
+      this.readDone = undefined;
       // Settles before the next read, so an unblock can't hit it
       await unblocking;
     }
   }
 
   /**
-   * Unblocks the read once a stream that it doesn't cover has a free slot,
-   * and keeps trying until that worked. Gives up when `stop` is aborted. It
-   * never rejects, a read that couldn't be interrupted is only slower.
+   * Unblocks the read once a stream that it doesn't cover has a free slot, and
+   * keeps trying until that worked. Gives up when `signal` is aborted, which
+   * is also when the read is over. It never rejects, a read that couldn't be
+   * interrupted is only slower.
    */
   private async unblockOnReadable(
     keys: string[],
     stop: AbortSignal,
   ): Promise<void> {
-    const { clients, streams } = this;
-
     try {
       // Waits for a stream that the read doesn't cover
-      const [stream] = await streams.readable(stop, { exclude: keys });
+      const [stream] = await this.streams.readable(stop, { exclude: keys });
 
-      if (stream === undefined) {
-        return;
-      }
-
-      const client = await clients.get('command');
-
-      // Retried until a read was unblocked: the command can reach Redis
-      // before the read blocks on it, and then it does nothing
-      while (!stop.aborted) {
-        const id = clients.id('read');
-
-        if (id === undefined) {
-          this.logger.warn(
-            'Cannot unblock the read: the id of the read client is unknown',
-          );
-        } else if ((await client.clientUnblock(id, 'TIMEOUT')) > 0) {
-          // Makes the blocked read return as if it timed out
-          return;
-        }
-
-        await sleep(UNBLOCK_RETRY_DELAY, undefined, { signal: stop }).catch(
-          () => undefined,
-        );
+      if (stream !== undefined) {
+        await this.unblock(stop);
       }
     } catch (err) {
       this.logger.warn(`Failed to unblock the read: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Interrupts the blocked read with CLIENT UNBLOCK, retried until it worked:
+   * the command can reach Redis before the read blocks on it, and then it
+   * does nothing. Gives up when `stop` is aborted.
+   */
+  private async unblock(stop: AbortSignal): Promise<void> {
+    const { clients } = this;
+    const client = await clients.get('command');
+
+    while (!stop.aborted) {
+      const id = clients.id('read');
+
+      if (id === undefined) {
+        this.logger.warn(
+          'Cannot unblock the read: the id of the read client is unknown',
+        );
+      } else if ((await client.clientUnblock(id, 'TIMEOUT')) > 0) {
+        // Makes the blocked read return as if it timed out
+        return;
+      }
+
+      await sleep(UNBLOCK_RETRY_DELAY, undefined, { signal: stop }).catch(
+        () => undefined,
+      );
     }
   }
 }
