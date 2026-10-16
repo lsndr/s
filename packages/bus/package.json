@@ -31,11 +31,11 @@
   },
   "peerDependencies": {
     "@nestjs/common": "^12.0.0",
-    "@nestjs/core": "^12.1.2",
-    "amqplib": "^2.2.0",
+    "@nestjs/core": "^12.1.0",
+    "amqplib": "^2.0.0",
     "class-transformer": "^0.5.1",
-    "redis": "^6.3.0",
-    "reflect-metadata": "^0.2.2"
+    "redis": "^6.0.0",
+    "reflect-metadata": "^0.2.0"
   },
   "peerDependenciesMeta": {
     "amqplib": {
@@ -50,13 +50,13 @@
   },
   "devDependencies": {
     "@nestjs/common": "^12.0.0",
-    "@nestjs/core": "^12.1.2",
-    "@nestjs/testing": "^12.1.2",
-    "amqplib": "^2.2.0",
+    "@nestjs/core": "^12.1.0",
+    "@nestjs/testing": "^12.1.0",
+    "amqplib": "^2.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
-    "redis": "^6.3.0",
-    "reflect-metadata": "^0.2.2",
+    "redis": "^6.0.0",
+    "reflect-metadata": "^0.2.0",
     "testcontainers": "^12.2.0"
   },
   "repository": {
@@ -65,6 +65,6 @@
     "directory": "packages/bus"
   },
   "dependencies": {
-    "uuid": "^14.0.2"
+    "uuid": "^14.0.0"
   }
 }
