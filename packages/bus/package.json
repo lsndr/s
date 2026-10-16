@@ -57,7 +57,7 @@
     "class-validator": "^0.15.1",
     "redis": "^6.0.0",
     "reflect-metadata": "^0.2.0",
-    "testcontainers": "^12.2.0"
+    "testcontainers": "^12.2.1"
   },
   "repository": {
     "type": "git",
