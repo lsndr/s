@@ -31,9 +31,19 @@ class InnerTransport extends Transport<InnerConfig> {
     .fn<(subscriptions: Subscription[]) => Promise<void>>()
     .mockResolvedValue(undefined);
   public static assertHealthy = vi.fn().mockResolvedValue(undefined);
+  public static onBusBootstrap = vi.fn();
+  public static onBusShutdown = vi.fn();
   public static configs: InnerConfig[] = [];
 
   public assertHealthy = InnerTransport.assertHealthy;
+
+  public onBusBootstrap(): void {
+    InnerTransport.onBusBootstrap();
+  }
+
+  public onBusShutdown(): void {
+    InnerTransport.onBusShutdown();
+  }
 
   public getConfig(): InnerConfig {
     return this.config;
@@ -115,7 +125,6 @@ async function createModule(batchSize = 10) {
   const module = await Test.createTestingModule({
     imports: [
       BusModule.forRoot({
-        group: 'test-app',
         transport: {
           provider: MemoryOutbox,
           config: {
@@ -163,6 +172,19 @@ describe('Outbox', () => {
     expect(InnerTransport.publish).not.toHaveBeenCalled();
 
     await module.close();
+  });
+
+  it('forwards the bus lifecycle hooks to the inner transport', async () => {
+    const module = await createModule();
+
+    await module.init();
+
+    expect(InnerTransport.onBusBootstrap).toHaveBeenCalledOnce();
+    expect(InnerTransport.onBusShutdown).not.toHaveBeenCalled();
+
+    await module.close();
+
+    expect(InnerTransport.onBusShutdown).toHaveBeenCalledOnce();
   });
 
   it('stores a batch of events with a single save', async () => {

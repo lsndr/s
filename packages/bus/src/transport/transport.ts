@@ -23,7 +23,7 @@ export abstract class Transport<TransportConfig = unknown>
   implements Dispatcher, Subscriber, Health
 {
   @Inject(TransportConfig)
-  protected config!: TransportConfig;
+  public config!: TransportConfig;
 
   public abstract assertHealthy(): Promise<void>;
 

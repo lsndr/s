@@ -17,8 +17,8 @@ import {
   RedisStreamsTransportConfig,
 } from './redis-streams/transport.js';
 import { TransportConfig, type Transport } from './transport.js';
+import { hasOnBusBootstrap } from '../lifecycle.js';
 import { setTimeout } from 'node:timers/promises';
-import { BusConfig } from '../types.js';
 import { IsDate, IsString } from 'class-validator';
 import { Test, TestingModule } from '@nestjs/testing';
 
@@ -39,12 +39,25 @@ class OtherEvent {
   public readonly kind = 'other';
 }
 
+/** Options that every transport takes. */
+interface CommonConfig {
+  group: string;
+  retries: { max: number; delay: number };
+}
+
 interface TransportTest {
   name: string;
   setup: () => Promise<{
-    createTransport: (config: BusConfig) => Promise<Transport>;
+    createTransport: (config: CommonConfig) => Promise<Transport>;
     teardown: () => Promise<void>;
   }>;
+}
+
+/** Does what the bus does once the handlers are subscribed. */
+async function bootstrap(transport: Transport) {
+  if (hasOnBusBootstrap(transport)) {
+    await transport.onBusBootstrap();
+  }
 }
 
 describe('Transport', { timeout: 60_000 }, () => {
@@ -58,24 +71,26 @@ describe('Transport', { timeout: 60_000 }, () => {
       setup: async () => {
         const container = await new GenericContainer('rabbitmq:3-management')
           .withExposedPorts(5672)
-          .withWaitStrategy(Wait.forLogMessage(/Server startup complete/))
+          .withWaitStrategy(
+            Wait.forAll([
+              Wait.forListeningPorts(),
+              Wait.forLogMessage(/Server startup complete/),
+            ]),
+          )
           .start();
         const url = `amqp://${container.getHost()}:${container.getMappedPort(5672)}`;
         const modules: TestingModule[] = [];
 
-        const createTransport = async (busConfig: BusConfig) => {
+        const createTransport = async (busConfig: CommonConfig) => {
           const module = await Test.createTestingModule({
             imports: [],
             providers: [
               RabbitmqTransport,
               {
-                provide: BusConfig,
-                useValue: busConfig,
-              },
-              {
                 provide: TransportConfig,
                 useValue: {
                   url,
+                  ...busConfig,
                 } satisfies RabbitmqTransportConfig,
               },
             ],
@@ -101,22 +116,29 @@ describe('Transport', { timeout: 60_000 }, () => {
       setup: async () => {
         const container = await new GenericContainer('redis:8.2')
           .withExposedPorts(6379)
-          .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
+          .withWaitStrategy(
+            Wait.forAll([
+              Wait.forListeningPorts(),
+              Wait.forLogMessage(/Ready to accept connections/),
+            ]),
+          )
           .start();
         const url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
         const modules: TestingModule[] = [];
 
-        const createTransport = async (busConfig: BusConfig) => {
+        const createTransport = async (busConfig: CommonConfig) => {
           const module = await Test.createTestingModule({
             providers: [
               RedisStreamsTransport,
-              { provide: BusConfig, useValue: busConfig },
               {
                 provide: TransportConfig,
                 useValue: {
                   url,
-                  blockTimeout: 1_000,
+                  ...busConfig,
                   reclaimInterval: 25,
+                  // One entry at a time, so that a busy instance leaves the
+                  // next entries to the others
+                  concurrency: 1,
                 } satisfies RedisStreamsTransportConfig,
               },
             ],
@@ -130,6 +152,10 @@ describe('Transport', { timeout: 60_000 }, () => {
         };
 
         const teardown = async () => {
+          for (const m of modules) {
+            await m.get(RedisStreamsTransport).onBusShutdown();
+          }
+
           await Promise.all(modules.map((m) => m.close()));
           await container.stop();
         };
@@ -139,7 +165,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     },
   ])('$name', ({ setup }) => {
     let teardown: () => Promise<void>;
-    let createTransport: (config: BusConfig) => Promise<Transport>;
+    let createTransport: (config: CommonConfig) => Promise<Transport>;
 
     beforeAll(async () => {
       const setupResult = await setup();
@@ -153,7 +179,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('republishes persisted data under its original id, name and time', async () => {
-      const config: BusConfig = {
+      const config: CommonConfig = {
         group: crypto.randomUUID(),
         retries: { max: 0, delay: 100 },
       };
@@ -162,6 +188,8 @@ describe('Transport', { timeout: 60_000 }, () => {
       const publishedAt = new Date('2026-01-02T03:04:05.000Z');
 
       await transport.subscribe(TestEvent, 'TestHandler', handler);
+
+      await bootstrap(transport);
       await transport.publish(
         { value: 'hello' },
         { id: 'persisted-id', name: 'TestEvent', meta: { a: 1 }, publishedAt },
@@ -191,6 +219,8 @@ describe('Transport', { timeout: 60_000 }, () => {
         { event: TestEvent, handler: 'TestHandler', callback: testHandler },
         { event: OtherEvent, handler: 'OtherHandler', callback: otherHandler },
       ]);
+
+      await bootstrap(transport);
       await transport.publish([
         { event: new TestEvent({ value: 'first' }), options: { id: 'id-1' } },
         { event: new OtherEvent(), options: { id: 'id-2' } },
@@ -211,12 +241,13 @@ describe('Transport', { timeout: 60_000 }, () => {
     it('delivers message to multiple groups', async () => {
       const subscribe = async () => {
         const handler = vi.fn();
-        const config: BusConfig = {
+        const config: CommonConfig = {
           group: crypto.randomUUID(),
           retries: { max: 0, delay: 100 },
         };
         const transport = await createTransport(config);
         await transport.subscribe(TestEvent, 'TestHandler', handler);
+        await bootstrap(transport);
 
         return handler;
       };
@@ -262,14 +293,16 @@ describe('Transport', { timeout: 60_000 }, () => {
 
     it('distributes messages between multiple instances of the same consumers in the same group', async () => {
       const group = crypto.randomUUID();
-      const config: BusConfig = {
+      const config: CommonConfig = {
         group,
         retries: { max: 0, delay: 100 },
       };
       const subscribe = async () => {
-        const handler = vi.fn();
+        // Stays busy, so that the other entries go to the other instances
+        const handler = vi.fn((_payload: unknown) => setTimeout(1_000));
         const transport = await createTransport(config);
         await transport.subscribe(TestEvent, 'TestHandler', handler);
+        await bootstrap(transport);
 
         return handler;
       };
@@ -315,17 +348,18 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('delivers message to multiple handlers in the same group', async () => {
-      const group = crypto.randomUUID();
-      const config: BusConfig = {
-        group,
+      const config: CommonConfig = {
+        group: crypto.randomUUID(),
         retries: { max: 0, delay: 100 },
       };
       const handler1 = vi.fn();
       const handler2 = vi.fn();
-      const transport1 = await createTransport(config);
-      const transport2 = await createTransport(config);
-      await transport1.subscribe(TestEvent, 'HandlerA', handler1);
-      await transport2.subscribe(TestEvent, 'HandlerB', handler2);
+      const transport = await createTransport(config);
+      await transport.subscribe([
+        { event: TestEvent, handler: 'HandlerA', callback: handler1 },
+        { event: TestEvent, handler: 'HandlerB', callback: handler2 },
+      ]);
+      await bootstrap(transport);
 
       const publisher = await createTransport(config);
       const event = new TestEvent({ value: 'multi-handler' });
@@ -345,7 +379,7 @@ describe('Transport', { timeout: 60_000 }, () => {
       'retries a failing callback up to %s times',
       async (max) => {
         const delay = 100;
-        const config: BusConfig = {
+        const config: CommonConfig = {
           group: crypto.randomUUID(),
           retries: { max, delay },
         };
@@ -354,6 +388,7 @@ describe('Transport', { timeout: 60_000 }, () => {
           throw new Error();
         });
         await transport.subscribe(TestEvent, 'TestHandler', handler);
+        await bootstrap(transport);
 
         await transport.publish(new TestEvent({ value: 'retry-me' }));
 
@@ -377,16 +412,11 @@ describe('Transport', { timeout: 60_000 }, () => {
           providers: [
             RabbitmqTransport,
             {
-              provide: BusConfig,
-              useValue: {
-                group: crypto.randomUUID(),
-                retries: { max: 0, delay: 100 },
-              },
-            },
-            {
               provide: TransportConfig,
               useValue: {
                 url: 'amqp://localhost',
+                group: crypto.randomUUID(),
+                retries: { max: 0, delay: 100 },
               } satisfies RabbitmqTransportConfig,
             },
           ],

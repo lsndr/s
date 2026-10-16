@@ -25,5 +25,6 @@ export {
 export { Dispatcher, type PublishEvent } from './transport/dispatcher.js';
 export { type Subscription } from './transport/subscriber.js';
 export { Health } from './transport/health.js';
-export { type EventPayload, type BusRetriesConfig } from './types.js';
+export { type OnBusBootstrap, type OnBusShutdown } from './lifecycle.js';
+export { type EventPayload } from './types.js';
 export { type EventHandlerMiddleware } from './middleware/middleware.js';

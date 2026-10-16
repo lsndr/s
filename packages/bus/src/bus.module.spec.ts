@@ -49,10 +49,20 @@ class MockTransport extends Transport {
     return Promise.resolve();
   });
   public static assertHealthy = vi.fn().mockResolvedValue(undefined);
+  public static onBusBootstrap = vi.fn();
+  public static onBusShutdown = vi.fn();
 
   private static readonly subscriptions: Subscription[] = [];
 
   public assertHealthy = MockTransport.assertHealthy;
+
+  public onBusBootstrap(): void {
+    MockTransport.onBusBootstrap();
+  }
+
+  public onBusShutdown(): void {
+    MockTransport.onBusShutdown();
+  }
 
   public async publish(
     eventOrEvents: object | PublishEvent[],
@@ -100,7 +110,6 @@ describe('BusModule', () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
-          group: 'test-app',
           transport: {
             provider: MockTransport,
             config: {},
@@ -132,7 +141,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -157,11 +165,75 @@ describe('BusModule', () => {
     },
   );
 
+  describe('lifecycle', () => {
+    it('bootstraps the transport once all handlers are subscribed', async () => {
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            transport: { provider: MockTransport, config: {} },
+            providers: [TestHandler],
+          }),
+        ],
+      }).compile();
+
+      await module.init();
+
+      expect(MockTransport.onBusBootstrap).toHaveBeenCalledOnce();
+      expect(MockTransport.subscribe).calledBefore(
+        MockTransport.onBusBootstrap,
+      );
+
+      await module.close();
+    });
+
+    it('shuts the transport down when the module closes', async () => {
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            transport: { provider: MockTransport, config: {} },
+          }),
+        ],
+      }).compile();
+
+      await module.init();
+
+      expect(MockTransport.onBusShutdown).not.toHaveBeenCalled();
+
+      await module.close();
+
+      expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+    });
+
+    it('works with a transport without the hooks', async () => {
+      class PlainTransport extends MockTransport {}
+
+      Object.defineProperty(PlainTransport.prototype, 'onBusBootstrap', {
+        value: undefined,
+      });
+      Object.defineProperty(PlainTransport.prototype, 'onBusShutdown', {
+        value: undefined,
+      });
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            transport: { provider: PlainTransport, config: {} },
+          }),
+        ],
+      }).compile();
+
+      await module.init();
+      await module.close();
+
+      expect(MockTransport.onBusBootstrap).not.toHaveBeenCalled();
+      expect(MockTransport.onBusShutdown).not.toHaveBeenCalled();
+    });
+  });
+
   it('throws if a handler is provided in both BusModule and a parent module', async () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
-          group: 'test-app',
           transport: {
             provider: MockTransport,
             config: {},
@@ -202,7 +274,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -239,7 +310,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -294,7 +364,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -351,7 +420,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [TestMiddleware],
             transport: {
               provider: MockTransport,
@@ -412,7 +480,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [MiddlewareA, MiddlewareB],
             transport: {
               provider: MockTransport,
@@ -470,7 +537,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},
@@ -528,7 +594,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [BusLevelMiddleware],
             transport: {
               provider: MockTransport,
@@ -568,7 +633,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [PayloadModifyingMiddleware],
             transport: {
               provider: MockTransport,
@@ -604,7 +668,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [ShortCircuitMiddleware],
             transport: {
               provider: MockTransport,
@@ -651,7 +714,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [DependentMiddleware],
             transport: {
               provider: MockTransport,
@@ -681,7 +743,6 @@ describe('BusModule', () => {
         Test.createTestingModule({
           imports: [
             BusModule.forRoot({
-              group: 'test-app',
               middlewares: [middleware],
               transport: {
                 provider: MockTransport,
@@ -911,7 +972,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [NotProvidedMiddleware],
             transport: {
               provider: MockTransport,
@@ -943,7 +1003,6 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             middlewares: [DuplicatedMiddleware],
             transport: {
               provider: MockTransport,
@@ -968,7 +1027,6 @@ describe('BusModule', () => {
       Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            group: 'test-app',
             transport: {
               provider: MockTransport,
               config: {},

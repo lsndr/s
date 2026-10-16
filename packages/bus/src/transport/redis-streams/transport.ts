@@ -1,18 +1,24 @@
 import { hostname } from 'node:os';
+import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { type EventConstructor } from '../../types.js';
+import { type OnBusBootstrap, type OnBusShutdown } from '../../lifecycle.js';
 import {
-  BeforeApplicationShutdown,
-  Inject,
-  Injectable,
-  Logger,
-  type OnModuleInit,
-} from '@nestjs/common';
-import { type RedisClientType } from 'redis';
-import { type EventConstructor, BusConfig } from '../../types.js';
-import { Transport, type TransportPublishOptions } from '../transport.js';
+  Transport,
+  TransportConfig,
+  type TransportPublishOptions,
+} from '../transport.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent } from '../dispatcher.js';
-import { createEventDto, parseEventPayload } from '../event-dto.js';
-import { StreamConsumer } from './stream-consumer.js';
+import { createEventDto } from '../event-dto.js';
+import { Clients } from './clients.js';
+import { Handler } from './handler.js';
+import { Loops } from './loops/loops.js';
+import { ReadLoop } from './loops/read.js';
+import { ReclaimLoop } from './loops/reclaim.js';
+import { RefreshLoop } from './loops/refresh.js';
+import { StaleConsumersLoop } from './loops/stale-consumers.js';
+import { Processor } from './processor.js';
+import { Streams } from './streams.js';
 
 export interface RedisStreamsTransportConfig {
   /**
@@ -22,41 +28,72 @@ export interface RedisStreamsTransportConfig {
    */
   url: string;
   /**
+   * Consumer group name. Every stream has one group with this name, so
+   * instances with the same group share the entries, and every instance of a
+   * group must register the same handlers.
+   */
+  group: string;
+  retries?: {
+    /**
+     * Maximum retries before an entry is dropped.
+     *
+     * @default 5
+     */
+    max?: number;
+    /**
+     * How long an entry has to be pending before it is claimed again, in
+     * milliseconds. Also how long after a consumer crashed its entries are
+     * recovered.
+     *
+     * @default 300000
+     */
+    delay?: number;
+  };
+  /**
    * Consumer name used in every consumer group.
    *
-   * Keeping the name stable across restarts avoids leaving stale consumers in
+   * Instances with the same name share their pending entries, so the default
+   * includes the process id to keep instances on the same host apart. Set a
+   * name that is stable across restarts to avoid leaving stale consumers in
    * the groups. Pending entries are recovered after `retries.delay` whatever
-   * the name is. Set it explicitly when several instances run on the same
-   * host.
+   * the name is.
    *
-   * @default os.hostname()
+   * @default `${os.hostname()}-${process.pid}`
    */
   consumer?: string;
   /**
-   * Prefix of the stream keys.
+   * Prefix of all keys the transport uses: the streams, and the hashes that
+   * record the handlers that have succeeded (`<keyPrefix>done:…`).
    *
    * @default 'events:'
    */
-  streamPrefix?: string;
+  keyPrefix?: string;
+  trim?: {
+    /**
+     * Approximate stream length above which entries are trimmed.
+     *
+     * @default 100
+     */
+    maxLength?: number;
+    /**
+     * Whether only the entries that every consumer group has acknowledged are
+     * trimmed, which makes `maxLength` a soft cap that unacknowledged entries
+     * can exceed. When `false`, `maxLength` is a hard cap: entries are trimmed
+     * even if they were not handled yet, and a trimmed entry is lost.
+     *
+     * @default true
+     */
+    onlyAcked?: boolean;
+  };
   /**
-   * Approximate stream length above which acknowledged entries are trimmed.
-   * Unacknowledged entries are never trimmed, so it is a soft cap.
-   *
-   * @default 1000
-   */
-  maxLength?: number;
-  /**
-   * Maximum number of entries read from a stream at once.
+   * Number of slots of each stream. A stream is read while it has a free slot,
+   * and a read returns at most this many entries of a stream, so a stream runs
+   * up to `2 * concurrency - 1` read entries at once. Reclaimed entries are
+   * not limited by the slots, so they come on top of that.
    *
    * @default 10
    */
-  batchSize?: number;
-  /**
-   * How long a stream read blocks waiting for new entries, in milliseconds.
-   *
-   * @default 5000
-   */
-  blockTimeout?: number;
+  concurrency?: number;
   /**
    * How often pending entries are checked for retries and abandoned entries,
    * in milliseconds. A retry happens between `retries.delay` and
@@ -67,55 +104,204 @@ export interface RedisStreamsTransportConfig {
    */
   reclaimInterval?: number;
   /**
-   * How long a consumer of a group can stay idle before the other consumers
-   * delete it, in milliseconds. Only consumers without pending entries are
-   * deleted. Must be longer than `blockTimeout`, which is how often a live
-   * consumer shows activity.
-   *
-   * @default 3600000
+   * How long shutdown waits for the entries in flight, in milliseconds. Entries
+   * that are not finished by then stay pending and are retried later. Waits
+   * for all of them when not set.
    */
-  consumerTtl?: number;
+  shutdownTimeout?: number;
 }
 
-const MIN_REDIS_VERSION = [8, 2, 0] as const;
+/** Values of the config with the defaults applied. */
+interface Settings {
+  url: string;
+  group: string;
+  consumer: string;
+  keyPrefix: string;
+  retries: { max: number; delay: number };
+  concurrency: number;
+  reclaimInterval: number;
+  /** How long a read blocks waiting for new entries, in milliseconds. */
+  blockTimeout: number;
+  /**
+   * How long a consumer of a group can stay idle before the other consumers
+   * delete it, in milliseconds.
+   */
+  consumerTtl: number;
+  trim: { maxLength: number; onlyAcked: boolean };
+  shutdownTimeout: number | undefined;
+}
+
+/**
+ * Applies the defaults to the config and checks the values.
+ *
+ * @throws If a value is out of range.
+ */
+function resolveSettings(config: RedisStreamsTransportConfig): Settings {
+  const fail = (option: string, requirement: string): never => {
+    throw new Error(`Invalid Redis Streams option ${option}: ${requirement}`);
+  };
+  const atLeast = (
+    option: string,
+    value: number | undefined,
+    fallback: number,
+    min: number,
+  ): number => {
+    const result = value ?? fallback;
+
+    if (result < min) {
+      fail(option, `must be at least ${min}`);
+    }
+
+    return result;
+  };
+  const positive = <T extends number | undefined>(
+    option: string,
+    value: number | undefined,
+    fallback: T,
+  ): number | T => {
+    const result = value ?? fallback;
+
+    if (result !== undefined && result <= 0) {
+      fail(option, 'must be greater than 0');
+    }
+
+    return result as number | T;
+  };
+
+  // The entries in flight are refreshed every half of the delay
+  const delay = atLeast('retries.delay', config.retries?.delay, 300_000, 20);
+  return {
+    url: config.url,
+    group: config.group,
+    consumer: config.consumer ?? `${hostname()}-${process.pid}`,
+    keyPrefix: config.keyPrefix ?? 'events:',
+    retries: {
+      max: atLeast('retries.max', config.retries?.max, 5, 0),
+      delay,
+    },
+    concurrency: atLeast('concurrency', config.concurrency, 10, 1),
+    reclaimInterval: positive(
+      'reclaimInterval',
+      config.reclaimInterval,
+      Math.max(delay / 4, 1_000),
+    ),
+    // Not configurable. The TTL has to stay longer than the block timeout,
+    // which is how often a live consumer shows activity
+    blockTimeout: 5_000,
+    consumerTtl: 3_600_000,
+    trim: {
+      maxLength: atLeast('trim.maxLength', config.trim?.maxLength, 100, 1),
+      onlyAcked: config.trim?.onlyAcked ?? true,
+    },
+    shutdownTimeout: positive(
+      'shutdownTimeout',
+      config.shutdownTimeout,
+      undefined,
+    ),
+  };
+}
 
 @Injectable()
 export class RedisStreamsTransport
   extends Transport<RedisStreamsTransportConfig>
-  implements OnModuleInit, BeforeApplicationShutdown
+  implements OnModuleInit, OnBusBootstrap, OnBusShutdown
 {
-  private client: RedisClientType | undefined;
-  private readonly consumers: StreamConsumer[] = [];
+  private readonly clients: Clients<'read' | 'command'>;
+  private readonly streams: Streams;
+  private readonly loops: Loops;
+  private readonly settings: Settings;
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
-  public constructor(@Inject(BusConfig) private readonly busConfig: BusConfig) {
+  public constructor(
+    @Inject(TransportConfig) config: RedisStreamsTransportConfig,
+  ) {
     super();
+
+    this.settings = resolveSettings(config);
+    this.clients = new Clients(this.settings.url);
+    this.streams = new Streams(this.settings.concurrency);
+
+    const {
+      group,
+      consumer,
+      keyPrefix,
+      concurrency,
+      reclaimInterval,
+      blockTimeout,
+      consumerTtl,
+    } = this.settings;
+    const { clients, streams } = this;
+    const { max: maxRetries, delay: retriesDelay } = this.settings.retries;
+    const processor = new Processor(clients, {
+      group,
+      keyPrefix,
+      maxRetries,
+      retriesDelay,
+      reclaimInterval,
+    });
+
+    this.loops = new Loops([
+      new ReadLoop(clients, streams, processor, {
+        group,
+        consumer,
+        batchSize: concurrency,
+        blockTimeout,
+      }),
+      new ReclaimLoop(clients, streams, processor, {
+        group,
+        consumer,
+        batchSize: concurrency,
+        retriesDelay,
+        reclaimInterval,
+      }),
+      new RefreshLoop(clients, streams, { group, consumer, retriesDelay }),
+      new StaleConsumersLoop(clients, streams, {
+        group,
+        consumer,
+        consumerTtl,
+      }),
+    ]);
   }
 
   public async onModuleInit(): Promise<void> {
-    this.client = await this.createClient(this.config);
-    await this.getClient().connect();
-
-    await this.assertVersion();
+    await this.clients.get('command');
   }
 
-  public async beforeApplicationShutdown(): Promise<void> {
-    await Promise.all(this.consumers.map((consumer) => consumer.stop()));
+  /** Starts consuming, once all the handlers are registered. */
+  public onBusBootstrap(): void {
+    this.loops.start();
+  }
 
-    // Don't leave unique consumers behind, unless they own entries to retry
-    for (const consumer of this.consumers) {
-      await consumer
-        .removeConsumerIfIdle()
-        .catch((err) =>
-          this.logger.warn(`Failed to remove consumer: ${String(err)}`),
-        );
+  /**
+   * Stops the loops, waits for the entries in flight and removes the consumer
+   * from the groups unless it owns pending entries, then closes the
+   * connections.
+   */
+  public async onBusShutdown(): Promise<void> {
+    await this.loops.onTransportShutdown();
+
+    const drained = await this.streams.drain(this.settings.shutdownTimeout);
+
+    if (!drained) {
+      this.logger.warn(
+        `Shutdown timeout reached with entries still in flight, they stay pending`,
+      );
     }
 
-    await this.getClient().close();
+    // After the drain, so that the consumer doesn't own what was in flight
+    for (const { name } of this.streams.all()) {
+      await this.removeConsumerIfIdle(name).catch((err) =>
+        this.logger.warn(
+          `Failed to remove consumer from ${name}: ${String(err)}`,
+        ),
+      );
+    }
+
+    await this.clients.destroy();
   }
 
   public async assertHealthy(): Promise<void> {
-    await this.getClient().ping();
+    await (await this.clients.get('command')).ping();
   }
 
   public publish(
@@ -158,11 +344,17 @@ export class RedisStreamsTransport
           },
         ];
 
-    for (const subscription of subscriptions) {
-      await this.subscribeEvent(
-        subscription.event,
-        subscription.handler,
-        subscription.callback,
+    for (const { event, handler: handlerName, callback: cb } of subscriptions) {
+      const stream = this.getStream(event.name);
+
+      if (!this.streams.has(stream)) {
+        await this.createGroup(stream);
+      }
+
+      this.streams.register(stream, event, new Handler(handlerName, cb));
+
+      this.logger.log(
+        `Subscribed to event ${event.name} (handler: ${handlerName})`,
       );
     }
   }
@@ -175,9 +367,11 @@ export class RedisStreamsTransport
     const json = JSON.stringify(payload);
 
     this.logger.log(`Publishing event ${payload.name}`);
-    this.logger.verbose(`Event ${payload.name} payload: ${json}`);
+    this.logger.verbose(`Event ${payload.name} payload:`, payload);
 
-    await this.getClient().xAdd(
+    const client = await this.clients.get('command');
+
+    await client.xAdd(
       this.getStream(payload.name),
       '*',
       { id: payload.id, payload: json },
@@ -185,8 +379,8 @@ export class RedisStreamsTransport
         TRIM: {
           strategy: 'MAXLEN',
           strategyModifier: '~',
-          threshold: this.config.maxLength ?? 1_000,
-          policy: 'ACKED',
+          threshold: this.settings.trim.maxLength,
+          policy: this.settings.trim.onlyAcked ? 'ACKED' : 'KEEPREF',
         },
       },
     );
@@ -194,15 +388,27 @@ export class RedisStreamsTransport
     this.logger.debug(`Event ${payload.name} added to the stream`);
   }
 
-  private async subscribeEvent<
-    C extends EventConstructor<any>,
-    E extends InstanceType<C> = InstanceType<C>,
-  >(event: C, handlerName: string, callback: EventCallback<E>): Promise<void> {
-    const stream = this.getStream(event.name);
-    const group = `${this.busConfig.group}.${handlerName}`;
+  /**
+   * Deletes the consumer from the group unless it owns pending entries,
+   * which still have to be retried.
+   */
+  private async removeConsumerIfIdle(stream: string): Promise<void> {
+    const { group, consumer } = this.settings;
+    const client = await this.clients.get('command');
+    const owned = await client.xPendingRange(stream, group, '-', '+', 1, {
+      consumer,
+    });
 
+    if (owned.length === 0) {
+      await client.xGroupDelConsumer(stream, group, consumer);
+    }
+  }
+
+  private async createGroup(stream: string): Promise<void> {
     try {
-      await this.getClient().xGroupCreate(stream, group, '$', {
+      await (
+        await this.clients.get('command')
+      ).xGroupCreate(stream, this.settings.group, '$', {
         MKSTREAM: true,
       });
     } catch (err) {
@@ -210,85 +416,9 @@ export class RedisStreamsTransport
         throw err;
       }
     }
-
-    // XREADGROUP BLOCK occupies the connection, so each consumer has its own
-    const blockingClient = await this.createClient(this.config);
-    await blockingClient.connect();
-
-    const consumer = new StreamConsumer({
-      stream,
-      group,
-      consumer: this.getConsumerName(),
-      eventName: event.name,
-      client: this.getClient(),
-      blockingClient,
-      retries: this.busConfig.retries,
-      batchSize: this.config.batchSize ?? 10,
-      blockTimeout: this.config.blockTimeout ?? 5_000,
-      reclaimInterval:
-        this.config.reclaimInterval ??
-        Math.max(this.busConfig.retries.delay / 4, 1_000),
-      consumerTtl: this.config.consumerTtl ?? 3_600_000,
-      logger: this.logger,
-      handle: (payload) => callback(parseEventPayload(event, payload)),
-    });
-
-    this.consumers.push(consumer);
-    consumer.start();
-
-    this.logger.log(
-      `Subscribed to event ${event.name} (handler: ${handlerName})`,
-    );
-  }
-
-  private async assertVersion(): Promise<void> {
-    const info = await this.getClient().info('server');
-    const match = /redis_version:(\d+)\.(\d+)\.(\d+)/.exec(info);
-    const version = match?.slice(1).map(Number) ?? [];
-    const supported = MIN_REDIS_VERSION.reduce<boolean | undefined>(
-      (result, min, i) =>
-        result ?? ((version[i] ?? 0) === min ? undefined : version[i]! > min),
-      undefined,
-    );
-
-    if (!match || supported === false) {
-      await this.getClient().close();
-
-      throw new Error(
-        `${this.constructor.name} requires Redis >= ${MIN_REDIS_VERSION.join('.')}, got ${version.join('.') || 'unknown version'}`,
-      );
-    }
-  }
-
-  private getClient(): RedisClientType {
-    if (!this.client) {
-      throw new Error('Redis client is not initialized');
-    }
-
-    return this.client;
-  }
-
-  private async createClient(
-    config: RedisStreamsTransportConfig,
-  ): Promise<RedisClientType> {
-    const { createClient } = await import('redis');
-    const client = createClient({ url: config.url });
-
-    client.on('error', (err: unknown) => {
-      this.logger.error(
-        `Redis connection error: ${err instanceof Error ? err.message : String(err)}`,
-        err instanceof Error ? err.stack : undefined,
-      );
-    });
-
-    return client;
   }
 
   private getStream(eventName: string): string {
-    return `${this.config.streamPrefix ?? 'events:'}${eventName}`;
-  }
-
-  private getConsumerName(): string {
-    return this.config.consumer ?? hostname();
+    return `${this.settings.keyPrefix}${eventName}`;
   }
 }

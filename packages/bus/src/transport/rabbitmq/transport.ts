@@ -1,11 +1,10 @@
 import {
-  Inject,
   Injectable,
   Logger,
   BeforeApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
-import { type EventConstructor, BusConfig } from '../../types.js';
+import { type EventConstructor } from '../../types.js';
 import { Transport, type TransportPublishOptions } from '../transport.js';
 import {
   type ChannelModel,
@@ -22,6 +21,22 @@ import {
 
 export interface RabbitmqTransportConfig {
   url: string;
+  /** Consumer group name, used as a prefix for queue names. */
+  group: string;
+  retries?: {
+    /**
+     * Maximum retries before a message is dropped.
+     *
+     * @default 5
+     */
+    max?: number;
+    /**
+     * Delay between retries, in milliseconds.
+     *
+     * @default 5000
+     */
+    delay?: number;
+  };
 }
 
 @Injectable()
@@ -34,10 +49,6 @@ export class RabbitmqTransport
   private connection?: ChannelModel;
   private channel: ConfirmChannel | undefined;
   private readonly logger = new Logger(RabbitmqTransport.name);
-
-  public constructor(@Inject(BusConfig) private readonly busConfig: BusConfig) {
-    super();
-  }
 
   public async beforeApplicationShutdown(): Promise<void> {
     await this.getConnection().close();
@@ -154,7 +165,7 @@ export class RabbitmqTransport
             err instanceof Error ? err.stack : undefined,
           );
 
-          if (retryCount >= this.busConfig.retries.max) {
+          if (retryCount >= this.getRetries().max) {
             this.logger.error(
               `Event ${event.name} failed permanently after ${retryCount} retries: ${String(err)}`,
               err instanceof Error ? err.stack : undefined,
@@ -216,7 +227,7 @@ export class RabbitmqTransport
     const channel = this.getChannel();
 
     const routingKey = eventName;
-    const queueName = `${this.busConfig.group}.${handlerName}.${eventName}`;
+    const queueName = `${this.config.group}.${handlerName}.${eventName}`;
     const delayQueueName = `${queueName}.delay`;
 
     const queue = await channel.assertQueue(queueName, {
@@ -237,7 +248,7 @@ export class RabbitmqTransport
       arguments: {
         'x-dead-letter-exchange': this.exchange,
         'x-dead-letter-routing-key': queueName,
-        'x-message-ttl': this.busConfig.retries.delay,
+        'x-message-ttl': this.getRetries().delay,
       },
     });
 
@@ -248,6 +259,13 @@ export class RabbitmqTransport
     );
 
     return queue.queue;
+  }
+
+  private getRetries(): { max: number; delay: number } {
+    return {
+      max: this.config.retries?.max ?? 5,
+      delay: this.config.retries?.delay ?? 5_000,
+    };
   }
 
   private getRetryCount(message: ConsumeMessage): number {
