@@ -22,6 +22,7 @@ updates:
       semver-major-days: 14
     commit-message:
       prefix: build
+      prefix-development: chore
       include: scope
     ignore:
       # Typings must match the minimum supported Node (engines >=24).
