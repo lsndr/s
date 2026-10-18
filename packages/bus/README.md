@@ -183,14 +183,25 @@ import { Health } from '@lsndr/bus';
 await this.health.assertHealthy(); // throws if the broker is unreachable
 ```
 
-### Transport lifecycle
+### Lifecycle hooks
 
-A custom `Transport` can implement two optional hooks, which the bus calls when they are present:
+The bus calls three optional hooks on **every provider of the bus module**: the transport (and the one an `Outbox` relays to), and the classes you give in the `providers` option. A provider implements the ones it needs:
 
 ```typescript
-import { Transport, type OnBusBootstrap, type OnBusShutdown } from '@lsndr/bus';
+import {
+  Transport,
+  type OnBusInit,
+  type OnBusBootstrap,
+  type OnBusShutdown,
+} from '@lsndr/bus';
 
-class MyTransport extends Transport implements OnBusBootstrap, OnBusShutdown {
+class MyTransport
+  extends Transport
+  implements OnBusInit, OnBusBootstrap, OnBusShutdown
+{
+  // Called when the application bootstraps, before the handlers are subscribed
+  async onBusInit() {}
+
   // Called once all the handlers are subscribed
   onBusBootstrap() {}
 
@@ -199,7 +210,9 @@ class MyTransport extends Transport implements OnBusBootstrap, OnBusShutdown {
 }
 ```
 
-The Redis Streams transport starts consuming in `onBusBootstrap`, so calling `subscribe` yourself, without the bus, needs `onBusBootstrap()` afterwards to start reading. Its shutdown logic runs in `onBusShutdown`. `Outbox` forwards both hooks to its inner transport.
+They are called one provider after another, in the order the providers are registered (the transport first, then yours), and the bus waits for each. `onBusShutdown` goes in reverse, and a provider that fails to shut down is logged without keeping the others from it. Providers with a request or transient scope have no single instance, so they are skipped, and so are providers of other modules.
+
+The Redis Streams transport starts consuming in `onBusBootstrap`, so calling `subscribe` yourself, without the bus, needs `onBusBootstrap()` afterwards to start reading. Its shutdown logic runs in `onBusShutdown`.
 
 ## Outbox
 

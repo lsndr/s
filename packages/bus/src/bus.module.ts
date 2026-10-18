@@ -6,7 +6,7 @@ import {
   type OnApplicationBootstrap,
   type Provider,
 } from '@nestjs/common';
-import { DiscoveryModule } from '@nestjs/core';
+import { DiscoveryModule, DiscoveryService } from '@nestjs/core';
 import { HandlerDiscoveryService } from './discovery/handler-discovery.service.js';
 import { HandlerInvoker } from './discovery/handler-invoker.js';
 import {
@@ -23,7 +23,11 @@ import {
 import { Dispatcher } from './transport/dispatcher.js';
 import { Subscriber } from './transport/subscriber.js';
 import { Health } from './transport/health.js';
-import { hasOnBusBootstrap, hasOnBusShutdown } from './lifecycle.js';
+import {
+  hasOnBusBootstrap,
+  hasOnBusInit,
+  hasOnBusShutdown,
+} from './lifecycle.js';
 import { GlobalEventHandlerMiddlewares } from './middleware/middleware.js';
 
 export { type BusTransport };
@@ -42,7 +46,8 @@ export class BusModule
   public constructor(
     @Inject(HandlerDiscoveryService)
     private readonly discovery: HandlerDiscoveryService,
-    @Inject(Transport) private readonly transport: Transport,
+    @Inject(DiscoveryService)
+    private readonly discoveryService: DiscoveryService,
   ) {}
 
   public static forRoot<T extends Transport>(
@@ -113,16 +118,74 @@ export class BusModule
   }
 
   public async onApplicationBootstrap(): Promise<void> {
+    const providers = this.findProviders();
+
+    for (const provider of providers) {
+      if (hasOnBusInit(provider)) {
+        await provider.onBusInit();
+      }
+    }
+
     await this.discovery.subscribeHandlers();
 
-    if (hasOnBusBootstrap(this.transport)) {
-      await this.transport.onBusBootstrap();
+    for (const provider of providers) {
+      if (hasOnBusBootstrap(provider)) {
+        await provider.onBusBootstrap();
+      }
     }
   }
 
   public async beforeApplicationShutdown(): Promise<void> {
-    if (hasOnBusShutdown(this.transport)) {
-      await this.transport.onBusShutdown();
+    const errors: unknown[] = [];
+
+    // Reverse order, so that what was registered first is shut down last
+    for (const provider of this.findProviders().reverse()) {
+      if (!hasOnBusShutdown(provider)) {
+        continue;
+      }
+
+      // One failing does not keep the others from shutting down
+      try {
+        await provider.onBusShutdown();
+      } catch (error) {
+        errors.push(error);
+      }
     }
+
+    if (errors.length > 0) {
+      throw errors.length === 1
+        ? errors[0]
+        : new AggregateError(errors, 'Bus shutdown hooks failed');
+    }
+  }
+
+  /**
+   * The providers of the bus module, in the order they are registered. The
+   * ones with a request or transient scope have no single instance, and are
+   * left out, like the aliases (`useExisting`), which stand for another one.
+   */
+  private findProviders(): object[] {
+    const found = new Set<object>();
+
+    for (const wrapper of this.discoveryService.getProviders({
+      include: [BusModule],
+    })) {
+      const { instance } = wrapper;
+
+      if (
+        wrapper.isAlias ||
+        wrapper.isTransient ||
+        !wrapper.isDependencyTreeStatic() ||
+        typeof instance !== 'object' ||
+        instance === null ||
+        instance === this
+      ) {
+        continue;
+      }
+
+      found.add(instance);
+    }
+
+    return [...found];
   }
 }

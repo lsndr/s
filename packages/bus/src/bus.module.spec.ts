@@ -1,4 +1,4 @@
-import { Inject, Injectable, Scope, type Type } from '@nestjs/common';
+import { Inject, Injectable, Logger, Scope, type Type } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +16,11 @@ import {
 } from './transport/subscriber.js';
 import { type EventConstructor, EventPayload } from './types.js';
 import { type EventHandlerMiddleware } from './middleware/middleware.js';
+import {
+  type OnBusBootstrap,
+  type OnBusInit,
+  type OnBusShutdown,
+} from './lifecycle.js';
 
 class TestEvent {
   public value: string;
@@ -202,6 +207,132 @@ describe('BusModule', () => {
       await module.close();
 
       expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+    });
+
+    describe('of the providers', () => {
+      const calls: string[] = [];
+
+      /** Records its hooks, and can be told to fail on shutdown. */
+      abstract class Recorder
+        implements OnBusInit, OnBusBootstrap, OnBusShutdown
+      {
+        public static failOnShutdown = false;
+
+        public onBusInit(): void {
+          calls.push(`${this.constructor.name}.init`);
+        }
+
+        public onBusBootstrap(): void {
+          calls.push(`${this.constructor.name}.bootstrap`);
+        }
+
+        public onBusShutdown(): void {
+          calls.push(`${this.constructor.name}.shutdown`);
+
+          if (Recorder.failOnShutdown && this.constructor.name === 'First') {
+            throw new Error('boom');
+          }
+        }
+      }
+
+      @Injectable()
+      class First extends Recorder {}
+
+      @Injectable()
+      class Second extends Recorder {}
+
+      @Injectable({ scope: Scope.REQUEST })
+      class Scoped extends Recorder {}
+
+      @Injectable()
+      class Outside extends Recorder {}
+
+      afterEach(() => {
+        calls.length = 0;
+        Recorder.failOnShutdown = false;
+      });
+
+      it('calls them on every provider of the bus module, around subscribing the handlers', async () => {
+        MockTransport.subscribe.mockImplementationOnce(() => {
+          calls.push('subscribe');
+
+          return Promise.resolve();
+        });
+
+        const module = await Test.createTestingModule({
+          imports: [
+            BusModule.forRoot({
+              transport: { provider: MockTransport, config: {} },
+              providers: [First, Second, TestHandler],
+            }),
+          ],
+        }).compile();
+
+        await module.init();
+
+        expect(calls).toEqual([
+          'First.init',
+          'Second.init',
+          'subscribe',
+          'First.bootstrap',
+          'Second.bootstrap',
+        ]);
+
+        calls.length = 0;
+        await module.close();
+
+        // In reverse, so that what is registered first is shut down last
+        expect(calls).toEqual(['Second.shutdown', 'First.shutdown']);
+      });
+
+      it('leaves out the providers of other modules and the ones that are scoped', async () => {
+        const module = await Test.createTestingModule({
+          imports: [
+            BusModule.forRoot({
+              transport: { provider: MockTransport, config: {} },
+              providers: [First, Scoped],
+            }),
+          ],
+          providers: [Outside],
+        }).compile();
+
+        await module.init();
+        await module.close();
+
+        expect(new Set(calls)).toEqual(
+          new Set(['First.init', 'First.bootstrap', 'First.shutdown']),
+        );
+      });
+
+      it('shuts the others down when a provider fails to', async () => {
+        Recorder.failOnShutdown = true;
+
+        const module = await Test.createTestingModule({
+          imports: [
+            BusModule.forRoot({
+              transport: { provider: MockTransport, config: {} },
+              providers: [First, Second],
+            }),
+          ],
+        }).compile();
+
+        await module.init();
+        calls.length = 0;
+
+        // Nest logs what a shutdown hook throws
+        const logged = vi.spyOn(Logger, 'error').mockReturnValue();
+
+        await module.close();
+
+        expect(calls).toEqual(['Second.shutdown', 'First.shutdown']);
+        expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+        expect(logged).toHaveBeenCalledWith(
+          expect.objectContaining({ message: 'boom' }),
+          expect.any(String),
+        );
+
+        logged.mockRestore();
+      });
     });
 
     it('works with a transport without the hooks', async () => {

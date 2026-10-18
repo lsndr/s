@@ -10,12 +10,6 @@ import { type PublishEvent } from '../dispatcher.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type EventConstructor } from '../../types.js';
 import {
-  hasOnBusBootstrap,
-  hasOnBusShutdown,
-  type OnBusBootstrap,
-  type OnBusShutdown,
-} from '../../lifecycle.js';
-import {
   type BusTransport,
   Transport,
   type TransportPublishOptions,
@@ -53,18 +47,15 @@ export const OutboxConfigToken = Symbol('OutboxConfig');
  * configured transport. Subscriptions and health checks go straight to that
  * transport.
  *
- * The bus lifecycle hooks are forwarded to the configured transport.
+ * The transport is a provider of the bus module, so the bus calls its
+ * lifecycle hooks itself.
  *
- * Subclasses that override `onApplicationBootstrap`, `onModuleDestroy`,
- * `onBusBootstrap` or `onBusShutdown` must call `super`.
+ * Subclasses that override `onApplicationBootstrap` or `onModuleDestroy` must
+ * call `super`.
  */
 export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   extends Transport<C>
-  implements
-    OnApplicationBootstrap,
-    OnModuleDestroy,
-    OnBusBootstrap,
-    OnBusShutdown
+  implements OnApplicationBootstrap, OnModuleDestroy
 {
   @Inject(OutboxConfigToken)
   declare public config: C;
@@ -105,18 +96,6 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   public async onModuleDestroy(): Promise<void> {
     this.abortController?.abort();
     await this.loop;
-  }
-
-  public async onBusBootstrap(): Promise<void> {
-    if (hasOnBusBootstrap(this.transport)) {
-      await this.transport.onBusBootstrap();
-    }
-  }
-
-  public async onBusShutdown(): Promise<void> {
-    if (hasOnBusShutdown(this.transport)) {
-      await this.transport.onBusShutdown();
-    }
   }
 
   public assertHealthy(): Promise<void> {
