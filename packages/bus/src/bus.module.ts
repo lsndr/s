@@ -14,8 +14,12 @@ import {
   Transport,
   TransportConfig,
 } from './transport/transport.js';
-import { Outbox, type OutboxConfig } from './transport/outbox/outbox.js';
-import { OutboxTransportModule } from './transport/outbox/outbox-transport.module.js';
+import {
+  Outbox,
+  type OutboxConfig,
+  OutboxConfigToken,
+  OutboxTransport,
+} from './transport/outbox/outbox.js';
 import { Dispatcher } from './transport/dispatcher.js';
 import { Subscriber } from './transport/subscriber.js';
 import { Health } from './transport/health.js';
@@ -48,22 +52,13 @@ export class BusModule
     return {
       global: true,
       module: BusModule,
-      imports: [
-        DiscoveryModule,
-        ...(this.isOutbox(options.transport)
-          ? [OutboxTransportModule.register(options.transport.config.transport)]
-          : []),
-        ...(options.imports ?? []),
-      ],
+      imports: [DiscoveryModule, ...(options.imports ?? [])],
       providers: [
         {
           provide: GlobalEventHandlerMiddlewares,
           useValue: middlewares,
         },
-        {
-          provide: TransportConfig,
-          useValue: options.transport.config,
-        },
+        ...this.transportProviders(options.transport),
         options.transport.provider,
         {
           provide: Dispatcher,
@@ -87,6 +82,28 @@ export class BusModule
       ],
       exports: [Dispatcher, Health],
     };
+  }
+
+  /**
+   * Provides the config of the transport, and, for an outbox, the transport it
+   * relays to. Both read their config from `TransportConfig`, so the outbox
+   * reads its own from `OutboxConfigToken` instead.
+   */
+  private static transportProviders(
+    transport: BusTransport<Transport>,
+  ): Provider[] {
+    if (!this.isOutbox(transport)) {
+      return [{ provide: TransportConfig, useValue: transport.config }];
+    }
+
+    const inner = transport.config.transport;
+
+    return [
+      { provide: OutboxConfigToken, useValue: transport.config },
+      { provide: TransportConfig, useValue: inner.config },
+      inner.provider,
+      { provide: OutboxTransport, useExisting: inner.provider },
+    ];
   }
 
   private static isOutbox(

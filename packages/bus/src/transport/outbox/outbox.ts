@@ -40,6 +40,12 @@ type InferTransport<C> = C extends OutboxConfig<infer T> ? T : unknown;
 export const OutboxTransport = Symbol('OutboxTransport');
 
 /**
+ * Where an outbox gets its config from. Not `TransportConfig`, which the
+ * transport it relays to reads its config from.
+ */
+export const OutboxConfigToken = Symbol('OutboxConfig');
+
+/**
  * Base class of transactional outboxes.
  *
  * `publish` only stores the event with {@link Outbox.save}. A background loop
@@ -60,6 +66,9 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
     OnBusBootstrap,
     OnBusShutdown
 {
+  @Inject(OutboxConfigToken)
+  declare public config: C;
+
   @Inject(OutboxTransport)
   protected transport!: InferTransport<C>;
 
