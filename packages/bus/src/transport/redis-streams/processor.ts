@@ -1,4 +1,8 @@
 import { Logger } from '@nestjs/common';
+import {
+  noopTransportTelemetry,
+  type TransportTelemetry,
+} from '../../telemetry/telemetry.js';
 import { parseEventPayload } from '../event-dto.js';
 import { type Clients } from './clients.js';
 import { type Stream } from './streams.js';
@@ -25,6 +29,8 @@ export class Processor {
   public constructor(
     private readonly clients: Clients<'command'>,
     private readonly options: ProcessorOptions,
+    private readonly telemetry: () => TransportTelemetry = () =>
+      noopTransportTelemetry,
   ) {}
 
   /**
@@ -66,7 +72,10 @@ export class Processor {
       const results = await Promise.all(
         pending.map(async ({ name, callback }) => {
           try {
-            await callback(parseEventPayload(event, payload));
+            await callback(parseEventPayload(event, payload), {
+              attempt,
+              attributes: { 'bus.redis_streams.entry_id': id },
+            });
           } catch (err) {
             return { name, error: err };
           }
@@ -95,7 +104,23 @@ export class Processor {
         );
       }
 
-      if (failed.length > 0 && retryCount < maxRetries) {
+      const retrying = failed.length > 0 && retryCount < maxRetries;
+
+      for (const { name } of failed) {
+        this.telemetry()
+          .counter(retrying ? 'retries' : 'dropped', {
+            description: retrying
+              ? 'Messages scheduled to be retried after a failure'
+              : 'Messages dropped after failing every retry',
+            unit: '{message}',
+          })
+          .add(1, {
+            'messaging.destination.name': stream.name,
+            'messaging.destination.subscription.name': name,
+          });
+      }
+
+      if (retrying) {
         // stays pending and is retried by the reclaim loop
         return;
       }
@@ -107,7 +132,14 @@ export class Processor {
         );
       }
 
-      await client.multi().xAck(stream.name, group, id).del(doneKey).exec();
+      await this.telemetry().span(
+        {
+          name: 'ack',
+          operation: { name: 'ack', type: 'settle' },
+          destination: stream.name,
+        },
+        () => client.multi().xAck(stream.name, group, id).del(doneKey).exec(),
+      );
 
       if (failed.length === 0) {
         this.logger.log(`Event ${eventName} (${id}) handled successfully`);

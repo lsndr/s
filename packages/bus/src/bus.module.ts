@@ -4,6 +4,7 @@ import {
   Inject,
   Module,
   type OnApplicationBootstrap,
+  Optional,
   type Provider,
 } from '@nestjs/common';
 import { DiscoveryModule, DiscoveryService } from '@nestjs/core';
@@ -29,12 +30,18 @@ import {
   hasOnBusShutdown,
 } from './lifecycle.js';
 import { GlobalEventHandlerMiddlewares } from './middleware/middleware.js';
+import { type BusTelemetry, Telemetry } from './telemetry/telemetry.js';
 
 export { type BusTransport };
 
 export interface BusModuleOptions<T extends Transport> {
   middlewares?: GlobalEventHandlerMiddlewares;
   transport: BusTransport<T>;
+  /**
+   * Reports spans and metrics of the bus, e.g. `new BusOtel()`. Nothing is
+   * reported by default.
+   */
+  telemetry?: BusTelemetry;
   imports?: any[];
   providers?: Provider[];
 }
@@ -46,14 +53,23 @@ export class BusModule
   public constructor(
     @Inject(HandlerDiscoveryService)
     private readonly discovery: HandlerDiscoveryService,
+    @Inject(Transport) private readonly transport: Transport,
     @Inject(DiscoveryService)
     private readonly discoveryService: DiscoveryService,
+    @Optional()
+    @Inject(OutboxTransport)
+    private readonly relayedTo?: Transport,
+    @Optional()
+    @Inject(Telemetry)
+    private readonly telemetry?: BusTelemetry,
   ) {}
 
   public static forRoot<T extends Transport>(
     options: BusModuleOptions<T>,
   ): DynamicModule {
     const middlewares = options.middlewares ?? [];
+    const { telemetry } = options;
+
     return {
       global: true,
       module: BusModule,
@@ -63,6 +79,14 @@ export class BusModule
           provide: GlobalEventHandlerMiddlewares,
           useValue: middlewares,
         },
+        ...(telemetry
+          ? [
+              {
+                provide: Telemetry,
+                useValue: telemetry,
+              },
+            ]
+          : []),
         ...this.transportProviders(options.transport),
         options.transport.provider,
         {
@@ -124,6 +148,12 @@ export class BusModule
       if (hasOnBusInit(provider)) {
         await provider.onBusInit();
       }
+    }
+
+    if (this.telemetry) {
+      // The outbox first, then the transport it relays to
+      this.transport.instrument(this.telemetry);
+      this.relayedTo?.instrument(this.telemetry);
     }
 
     await this.discovery.subscribeHandlers();

@@ -1,6 +1,6 @@
-import { type EventPayload } from '../../types.js';
+import { type EventCallback } from '../subscriber.js';
 
-export type Callback = (event: EventPayload<any>) => void | Promise<void>;
+export type Callback = EventCallback<any>;
 
 /** A named callback of a stream. The name is what is recorded once it succeeds. */
 export class Handler {

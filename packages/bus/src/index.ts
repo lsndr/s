@@ -32,3 +32,22 @@ export {
 } from './lifecycle.js';
 export { type EventPayload } from './types.js';
 export { type EventHandlerMiddleware } from './middleware/middleware.js';
+export { BusOtel, type BusOtelOptions } from './telemetry/otel/bus-otel.js';
+export {
+  Telemetry,
+  type Attributes,
+  type BusTelemetry,
+  type ContextCarrier,
+  type AttributeValue,
+  type Counter,
+  type Delivery,
+  type Histogram,
+  type InstrumentOptions,
+  type Observation,
+  type ProcessOperation,
+  type PublishMessage,
+  type PublishOperation,
+  type TelemetryDescriptor,
+  type TransportSpanOptions,
+  type TransportTelemetry,
+} from './telemetry/telemetry.js';

@@ -1,7 +1,10 @@
 import { type EventPayload, type EventConstructor } from '../types.js';
+import { type Delivery } from '../telemetry/telemetry.js';
 
 export type EventCallback<E extends object> = (
   event: EventPayload<E>,
+  /** What the transport knows about the delivery, for the telemetry. */
+  delivery?: Delivery,
 ) => void | Promise<void>;
 
 export interface Subscription<

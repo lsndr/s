@@ -10,7 +10,7 @@ The package is published to GitHub Packages and requires Node.js >= 24.
 npm install @lsndr/bus
 ```
 
-Peer dependencies: `@nestjs/common`, `@nestjs/core`, `reflect-metadata`. To use the built-in RabbitMQ transport, also install the optional peers:
+Peer dependencies: `@nestjs/common`, `@nestjs/core`, `reflect-metadata`. For [telemetry](#telemetry), also install `@opentelemetry/api` (and `@opentelemetry/api-logs` to report exceptions). To use the built-in RabbitMQ transport, also install the optional peers:
 
 ```bash
 npm install amqplib class-transformer
@@ -185,7 +185,7 @@ await this.health.assertHealthy(); // throws if the broker is unreachable
 
 ### Lifecycle hooks
 
-The bus calls three optional hooks on **every provider of the bus module**: the transport (and the one an `Outbox` relays to), and the classes you give in the `providers` option. A provider implements the ones it needs:
+The bus calls three optional hooks on **every provider of the bus module**: the transport (and the one an `Outbox` relays to), the telemetry, and the classes you give in the `providers` option. A provider implements the ones it needs:
 
 ```typescript
 import {
@@ -210,9 +210,134 @@ class MyTransport
 }
 ```
 
-They are called one provider after another, in the order the providers are registered (the transport first, then yours), and the bus waits for each. `onBusShutdown` goes in reverse, and a provider that fails to shut down is logged without keeping the others from it. Providers with a request or transient scope have no single instance, so they are skipped, and so are providers of other modules.
+They are called one provider after another, in the order the providers are registered (the transport and the telemetry first, then yours), and the bus waits for each. `onBusShutdown` goes in reverse, and a provider that fails to shut down is logged without keeping the others from it. Providers with a request or transient scope have no single instance, so they are skipped, and so are providers of other modules.
 
 The Redis Streams transport starts consuming in `onBusBootstrap`, so calling `subscribe` yourself, without the bus, needs `onBusBootstrap()` afterwards to start reading. Its shutdown logic runs in `onBusShutdown`.
+
+## Telemetry
+
+The bus reports spans, metrics and exceptions that follow the OpenTelemetry [semantic conventions for messaging](https://opentelemetry.io/docs/specs/semconv/messaging/). `BusOtel` does it with OpenTelemetry, which it loads on startup, so the packages are only needed when it is used:
+
+```bash
+npm install @opentelemetry/api @opentelemetry/api-logs
+```
+
+```typescript
+import { BusModule, BusOtel } from '@lsndr/bus';
+
+BusModule.forRoot({
+  transport: {/* ... */},
+  telemetry: new BusOtel(),
+});
+```
+
+Nothing is reported without the `telemetry` option. `BusOtel` takes the global tracer, meter and logger providers and propagator, so set up the OpenTelemetry SDK as usual. Pass `tracerProvider`, `meterProvider`, `loggerProvider` or `propagator` to use others. If the types of those options are not wanted, enable `skipLibCheck`.
+
+### What is reported
+
+The following is reported for every transport, the built-in ones and custom ones.
+
+| What                                                                    | Where                                                                                                                                                                                                                              |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `send {destination}` span                                               | `Dispatcher.publish`. `PRODUCER` for a single message, `CLIENT` for a batch, where every message also gets a `create` span, and for messages that come from an outbox.                                                             |
+| `create {destination}` span                                             | Each message a `Outbox` stores. Its context is stored with the message.                                                                                                                                                            |
+| `process {destination}` span                                            | Each call of a handler (`CONSUMER`), including its middlewares.                                                                                                                                                                    |
+| `messaging.client.operation.duration`, `messaging.client.sent.messages` | Publishing.                                                                                                                                                                                                                        |
+| `messaging.process.duration`, `messaging.client.consumed.messages`      | Handling.                                                                                                                                                                                                                          |
+| `messaging.send.exception`, `messaging.process.exception` log events    | A failed publication (`WARN`) or handler (`ERROR`). Needs `@opentelemetry/api-logs`, otherwise a warning is logged once on startup and they are skipped. The span of a failure has the `ERROR` status and `error.type` either way. |
+
+A message carries the context of the span that created it in `EventPayload.context`. A `process` span is **not** a child of the publisher's span: as the conventions recommend by default, it is a child of whatever span is active when the handler runs (none, usually), and has a link to the creation context. Follow the link to get from a handler to the publication.
+
+The RabbitMQ and Redis Streams transports add what is specific to them:
+
+- RabbitMQ: `messaging.system` is `rabbitmq`, the destination is `{exchange}:{routing key}` (and `:{queue}` when consuming), with `messaging.rabbitmq.destination.routing_key` and `messaging.rabbitmq.message.delivery_tag`. Acks and nacks are `settle` spans.
+- Redis Streams: `messaging.system` is `redis` (it is not a well-known value), the destination is the stream. Acks are `settle` spans. `bus.redis_streams.inflight` (gauge), `bus.redis_streams.reclaimed` and `bus.redis_streams.stale_consumers.removed` (counters).
+- Both: `bus.retries` and `bus.dropped` count messages scheduled for another attempt and messages given up on, per destination and handler. `bus.delivery.attempt` is an attribute of `process` spans.
+- `Outbox`: `bus.outbox.relay.duration`, `bus.outbox.relayed` and `bus.outbox.relay.failures`. The relay sends with `CLIENT` `send` spans that link to the `create` spans.
+
+The `bus.` prefix of the instruments that aren't part of the conventions is the `namespace` option of `BusOtel`.
+
+### Outbox
+
+An outbox has to store `OutboxRecord.context` and give it back in `relay`, which `dispatch` passes on, so that the trace continues after the relay. Records stored without it work, they just start a new trace.
+
+### Custom telemetry
+
+Implement `BusTelemetry` to report to something else. `publish` and `process` wrap the operations, and `transport` gives the transports what they report their own details through. `publish` and `process` are optional: what a telemetry leaves out is not instrumented.
+
+```typescript
+import { type BusTelemetry, type OnBusInit } from '@lsndr/bus';
+
+class StatsdTelemetry implements BusTelemetry, OnBusInit {
+  // Optional: called, and awaited, when the application bootstraps, before
+  // the transports are instrumented and the handlers subscribed
+  async onBusInit() {}
+
+  async publish(operation, fn) {
+    // operation.type is 'send' or 'create'. fn receives the context to send
+    // along with each message, in order. Return it unchanged if you have none.
+    const start = performance.now();
+
+    try {
+      return await fn(operation.messages.map((m) => m.context ?? {}));
+    } finally {
+      statsd.timing('publish', performance.now() - start);
+    }
+  }
+
+  process(operation, fn) {
+    return fn();
+  }
+
+  transport(descriptor) {
+    return {
+      span: (options, fn) => fn(),
+      counter: (name) => ({
+        add: (value, attributes) => statsd.increment(name, value),
+      }),
+      histogram: (name) => ({ record: (value) => statsd.timing(name, value) }),
+      gauge: () => undefined,
+    };
+  }
+}
+```
+
+### Telemetry of a custom transport
+
+Without any change a transport is reported as `messaging.system = <class name>` with no destination. Override `getTelemetryDescriptor` to describe it, and pass what you know about a delivery as the second argument of the callback:
+
+```typescript
+class NatsTransport extends Transport<NatsConfig> {
+  public override getTelemetryDescriptor(): TelemetryDescriptor {
+    return {
+      system: 'nats',
+      destination: (eventName) => `events.${eventName}`,
+      consumerGroup: this.config.group,
+      server: { address: 'nats.local', port: 4222 },
+    };
+  }
+
+  private async deliver(message, callback) {
+    await callback(payload, {
+      attempt: message.redeliveryCount + 1,
+      attributes: { 'messaging.nats.sequence': message.seq },
+    });
+  }
+
+  private async onRetry() {
+    // Names of instruments are relative, BusOtel adds its namespace
+    this.telemetry.counter('retries').add(1);
+  }
+}
+```
+
+`this.telemetry` also has `span`, `histogram` and `gauge`, and does nothing when the bus has no telemetry. `getTelemetryDescriptor` is called after the transport is created, so `this.config` is available.
+
+The telemetry is set up, and the transports are instrumented, when the application bootstraps (`onApplicationBootstrap` of the bus), just before the handlers are subscribed. Events published earlier, for example from an `onModuleInit` of your own, are published but not reported.
+
+Publishing and handling are reported by the transport itself: when the bus has telemetry, it calls `instrument(telemetry)` on every transport it provides. That replaces `publish` and `subscribe` with versions that call `telemetry.publish` and `telemetry.process`, so calling them directly is reported too. A transport you create yourself, outside the bus module, is not.
+
+Override `instrument` to report a transport differently. `Outbox` does: it only reports `publish`, as the creation of the events, and leaves `subscribe` to the transport it relays to. The protected `instrumentPublish(telemetry, type)` and `instrumentSubscribe(telemetry)` do the replacing.
 
 ## Outbox
 
@@ -271,6 +396,7 @@ BusModule.forRoot({
 
 - `transport` — required. `{ provider, config }`, see the options below.
 - `middlewares` — global middleware classes. They must be provided in a module of the application.
+- `telemetry` — see [Telemetry](#telemetry). Nothing is reported by default.
 - `imports`, `providers` — additional Nest imports and providers for the module.
 
 Every transport takes these in its `config`:

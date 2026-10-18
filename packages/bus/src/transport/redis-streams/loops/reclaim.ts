@@ -1,4 +1,8 @@
 import { Logger } from '@nestjs/common';
+import {
+  noopTransportTelemetry,
+  type TransportTelemetry,
+} from '../../../telemetry/telemetry.js';
 import { type Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { type Streams } from '../streams.js';
@@ -24,6 +28,8 @@ export class ReclaimLoop implements Loop {
     private readonly streams: Streams,
     private readonly processor: Processor,
     private readonly options: ReclaimLoopOptions,
+    private readonly telemetry: () => TransportTelemetry = () =>
+      noopTransportTelemetry,
   ) {}
 
   public interval(): number {
@@ -74,6 +80,13 @@ export class ReclaimLoop implements Loop {
           retriesDelay,
           [...deliveries.keys()],
         );
+
+        this.telemetry()
+          .counter('redis_streams.reclaimed', {
+            description: 'Entries claimed after they were pending for too long',
+            unit: '{entry}',
+          })
+          .add(claimed.length, { 'messaging.destination.name': stream });
 
         for (const entry of claimed) {
           if (entry && !signal.aborted) {

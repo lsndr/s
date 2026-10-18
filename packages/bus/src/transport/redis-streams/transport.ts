@@ -10,6 +10,7 @@ import {
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent } from '../dispatcher.js';
 import { createEventDto } from '../event-dto.js';
+import { type TelemetryDescriptor } from '../../telemetry/telemetry.js';
 import { Clients } from './clients.js';
 import { Handler } from './handler.js';
 import { Loops } from './loops/loops.js';
@@ -201,6 +202,19 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
   };
 }
 
+/** The address of the server in a Redis URL, if it is a valid one. */
+function parseServer(url: string): TelemetryDescriptor['server'] {
+  try {
+    const { hostname, port } = new URL(url);
+
+    return hostname
+      ? { address: hostname, port: port ? Number(port) : 6379 }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 @Injectable()
 export class RedisStreamsTransport
   extends Transport<RedisStreamsTransportConfig>
@@ -232,13 +246,18 @@ export class RedisStreamsTransport
     } = this.settings;
     const { clients, streams } = this;
     const { max: maxRetries, delay: retriesDelay } = this.settings.retries;
-    const processor = new Processor(clients, {
-      group,
-      keyPrefix,
-      maxRetries,
-      retriesDelay,
-      reclaimInterval,
-    });
+    const telemetry = () => this.telemetry;
+    const processor = new Processor(
+      clients,
+      {
+        group,
+        keyPrefix,
+        maxRetries,
+        retriesDelay,
+        reclaimInterval,
+      },
+      telemetry,
+    );
 
     this.loops = new Loops([
       new ReadLoop(clients, streams, processor, {
@@ -247,19 +266,30 @@ export class RedisStreamsTransport
         batchSize: concurrency,
         blockTimeout,
       }),
-      new ReclaimLoop(clients, streams, processor, {
-        group,
-        consumer,
-        batchSize: concurrency,
-        retriesDelay,
-        reclaimInterval,
-      }),
+      new ReclaimLoop(
+        clients,
+        streams,
+        processor,
+        {
+          group,
+          consumer,
+          batchSize: concurrency,
+          retriesDelay,
+          reclaimInterval,
+        },
+        telemetry,
+      ),
       new RefreshLoop(clients, streams, { group, consumer, retriesDelay }),
-      new StaleConsumersLoop(clients, streams, {
-        group,
-        consumer,
-        consumerTtl,
-      }),
+      new StaleConsumersLoop(
+        clients,
+        streams,
+        {
+          group,
+          consumer,
+          consumerTtl,
+        },
+        telemetry,
+      ),
     ]);
   }
 
@@ -267,8 +297,34 @@ export class RedisStreamsTransport
     await this.clients.get('command');
   }
 
+  public override getTelemetryDescriptor(): TelemetryDescriptor {
+    const { url, group, keyPrefix } = this.settings;
+    const server = parseServer(url);
+
+    return {
+      // Redis is not one of the well-known messaging systems
+      system: 'redis',
+      destination: (eventName) => `${keyPrefix}${eventName}`,
+      consumerGroup: group,
+      server,
+    };
+  }
+
   /** Starts consuming, once all the handlers are registered. */
   public onBusBootstrap(): void {
+    this.telemetry.gauge(
+      'redis_streams.inflight',
+      {
+        description: 'Entries being handled by this instance',
+        unit: '{entry}',
+      },
+      () =>
+        this.streams.all().map(({ name }) => ({
+          value: this.streams.inflight(name).length,
+          attributes: { 'messaging.destination.name': name },
+        })),
+    );
+
     this.loops.start();
   }
 

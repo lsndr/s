@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { type RedisClientType } from 'redis';
+import {
+  noopTransportTelemetry,
+  type TransportTelemetry,
+} from '../../../telemetry/telemetry.js';
 import { type Clients } from '../clients.js';
 import { type Streams } from '../streams.js';
 import { type Loop } from './loop.js';
@@ -57,6 +61,8 @@ export class StaleConsumersLoop implements Loop {
     private readonly clients: Clients<'command'>,
     private readonly streams: Streams,
     private readonly options: StaleConsumersLoopOptions,
+    private readonly telemetry: () => TransportTelemetry = () =>
+      noopTransportTelemetry,
   ) {}
 
   public interval(): number {
@@ -75,6 +81,13 @@ export class StaleConsumersLoop implements Loop {
       try {
         const client = await clients.get('command');
         const deleted = await this.deleteStale(client, stream);
+
+        this.telemetry()
+          .counter('redis_streams.stale_consumers.removed', {
+            description: 'Consumers removed from a group for being idle',
+            unit: '{consumer}',
+          })
+          .add(deleted.length, { 'messaging.destination.name': stream });
 
         for (const name of deleted) {
           this.logger.log(`Removed stale consumer ${name} of group ${group}`);

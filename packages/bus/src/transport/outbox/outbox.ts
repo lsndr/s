@@ -5,6 +5,10 @@ import {
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { setTimeout } from 'node:timers/promises';
+import {
+  type BusTelemetry,
+  type TelemetryDescriptor,
+} from '../../telemetry/telemetry.js';
 import { createEventDto, type EventDto } from '../event-dto.js';
 import { type PublishEvent } from '../dispatcher.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
@@ -98,6 +102,20 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
     await this.loop;
   }
 
+  /**
+   * Only publishing is reported, as the creation of the events, which the
+   * transport the outbox relays to sends later. Subscribing is left to that
+   * transport, which the outbox hands the subscriptions over to.
+   */
+  public override instrument(telemetry: BusTelemetry): void {
+    this.instrumentPublish(telemetry, 'create');
+  }
+
+  /** Described as the transport the events are relayed to. */
+  public override getTelemetryDescriptor(): TelemetryDescriptor {
+    return this.transport.getTelemetryDescriptor();
+  }
+
   public assertHealthy(): Promise<void> {
     return this.transport.assertHealthy();
   }
@@ -164,6 +182,7 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
           name: record.name,
           meta: record.meta,
           publishedAt: new Date(record.publishedAt),
+          context: record.context,
         },
       })),
     );
@@ -171,13 +190,30 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
 
   private async runLoop(signal: AbortSignal): Promise<void> {
     const interval = this.config.interval ?? 1_000;
+    const duration = this.telemetry.histogram('outbox.relay.duration', {
+      description: 'Duration of a relay of outbox records',
+      unit: 's',
+    });
+    const relayedRecords = this.telemetry.counter('outbox.relayed', {
+      description: 'Outbox records relayed to the transport',
+      unit: '{record}',
+    });
+    const failures = this.telemetry.counter('outbox.relay.failures', {
+      description: 'Relays of outbox records that failed',
+      unit: '{relay}',
+    });
 
     while (!signal.aborted) {
       let relayed = 0;
+      const start = performance.now();
 
       try {
         relayed = await this.relay();
+        duration.record((performance.now() - start) / 1_000);
+        relayedRecords.add(relayed);
       } catch (err) {
+        duration.record((performance.now() - start) / 1_000);
+        failures.add(1);
         this.logger.error(
           `Failed to relay outbox records: ${String(err)}`,
           err instanceof Error ? err.stack : undefined,

@@ -10,13 +10,16 @@ export interface EventDto {
   event: Record<string, string | number | undefined | null>;
   meta: Record<string, string | number | undefined | null>;
   publishedAt: Date;
+  /** Creation context of the event, see {@link EventPayload.context}. */
+  context?: Record<string, string>;
 }
 
 /**
  * Serializes an event to its wire format.
  *
  * @param event - Event instance. Its class name becomes the event name.
- * @param options - Optional event id, name, meta and publication time.
+ * @param options - Optional event id, name, meta, publication time and
+ * creation context.
  * @returns The DTO, with a UUID v7 id unless `options.id` is set.
  */
 export function createEventDto<E extends object>(
@@ -29,6 +32,7 @@ export function createEventDto<E extends object>(
     event: instanceToPlain(event),
     meta: options?.meta ?? {},
     publishedAt: options?.publishedAt ?? new Date(),
+    context: options?.context ?? {},
   };
 }
 
@@ -52,5 +56,6 @@ export function parseEventPayload<E extends object>(
       enableImplicitConversion: true,
     }),
     publishedAt: new Date(dto.publishedAt),
+    context: dto.context ?? {},
   };
 }

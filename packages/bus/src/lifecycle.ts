@@ -1,13 +1,13 @@
 /**
  * The hooks below are called by the bus on every provider of the bus module,
- * the transports and the `providers` given to `forRoot` included, in the order
- * they are registered, and in reverse for shutdown. A provider with a request
- * or transient scope is skipped.
+ * the transports, the telemetry and the `providers` given to `forRoot`
+ * included, in the order they are registered, and in reverse for shutdown. A
+ * provider with a request or transient scope is skipped.
  */
 export interface OnBusInit {
   /**
-   * Called once when the application bootstraps, before the handlers are
-   * subscribed. The bus waits for it.
+   * Called once when the application bootstraps, before the transports are
+   * instrumented and the handlers are subscribed. The bus waits for it.
    */
   onBusInit(): Promise<void> | void;
 }

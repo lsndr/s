@@ -167,6 +167,7 @@ describe('Outbox', () => {
         event: { value: 'a' },
         meta: { key: 'value' },
         publishedAt: expect.any(Date),
+        context: {},
       },
     ]);
     expect(InnerTransport.publish).not.toHaveBeenCalled();
@@ -248,6 +249,7 @@ describe('Outbox', () => {
               name: 'TestEvent',
               meta: {},
               publishedAt: first!.publishedAt,
+              context: {},
             },
           },
         ],
@@ -261,6 +263,7 @@ describe('Outbox', () => {
               name: 'TestEvent',
               meta: {},
               publishedAt: second!.publishedAt,
+              context: {},
             },
           },
         ],

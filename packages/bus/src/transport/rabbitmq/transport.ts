@@ -13,6 +13,7 @@ import {
 } from 'amqplib';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent } from '../dispatcher.js';
+import { type TelemetryDescriptor } from '../../telemetry/telemetry.js';
 import {
   createEventDto,
   parseEventPayload,
@@ -37,6 +38,20 @@ export interface RabbitmqTransportConfig {
      */
     delay?: number;
   };
+}
+
+/** The address of the server in an AMQP URL, if it is a valid one. */
+function parseServer(url: string): TelemetryDescriptor['server'] {
+  try {
+    const { hostname, port, protocol } = new URL(url);
+    const defaultPort = protocol === 'amqps:' ? 5671 : 5672;
+
+    return hostname
+      ? { address: hostname, port: port ? Number(port) : defaultPort }
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 @Injectable()
@@ -72,6 +87,25 @@ export class RabbitmqTransport
     await this.channel.assertExchange(`${this.exchange}.delay`, 'direct', {
       durable: true,
     });
+  }
+
+  public override getTelemetryDescriptor(): TelemetryDescriptor {
+    const { url, group } = this.config;
+    const server = parseServer(url);
+
+    return {
+      system: 'rabbitmq',
+      // `{exchange}:{routing key}`, and the queue too for a consumer
+      destination: (eventName, handler) =>
+        handler
+          ? `${this.exchange}:${eventName}:${this.getQueueName(eventName, handler)}`
+          : `${this.exchange}:${eventName}`,
+      attributes: (eventName) => ({
+        'messaging.rabbitmq.destination.routing_key': eventName,
+      }),
+      consumerGroup: group,
+      server,
+    };
   }
 
   public async assertHealthy(): Promise<void> {
@@ -140,10 +174,29 @@ export class RabbitmqTransport
       `Subscribed to event ${event.name} (handler: ${handlerName})`,
     );
 
+    const destination = this.getTelemetryDescriptor().destination?.(
+      event.name,
+      handlerName,
+    );
+
     const handler = (message: ConsumeMessage | null) => {
       if (!message) {
         return;
       }
+
+      const deliveryTag = message.fields.deliveryTag;
+      const settle = (name: 'ack' | 'nack', fn: () => void) =>
+        this.telemetry.span(
+          {
+            name,
+            operation: { name, type: 'settle' },
+            destination,
+            attributes: {
+              'messaging.rabbitmq.message.delivery_tag': deliveryTag,
+            },
+          },
+          () => Promise.resolve(fn()),
+        );
 
       const content = message.content.toString();
 
@@ -151,29 +204,56 @@ export class RabbitmqTransport
       this.logger.verbose(`Event ${event.name} payload: ${content}`);
 
       Promise.resolve()
-        .then(() => callback(parseEventPayload(event, content)))
-        .then(() => {
-          channel.ack(message);
+        .then(() =>
+          callback(parseEventPayload(event, content), {
+            attempt: this.getRetryCount(message) + 1,
+            attributes: {
+              'messaging.rabbitmq.message.delivery_tag': deliveryTag,
+            },
+          }),
+        )
+        .then(async () => {
+          await settle('ack', () => channel.ack(message));
 
           this.logger.log(`Event ${event.name} handled successfully`);
         })
-        .catch((err) => {
+        .catch(async (err) => {
           const retryCount = this.getRetryCount(message);
+          const dropped = retryCount >= this.getRetries().max;
+
+          this.telemetry
+            .counter(dropped ? 'dropped' : 'retries', {
+              description: dropped
+                ? 'Messages dropped after failing every retry'
+                : 'Messages scheduled to be retried after a failure',
+              unit: '{message}',
+            })
+            .add(1, {
+              'messaging.destination.name': destination,
+              'messaging.destination.subscription.name': handlerName,
+            });
 
           this.logger.error(
             `Error handling event ${event.name} (retryCount: ${retryCount}): ${String(err)}`,
             err instanceof Error ? err.stack : undefined,
           );
 
-          if (retryCount >= this.getRetries().max) {
+          if (dropped) {
             this.logger.error(
               `Event ${event.name} failed permanently after ${retryCount} retries: ${String(err)}`,
               err instanceof Error ? err.stack : undefined,
             );
-            channel.ack(message);
+            await settle('ack', () => channel.ack(message));
           } else {
-            channel.nack(message, false, false);
+            await settle('nack', () => channel.nack(message, false, false));
           }
+        })
+        .catch((err) => {
+          // The channel is gone, the broker redelivers the message
+          this.logger.error(
+            `Failed to settle event ${event.name}: ${String(err)}`,
+            err instanceof Error ? err.stack : undefined,
+          );
         });
     };
 
@@ -227,7 +307,7 @@ export class RabbitmqTransport
     const channel = this.getChannel();
 
     const routingKey = eventName;
-    const queueName = `${this.config.group}.${handlerName}.${eventName}`;
+    const queueName = this.getQueueName(eventName, handlerName);
     const delayQueueName = `${queueName}.delay`;
 
     const queue = await channel.assertQueue(queueName, {
@@ -259,6 +339,10 @@ export class RabbitmqTransport
     );
 
     return queue.queue;
+  }
+
+  private getQueueName(eventName: string, handlerName: string): string {
+    return `${this.config.group}.${handlerName}.${eventName}`;
   }
 
   private getRetries(): { max: number; delay: number } {

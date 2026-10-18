@@ -12,6 +12,8 @@ import {
   it,
   vi,
 } from 'vitest';
+import { createOtelFixture } from '../../telemetry/otel/otel.fixture.js';
+import { type BusTelemetry, Telemetry } from '../../telemetry/telemetry.js';
 import { TransportConfig } from '../transport.js';
 import {
   RedisStreamsTransport,
@@ -44,6 +46,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
    */
   async function createTransport(
     config: Partial<RedisStreamsTransportConfig> = {},
+    telemetry?: BusTelemetry,
   ) {
     const group = config.group ?? `group:${crypto.randomUUID()}`;
     const keyPrefix = config.keyPrefix ?? `${crypto.randomUUID()}:`;
@@ -61,6 +64,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
             keyPrefix,
           } satisfies RedisStreamsTransportConfig,
         },
+        ...(telemetry ? [{ provide: Telemetry, useValue: telemetry }] : []),
       ],
     }).compile();
 
@@ -259,6 +263,61 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
           `${hostname()}-${process.pid}`,
         ]);
       });
+    });
+  });
+
+  describe('telemetry', () => {
+    it('describes itself as a Redis server with a stream per event', async () => {
+      const { transport, group, keyPrefix } = await createTransport();
+      const parsed = new URL(url);
+
+      const descriptor = transport.getTelemetryDescriptor();
+
+      expect(descriptor).toMatchObject({
+        system: 'redis',
+        consumerGroup: group,
+        server: { address: parsed.hostname, port: Number(parsed.port) },
+      });
+      expect(descriptor.destination?.('FirstEvent')).toBe(
+        `${keyPrefix}FirstEvent`,
+      );
+    });
+
+    it('reports the entries in flight', async () => {
+      const otel = createOtelFixture();
+
+      await otel.telemetry.onBusInit();
+
+      try {
+        const { transport, stream } = await createTransport({}, otel.telemetry);
+        let release!: () => void;
+        const blocked = new Promise<void>((resolve) => (release = resolve));
+        const handler = vi.fn().mockReturnValue(blocked);
+
+        await transport.subscribe(FirstEvent, 'FirstHandler', handler);
+        transport.onBusBootstrap();
+        await transport.publish(new FirstEvent('a'));
+        await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+
+        const [inflight] = await otel.metric('bus.redis_streams.inflight');
+
+        expect(inflight?.value).toBe(1);
+        expect(inflight?.attributes).toEqual({
+          'messaging.system': 'redis',
+          'messaging.destination.name': stream(FirstEvent),
+        });
+
+        release();
+        await vi.waitFor(async () => {
+          const [after] = await otel.metric('bus.redis_streams.inflight');
+
+          expect(after?.value).toBe(0);
+        });
+
+        await shutdown(transport);
+      } finally {
+        await otel.shutdown();
+      }
     });
   });
 

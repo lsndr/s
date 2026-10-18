@@ -173,11 +173,13 @@ describe('Processor', { timeout: 60_000 }, () => {
           event: expect.any(TestEvent),
           publishedAt: expect.any(Date),
         }),
+        expect.objectContaining({ attempt: 1 }),
       );
       expect(handler).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           event: expect.objectContaining({ value: 'hello' }),
         }),
+        expect.objectContaining({ attempt: 1 }),
       );
     });
   });
@@ -214,7 +216,10 @@ describe('Processor', { timeout: 60_000 }, () => {
       await processor.process(stream, entry, 1);
       await processor.process(stream, entry, 2);
 
-      expect(ok).toHaveBeenCalledExactlyOnceWith(expect.anything());
+      expect(ok).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.anything(),
+      );
       expect(flaky).toHaveBeenCalledTimes(2);
       expect(await pending()).toBe(0);
       expect(await redis.exists(doneKey)).toBe(0);
@@ -231,7 +236,10 @@ describe('Processor', { timeout: 60_000 }, () => {
       await processor.process(stream, entry, 2);
 
       expect(done).not.toHaveBeenCalled();
-      expect(todo).toHaveBeenCalledExactlyOnceWith(expect.anything());
+      expect(todo).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.anything(),
+      );
     });
   });
 
@@ -280,7 +288,10 @@ describe('Processor', { timeout: 60_000 }, () => {
       await failExecOfMulti(1);
       await processor.process(stream, entry, 1);
 
-      expect(handler).toHaveBeenCalledExactlyOnceWith(expect.anything());
+      expect(handler).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.anything(),
+      );
       expect(await pending()).toBe(0);
       expect(await redis.exists(doneKey)).toBe(0);
       expect(log.warn).toHaveBeenCalledExactlyOnceWith(

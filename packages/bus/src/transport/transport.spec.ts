@@ -21,6 +21,9 @@ import { hasOnBusBootstrap } from '../lifecycle.js';
 import { setTimeout } from 'node:timers/promises';
 import { IsDate, IsString } from 'class-validator';
 import { Test, TestingModule } from '@nestjs/testing';
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { createOtelFixture } from '../telemetry/otel/otel.fixture.js';
+import { type BusTelemetry, Telemetry } from '../telemetry/telemetry.js';
 
 class TestEvent {
   @IsString()
@@ -47,8 +50,13 @@ interface CommonConfig {
 
 interface TransportTest {
   name: string;
+  /** The `messaging.system` the transport reports. */
+  system: string;
   setup: () => Promise<{
-    createTransport: (config: CommonConfig) => Promise<Transport>;
+    createTransport: (
+      config: CommonConfig,
+      telemetry?: BusTelemetry,
+    ) => Promise<Transport>;
     teardown: () => Promise<void>;
   }>;
 }
@@ -68,6 +76,7 @@ describe('Transport', { timeout: 60_000 }, () => {
   describe.each<TransportTest>([
     {
       name: 'RabbitmqTransport',
+      system: 'rabbitmq',
       setup: async () => {
         const container = await new GenericContainer('rabbitmq:3-management')
           .withExposedPorts(5672)
@@ -81,7 +90,10 @@ describe('Transport', { timeout: 60_000 }, () => {
         const url = `amqp://${container.getHost()}:${container.getMappedPort(5672)}`;
         const modules: TestingModule[] = [];
 
-        const createTransport = async (busConfig: CommonConfig) => {
+        const createTransport = async (
+          busConfig: CommonConfig,
+          telemetry?: BusTelemetry,
+        ) => {
           const module = await Test.createTestingModule({
             imports: [],
             providers: [
@@ -93,6 +105,9 @@ describe('Transport', { timeout: 60_000 }, () => {
                   ...busConfig,
                 } satisfies RabbitmqTransportConfig,
               },
+              ...(telemetry
+                ? [{ provide: Telemetry, useValue: telemetry }]
+                : []),
             ],
           }).compile();
 
@@ -100,7 +115,13 @@ describe('Transport', { timeout: 60_000 }, () => {
 
           modules.push(module);
 
-          return module.get<RabbitmqTransport>(RabbitmqTransport);
+          const transport = module.get<RabbitmqTransport>(RabbitmqTransport);
+
+          if (telemetry) {
+            transport.instrument(telemetry);
+          }
+
+          return transport;
         };
 
         const teardown = async () => {
@@ -113,6 +134,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     },
     {
       name: 'RedisStreamsTransport',
+      system: 'redis',
       setup: async () => {
         const container = await new GenericContainer('redis:8.2')
           .withExposedPorts(6379)
@@ -126,7 +148,10 @@ describe('Transport', { timeout: 60_000 }, () => {
         const url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
         const modules: TestingModule[] = [];
 
-        const createTransport = async (busConfig: CommonConfig) => {
+        const createTransport = async (
+          busConfig: CommonConfig,
+          telemetry?: BusTelemetry,
+        ) => {
           const module = await Test.createTestingModule({
             providers: [
               RedisStreamsTransport,
@@ -141,6 +166,9 @@ describe('Transport', { timeout: 60_000 }, () => {
                   concurrency: 1,
                 } satisfies RedisStreamsTransportConfig,
               },
+              ...(telemetry
+                ? [{ provide: Telemetry, useValue: telemetry }]
+                : []),
             ],
           }).compile();
 
@@ -148,7 +176,15 @@ describe('Transport', { timeout: 60_000 }, () => {
 
           modules.push(module);
 
-          return module.get<RedisStreamsTransport>(RedisStreamsTransport);
+          const transport = module.get<RedisStreamsTransport>(
+            RedisStreamsTransport,
+          );
+
+          if (telemetry) {
+            transport.instrument(telemetry);
+          }
+
+          return transport;
         };
 
         const teardown = async () => {
@@ -163,9 +199,12 @@ describe('Transport', { timeout: 60_000 }, () => {
         return { createTransport, teardown };
       },
     },
-  ])('$name', ({ setup }) => {
+  ])('$name', ({ setup, system }) => {
     let teardown: () => Promise<void>;
-    let createTransport: (config: CommonConfig) => Promise<Transport>;
+    let createTransport: (
+      config: CommonConfig,
+      telemetry?: BusTelemetry,
+    ) => Promise<Transport>;
 
     beforeAll(async () => {
       const setupResult = await setup();
@@ -203,6 +242,7 @@ describe('Transport', { timeout: 60_000 }, () => {
             meta: { a: 1 },
             publishedAt,
           }),
+          expect.objectContaining({ attempt: 1 }),
         );
       });
     });
@@ -234,6 +274,7 @@ describe('Transport', { timeout: 60_000 }, () => {
         expect(testHandler).toHaveBeenCalledTimes(2);
         expect(otherHandler).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ id: 'id-2' }),
+          expect.objectContaining({ attempt: 1 }),
         );
       });
     });
@@ -271,6 +312,7 @@ describe('Transport', { timeout: 60_000 }, () => {
             meta: {},
             publishedAt: expect.any(Date),
           }),
+          expect.objectContaining({ attempt: 1 }),
         );
         expect(subscriber2).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -279,6 +321,7 @@ describe('Transport', { timeout: 60_000 }, () => {
             meta: {},
             publishedAt: expect.any(Date),
           }),
+          expect.objectContaining({ attempt: 1 }),
         );
         expect(subscriber3).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -287,6 +330,7 @@ describe('Transport', { timeout: 60_000 }, () => {
             meta: {},
             publishedAt: expect.any(Date),
           }),
+          expect.objectContaining({ attempt: 1 }),
         );
       });
     });
@@ -327,6 +371,7 @@ describe('Transport', { timeout: 60_000 }, () => {
             meta: {},
             publishedAt: expect.any(Date),
           }),
+          expect.objectContaining({ attempt: 1 }),
         );
         expect(subscriber2).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -335,6 +380,7 @@ describe('Transport', { timeout: 60_000 }, () => {
             meta: {},
             publishedAt: expect.any(Date),
           }),
+          expect.objectContaining({ attempt: 1 }),
         );
         expect(subscriber3).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -343,6 +389,7 @@ describe('Transport', { timeout: 60_000 }, () => {
             meta: {},
             publishedAt: expect.any(Date),
           }),
+          expect.objectContaining({ attempt: 1 }),
         );
       });
     });
@@ -368,9 +415,11 @@ describe('Transport', { timeout: 60_000 }, () => {
       await vi.waitFor(() => {
         expect(handler1).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ event }),
+          expect.objectContaining({ attempt: 1 }),
         );
         expect(handler2).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ event }),
+          expect.objectContaining({ attempt: 1 }),
         );
       });
     });
@@ -396,6 +445,112 @@ describe('Transport', { timeout: 60_000 }, () => {
         expect(handler).toHaveBeenCalledTimes(max + 1); // 1 initial attempt + max retries
       },
     );
+
+    describe('telemetry', () => {
+      it('reports a message that fails once and is retried', async () => {
+        const otel = createOtelFixture();
+
+        await otel.telemetry.onBusInit();
+
+        try {
+          const group = crypto.randomUUID();
+          const transport = await createTransport(
+            { group, retries: { max: 1, delay: 100 } },
+            otel.telemetry,
+          );
+          const handler = vi
+            .fn()
+            .mockRejectedValueOnce(new Error('first attempt fails'))
+            .mockResolvedValue(undefined);
+
+          await transport.subscribe(TestEvent, 'TestHandler', handler);
+          await bootstrap(transport);
+          await transport.publish(new TestEvent({ value: 'trace-me' }));
+
+          await vi.waitFor(() => {
+            expect(handler).toHaveBeenCalledTimes(2);
+            expect(
+              otel.spans().filter((span) => span.name.startsWith('ack')),
+            ).toHaveLength(1);
+          });
+
+          const send = otel.spans().find((s) => s.name.startsWith('send'))!;
+          const processes = otel
+            .spans()
+            .filter((s) => s.name.startsWith('process'))
+            .sort(
+              (a, b) =>
+                Number(a.attributes['bus.delivery.attempt']) -
+                Number(b.attributes['bus.delivery.attempt']),
+            );
+
+          expect(send.kind).toBe(SpanKind.PRODUCER);
+          expect(send.attributes).toMatchObject({
+            'messaging.system': system,
+            'messaging.operation.type': 'send',
+            'messaging.consumer.group.name': group,
+            'server.address': expect.any(String),
+            'server.port': expect.any(Number),
+          });
+          expect(processes).toHaveLength(2);
+          expect(processes.map((s) => s.kind)).toEqual([
+            SpanKind.CONSUMER,
+            SpanKind.CONSUMER,
+          ]);
+          expect(
+            processes.map((s) => s.attributes['bus.delivery.attempt']),
+          ).toEqual([1, 2]);
+          expect(processes[0]!.status.code).toBe(SpanStatusCode.ERROR);
+          expect(processes[1]!.status.code).not.toBe(SpanStatusCode.ERROR);
+
+          for (const process of processes) {
+            expect(process.attributes).toMatchObject({
+              'messaging.system': system,
+              'messaging.destination.subscription.name': 'TestHandler',
+            });
+            expect(process.links.map((l) => l.context.spanId)).toEqual([
+              send.spanContext().spanId,
+            ]);
+          }
+
+          const [retries] = await otel.metric('bus.retries');
+
+          expect(retries?.value).toBe(1);
+          expect(retries?.attributes).toMatchObject({
+            'messaging.system': system,
+            'messaging.destination.subscription.name': 'TestHandler',
+          });
+          expect(await otel.metric('bus.dropped')).toEqual([]);
+        } finally {
+          await otel.shutdown();
+        }
+      });
+
+      it('counts the message that is dropped after the last retry', async () => {
+        const otel = createOtelFixture();
+
+        await otel.telemetry.onBusInit();
+
+        try {
+          const transport = await createTransport(
+            { group: crypto.randomUUID(), retries: { max: 0, delay: 100 } },
+            otel.telemetry,
+          );
+          const handler = vi.fn().mockRejectedValue(new Error('always'));
+
+          await transport.subscribe(TestEvent, 'TestHandler', handler);
+          await bootstrap(transport);
+          await transport.publish(new TestEvent({ value: 'drop-me' }));
+
+          await vi.waitFor(async () => {
+            expect((await otel.metric('bus.dropped'))[0]?.value).toBe(1);
+          });
+          expect(await otel.metric('bus.retries')).toEqual([]);
+        } finally {
+          await otel.shutdown();
+        }
+      });
+    });
 
     describe('assertHealthy', () => {
       it('resolves when transport is connected', async () => {
