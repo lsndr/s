@@ -198,7 +198,7 @@ A middleware must be provided in a module of the application, like a handler, so
 export class OrderPlacedHandler {}
 ```
 
-Global middlewares run before handler-level ones. Bootstrap fails if a referenced middleware is not provided anywhere or is provided more than once. Like handlers, middlewares can be provided with `useValue` or `useFactory`, and a `useExisting` alias is ignored.
+Global middlewares run before handler-level ones. A middleware is looked up by its class as an injection token, so it is provided under its own class: as a class, or with `provide: TimingMiddleware` and `useValue`, `useFactory` or `useExisting`. Bootstrap fails if a referenced middleware is not provided in any module.
 
 A middleware can be request-scoped or transient (`@Injectable({ scope: Scope.REQUEST })`), or depend on request-scoped providers. When a handler or any of its middlewares is scoped, they are all resolved anew for every event, in the same context, so they share request-scoped dependencies, and the event payload as received is available as `REQUEST`. Default-scoped middlewares are single shared instances.
 

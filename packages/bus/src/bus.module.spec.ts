@@ -1084,15 +1084,15 @@ describe('BusModule', () => {
       it.each([
         {
           name: 'useValue',
-          provide: (instance: object) => ({
-            provide: 'MIDDLEWARE',
+          provide: (token: Type, instance: object) => ({
+            provide: token,
             useValue: instance,
           }),
         },
         {
           name: 'useFactory',
-          provide: (instance: object) => ({
-            provide: 'MIDDLEWARE',
+          provide: (token: Type, instance: object) => ({
+            provide: token,
             useFactory: () => instance,
           }),
         },
@@ -1110,7 +1110,7 @@ describe('BusModule', () => {
         const middleware = new CustomProvidedMiddleware();
         const module = await createModule(CustomProvidedMiddleware, [
           TestHandler,
-          provide(middleware),
+          provide(CustomProvidedMiddleware, middleware),
         ]);
 
         await module.init();
@@ -1184,9 +1184,9 @@ describe('BusModule', () => {
       await module.close().catch(() => undefined);
     });
 
-    it('throws if a middleware is provided in more than one module', async () => {
+    it('throws if a handler middleware is not provided in any module', async () => {
       @Injectable()
-      class DuplicatedMiddleware implements EventHandlerMiddleware {
+      class NotProvidedMiddleware implements EventHandlerMiddleware {
         public async use(
           event: EventPayload<object>,
           next: (event: EventPayload<object>) => Promise<void>,
@@ -1195,22 +1195,105 @@ describe('BusModule', () => {
         }
       }
 
+      @EventHandler(TestEvent, { middlewares: [NotProvidedMiddleware] })
+      class HandlerWithMiddleware {
+        public handle = vi.fn();
+      }
+
       const module = await Test.createTestingModule({
-        imports: [
-          BusModule.forRoot({
-            middlewares: [DuplicatedMiddleware],
-            transport: MockTransport,
-            providers: [DuplicatedMiddleware],
-          }),
-        ],
-        providers: [TestHandler, DuplicatedMiddleware],
+        imports: [BusModule.forRoot({ transport: MockTransport })],
+        providers: [HandlerWithMiddleware],
       }).compile();
 
       await expect(module.init()).rejects.toThrow(
-        'Middleware DuplicatedMiddleware is provided more than once',
+        'Middleware NotProvidedMiddleware is not provided in any module',
       );
 
       await module.close().catch(() => undefined);
+    });
+
+    it('resolves a middleware provided in the providers of the bus module', async () => {
+      @Injectable()
+      class BusProvidedMiddleware implements EventHandlerMiddleware {
+        public static use = vi.fn();
+
+        public async use(
+          event: EventPayload<object>,
+          next: (event: EventPayload<object>) => Promise<void>,
+        ) {
+          BusProvidedMiddleware.use();
+          await next(event);
+        }
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            middlewares: [BusProvidedMiddleware],
+            transport: MockTransport,
+            providers: [BusProvidedMiddleware],
+          }),
+        ],
+        providers: [TestHandler],
+      }).compile();
+
+      await module.init();
+
+      await module
+        .get<Dispatcher>(Dispatcher)
+        .publish(new TestEvent({ value: 'test' }));
+
+      expect(BusProvidedMiddleware.use).toHaveBeenCalledOnce();
+
+      await module.close();
+    });
+
+    it('resolves a request-scoped handler middleware for every event with the payload as request', async () => {
+      const instances: object[] = [];
+      const requests: unknown[] = [];
+
+      @Injectable({ scope: Scope.REQUEST })
+      class ScopedMiddleware implements EventHandlerMiddleware {
+        public constructor(@Inject(REQUEST) request: unknown) {
+          instances.push(this);
+          requests.push(request);
+        }
+
+        public async use(
+          event: EventPayload<object>,
+          next: (event: EventPayload<object>) => Promise<void>,
+        ) {
+          await next(event);
+        }
+      }
+
+      @EventHandler(TestEvent, { middlewares: [ScopedMiddleware] })
+      class HandlerWithMiddleware {
+        public handle = vi.fn();
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [BusModule.forRoot({ transport: MockTransport })],
+        providers: [HandlerWithMiddleware, ScopedMiddleware],
+      }).compile();
+
+      await module.init();
+
+      const dispatcher = module.get<Dispatcher>(Dispatcher);
+      const first = new TestEvent({ value: 'first' });
+      const second = new TestEvent({ value: 'second' });
+
+      await dispatcher.publish(first);
+      await dispatcher.publish(second);
+
+      expect(instances).toHaveLength(2);
+      expect(instances[0]).not.toBe(instances[1]);
+      expect(requests).toEqual([
+        expect.objectContaining({ event: first }),
+        expect.objectContaining({ event: second }),
+      ]);
+
+      await module.close();
     });
   });
 

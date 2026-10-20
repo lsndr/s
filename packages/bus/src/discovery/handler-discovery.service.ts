@@ -1,5 +1,5 @@
-import { Inject, Injectable, Type } from '@nestjs/common';
-import { DiscoveryService, Reflector } from '@nestjs/core';
+import { Inject, Injectable, Scope, Type } from '@nestjs/common';
+import { DiscoveryService, ModuleRef, Reflector } from '@nestjs/core';
 import { type InstanceWrapper } from '@nestjs/core/injector/instance-wrapper.js';
 import {
   BUS_EVENT_HANDLER_METADATA,
@@ -26,6 +26,7 @@ export class HandlerDiscoveryService {
     @Inject(DiscoveryService)
     private readonly discoveryService: DiscoveryService,
     @Inject(Reflector) private readonly reflector: Reflector,
+    @Inject(ModuleRef) private readonly moduleRef: ModuleRef,
     @Inject(Subscriber) private readonly subscriber: Subscriber,
     @Inject(GlobalEventHandlerMiddlewares)
     private readonly globalEventHandlerMiddlewares: Type<EventHandlerMiddleware>[],
@@ -53,8 +54,7 @@ export class HandlerDiscoveryService {
 
   private findHandlers(): DiscoveredHandler[] {
     const providers = this.discoveryService.getProviders();
-    const globalMiddlewares = this.findMiddlewares(
-      providers,
+    const globalMiddlewares = this.resolveMiddlewares(
       this.globalEventHandlerMiddlewares,
     );
     const handlers: DiscoveredHandler[] = [];
@@ -100,7 +100,7 @@ export class HandlerDiscoveryService {
         ),
         middlewares: [
           ...globalMiddlewares,
-          ...this.findMiddlewares(providers, metadata.middlewares),
+          ...this.resolveMiddlewares(metadata.middlewares),
         ],
       });
     }
@@ -108,28 +108,30 @@ export class HandlerDiscoveryService {
     return handlers;
   }
 
-  private findMiddlewares(
-    providers: InstanceWrapper[],
+  private resolveMiddlewares(
     types: Type<EventHandlerMiddleware>[],
   ): Resolvable<EventHandlerMiddleware>[] {
     return types.map((type) => {
-      const matches = providers.filter(
-        (provider) => !provider.isAlias && this.getClass(provider) === type,
-      );
+      let scope: Scope;
 
-      if (matches.length === 0) {
+      try {
+        ({ scope } = this.moduleRef.introspect(type));
+      } catch {
         throw new Error(
           `Middleware ${type.name} is not provided in any module. Add it to the providers of a module`,
         );
       }
 
-      if (matches.length > 1) {
-        throw new Error(
-          `Middleware ${type.name} is provided more than once. Provide it in a single module`,
-        );
+      // Request-scoped, transient, and the ones depending on them
+      if (scope !== Scope.DEFAULT) {
+        return { token: type, name: type.name, instance: undefined };
       }
 
-      return this.toResolvable<EventHandlerMiddleware>(matches[0]!, type.name);
+      return {
+        token: type,
+        name: type.name,
+        instance: this.moduleRef.get(type, { strict: false }),
+      };
     });
   }
 
@@ -149,13 +151,13 @@ export class HandlerDiscoveryService {
     // Transient providers have a static dependency tree, but still must not
     // be shared
     if (!wrapper.isDependencyTreeStatic() || wrapper.isTransient) {
-      return { wrapper, name, instance: undefined };
+      return { token: wrapper.token, name, instance: undefined };
     }
 
     if (!wrapper.instance) {
       throw new Error(`${name} has no instance`);
     }
 
-    return { wrapper, name, instance: wrapper.instance as T };
+    return { token: wrapper.token, name, instance: wrapper.instance as T };
   }
 }
