@@ -1,12 +1,11 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, type InjectionToken } from '@nestjs/common';
 import { type ContextId, ContextIdFactory, ModuleRef } from '@nestjs/core';
-import { type InstanceWrapper } from '@nestjs/core/injector/instance-wrapper.js';
 import { type EventCallback } from '../transport/subscriber.js';
 import { type EventHandler, type EventPayload } from '../types.js';
 import { type EventHandlerMiddleware } from '../middleware/middleware.js';
 
 export interface Resolvable<T> {
-  wrapper: InstanceWrapper;
+  token: InjectionToken;
   name: string;
   /** Set when the provider has the default scope. */
   instance: T | undefined;
@@ -56,7 +55,7 @@ export class HandlerInvoker {
   ): Promise<T> {
     return (
       resolvable.instance ??
-      (await this.moduleRef.resolve<T>(resolvable.wrapper.token, contextId, {
+      (await this.moduleRef.resolve<T>(resolvable.token, contextId, {
         strict: false,
       }))
     );
