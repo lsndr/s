@@ -9,17 +9,8 @@ import {
 import { DiscoveryModule, DiscoveryService } from '@nestjs/core';
 import { HandlerDiscoveryService } from './discovery/handler-discovery.service.js';
 import { HandlerInvoker } from './discovery/handler-invoker.js';
-import {
-  type BusTransport,
-  Transport,
-  TransportConfig,
-} from './transport/transport.js';
-import {
-  Outbox,
-  type OutboxConfig,
-  OutboxConfigToken,
-  OutboxTransport,
-} from './transport/outbox/outbox.js';
+import { Transport } from './transport/transport.js';
+import { type TransportProvider, toProviders } from './transport/provider.js';
 import { Dispatcher } from './transport/dispatcher.js';
 import { Subscriber } from './transport/subscriber.js';
 import { Health } from './transport/health.js';
@@ -30,11 +21,9 @@ import {
 } from './lifecycle.js';
 import { GlobalEventHandlerMiddlewares } from './middleware/middleware.js';
 
-export { type BusTransport };
-
-export interface BusModuleOptions<T extends Transport> {
+export interface BusModuleOptions {
   middlewares?: GlobalEventHandlerMiddlewares;
-  transport: BusTransport<T>;
+  transport: TransportProvider;
   imports?: any[];
   providers?: Provider[];
 }
@@ -50,9 +39,7 @@ export class BusModule
     private readonly discoveryService: DiscoveryService,
   ) {}
 
-  public static forRoot<T extends Transport>(
-    options: BusModuleOptions<T>,
-  ): DynamicModule {
+  public static forRoot(options: BusModuleOptions): DynamicModule {
     const middlewares = options.middlewares ?? [];
     return {
       global: true,
@@ -63,58 +50,16 @@ export class BusModule
           provide: GlobalEventHandlerMiddlewares,
           useValue: middlewares,
         },
-        ...this.transportProviders(options.transport),
-        options.transport.provider,
-        {
-          provide: Dispatcher,
-          useExisting: options.transport.provider,
-        },
-        {
-          provide: Subscriber,
-          useExisting: options.transport.provider,
-        },
-        {
-          provide: Health,
-          useExisting: options.transport.provider,
-        },
-        {
-          provide: Transport,
-          useExisting: options.transport.provider,
-        },
+        ...toProviders(Transport, options.transport),
+        { provide: Dispatcher, useExisting: Transport },
+        { provide: Subscriber, useExisting: Transport },
+        { provide: Health, useExisting: Transport },
         HandlerInvoker,
         HandlerDiscoveryService,
         ...(options.providers ?? []),
       ],
       exports: [Dispatcher, Health],
     };
-  }
-
-  /**
-   * Provides the config of the transport, and, for an outbox, the transport it
-   * relays to. Both read their config from `TransportConfig`, so the outbox
-   * reads its own from `OutboxConfigToken` instead.
-   */
-  private static transportProviders(
-    transport: BusTransport<Transport>,
-  ): Provider[] {
-    if (!this.isOutbox(transport)) {
-      return [{ provide: TransportConfig, useValue: transport.config }];
-    }
-
-    const inner = transport.config.transport;
-
-    return [
-      { provide: OutboxConfigToken, useValue: transport.config },
-      { provide: TransportConfig, useValue: inner.config },
-      inner.provider,
-      { provide: OutboxTransport, useExisting: inner.provider },
-    ];
-  }
-
-  private static isOutbox(
-    transport: BusTransport<Transport>,
-  ): transport is BusTransport<Outbox<OutboxConfig>> {
-    return transport.provider.prototype instanceof Outbox;
   }
 
   public async onApplicationBootstrap(): Promise<void> {
@@ -159,11 +104,6 @@ export class BusModule
     }
   }
 
-  /**
-   * The providers of the bus module, in the order they are registered. The
-   * ones with a request or transient scope have no single instance, and are
-   * left out, like the aliases (`useExisting`), which stand for another one.
-   */
   private findProviders(): object[] {
     const found = new Set<object>();
 
@@ -173,7 +113,6 @@ export class BusModule
       const { instance } = wrapper;
 
       if (
-        wrapper.isAlias ||
         wrapper.isTransient ||
         !wrapper.isDependencyTreeStatic() ||
         typeof instance !== 'object' ||

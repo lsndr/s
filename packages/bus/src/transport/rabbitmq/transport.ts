@@ -1,18 +1,15 @@
-import {
-  Injectable,
-  Logger,
-  BeforeApplicationShutdown,
-  type OnModuleInit,
-} from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { type EventConstructor } from '../../types.js';
-import { Transport, type TransportPublishOptions } from '../transport.js';
+import { type Transport } from '../transport.js';
+import { type TransportProvider } from '../provider.js';
+import { type OnBusInit, type OnBusShutdown } from '../../lifecycle.js';
 import {
   type ChannelModel,
   type ConfirmChannel,
   type ConsumeMessage,
 } from 'amqplib';
 import { type EventCallback, type Subscription } from '../subscriber.js';
-import { type PublishEvent } from '../dispatcher.js';
+import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
 import {
   createEventDto,
   parseEventPayload,
@@ -39,22 +36,27 @@ export interface RabbitmqTransportConfig {
   };
 }
 
-@Injectable()
-export class RabbitmqTransport
-  extends Transport<RabbitmqTransportConfig>
-  implements OnModuleInit, BeforeApplicationShutdown
-{
+export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
   private readonly exchange = 'events';
 
   private connection?: ChannelModel;
   private channel: ConfirmChannel | undefined;
   private readonly logger = new Logger(RabbitmqTransport.name);
 
-  public async beforeApplicationShutdown(): Promise<void> {
+  public constructor(private readonly config: RabbitmqTransportConfig) {}
+
+  /** Provides the transport with the given config. */
+  public static withConfig(
+    config: RabbitmqTransportConfig,
+  ): TransportProvider<RabbitmqTransport> {
+    return { useFactory: () => new RabbitmqTransport(config) };
+  }
+
+  public async onBusShutdown(): Promise<void> {
     await this.getConnection().close();
   }
 
-  public async onModuleInit(): Promise<void> {
+  public async onBusInit(): Promise<void> {
     const { connect } = await import('amqplib');
 
     this.connection = await connect(this.config.url);
@@ -78,16 +80,11 @@ export class RabbitmqTransport
     await this.getChannel().checkExchange(this.exchange);
   }
 
-  public publish(
-    events: PublishEvent<TransportPublishOptions>[],
-  ): Promise<void>;
-  public publish(
-    event: object,
-    options?: TransportPublishOptions,
-  ): Promise<void>;
+  public publish(events: PublishEvent[]): Promise<void>;
+  public publish(event: object, options?: PublishOptions): Promise<void>;
   public async publish(
-    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
-    options?: TransportPublishOptions,
+    eventOrEvents: object | PublishEvent[],
+    options?: PublishOptions,
   ): Promise<void> {
     const events = Array.isArray(eventOrEvents)
       ? eventOrEvents

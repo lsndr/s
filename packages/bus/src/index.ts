@@ -17,12 +17,13 @@ export {
   type OutboxConfig,
   type OutboxRecord,
 } from './transport/outbox/outbox.js';
+export { Transport } from './transport/transport.js';
+export { type TransportProvider } from './transport/provider.js';
 export {
-  Transport,
-  type BusTransport,
-  type TransportPublishOptions,
-} from './transport/transport.js';
-export { Dispatcher, type PublishEvent } from './transport/dispatcher.js';
+  Dispatcher,
+  type PublishEvent,
+  type PublishOptions,
+} from './transport/dispatcher.js';
 export { type Subscription } from './transport/subscriber.js';
 export { Health } from './transport/health.js';
 export {
