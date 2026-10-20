@@ -1,6 +1,5 @@
 import { hostname } from 'node:os';
 import { Logger } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { createClient, type RedisClientType } from 'redis';
 import { GenericContainer, Wait } from 'testcontainers';
 import {
@@ -12,7 +11,6 @@ import {
   it,
   vi,
 } from 'vitest';
-import { TransportConfig } from '../transport.js';
 import {
   RedisStreamsTransport,
   type RedisStreamsTransportConfig,
@@ -27,7 +25,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
   let container: Awaited<ReturnType<GenericContainer['start']>>;
   let url: string;
   let redis: RedisClientType;
-  const modules: TestingModule[] = [];
+  const transports: RedisStreamsTransport[] = [];
   const shutDown = new WeakSet<RedisStreamsTransport>();
 
   /** Shuts the transport down once, as the bus does. */
@@ -47,31 +45,22 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
   ) {
     const group = config.group ?? `group:${crypto.randomUUID()}`;
     const keyPrefix = config.keyPrefix ?? `${crypto.randomUUID()}:`;
-    const module = await Test.createTestingModule({
-      providers: [
-        RedisStreamsTransport,
-        {
-          provide: TransportConfig,
-          useValue: {
-            url,
-            retries: { max: 3, delay: 100 },
-            reclaimInterval: 25,
-            ...config,
-            group,
-            keyPrefix,
-          } satisfies RedisStreamsTransportConfig,
-        },
-      ],
-    }).compile();
-
-    modules.push(module);
-    await module.init();
-
-    return {
-      module,
+    const transport = new RedisStreamsTransport({
+      url,
+      retries: { max: 3, delay: 100 },
+      reclaimInterval: 25,
+      ...config,
       group,
       keyPrefix,
-      transport: module.get(RedisStreamsTransport),
+    } satisfies RedisStreamsTransportConfig);
+
+    transports.push(transport);
+    await transport.onBusInit();
+
+    return {
+      group,
+      keyPrefix,
+      transport,
       stream: (event: { name: string }) => `${keyPrefix}${event.name}`,
     };
   }
@@ -97,11 +86,10 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
 
   afterAll(async () => {
     await redis.close();
-    for (const m of modules) {
-      await shutdown(m.get(RedisStreamsTransport));
+    for (const transport of transports) {
+      await shutdown(transport);
     }
 
-    await Promise.all(modules.map((m) => m.close()));
     await container.stop();
   });
 
@@ -264,7 +252,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
 
   describe('shutdown', () => {
     it('waits for the entries in flight and removes the consumer', async () => {
-      const { transport, module, group, stream } = await createTransport();
+      const { transport, group, stream } = await createTransport();
       const started = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       const drain = Streams.prototype.drain;
@@ -288,7 +276,6 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       await transport.publish(new FirstEvent('x'));
       await started.promise;
       await shutdown(transport);
-      await module.close();
 
       expect(finished).toBe(true);
       expect(await redis.xInfoConsumers(stream(FirstEvent), group)).toEqual([]);
@@ -297,7 +284,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
     it('stops waiting after the shutdown timeout and keeps the entry pending', async () => {
       const warn = vi.spyOn(Logger.prototype, 'warn').mockReturnValue();
       vi.spyOn(Logger.prototype, 'error').mockReturnValue();
-      const { transport, module, group, stream } = await createTransport({
+      const { transport, group, stream } = await createTransport({
         shutdownTimeout: 100,
         consumer: 'stuck-consumer',
       });
@@ -313,7 +300,6 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       await transport.publish(new FirstEvent('x'));
       await started.promise;
       await shutdown(transport);
-      await module.close();
 
       const pending = await redis.xPending(stream(FirstEvent), group);
       const consumers = await redis.xInfoConsumers(stream(FirstEvent), group);

@@ -1,7 +1,7 @@
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import { v7 as uuidv7 } from 'uuid';
 import { type EventConstructor, type EventPayload } from '../types.js';
-import { type TransportPublishOptions } from './transport.js';
+import { type PublishOptions } from './dispatcher.js';
 
 /** Wire format of an event, shared by all transports. */
 export interface EventDto {
@@ -21,7 +21,7 @@ export interface EventDto {
  */
 export function createEventDto<E extends object>(
   event: E,
-  options?: TransportPublishOptions,
+  options?: PublishOptions,
 ): EventDto {
   return {
     id: options?.id ?? uuidv7(),

@@ -1,14 +1,15 @@
 import { hostname } from 'node:os';
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { type EventConstructor } from '../../types.js';
-import { type OnBusBootstrap, type OnBusShutdown } from '../../lifecycle.js';
 import {
-  Transport,
-  TransportConfig,
-  type TransportPublishOptions,
-} from '../transport.js';
+  type OnBusBootstrap,
+  type OnBusInit,
+  type OnBusShutdown,
+} from '../../lifecycle.js';
+import { type Transport } from '../transport.js';
+import { type TransportProvider } from '../provider.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
-import { type PublishEvent } from '../dispatcher.js';
+import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
 import { createEventDto } from '../event-dto.js';
 import { Clients } from './clients.js';
 import { Handler } from './handler.js';
@@ -201,10 +202,8 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
   };
 }
 
-@Injectable()
 export class RedisStreamsTransport
-  extends Transport<RedisStreamsTransportConfig>
-  implements OnModuleInit, OnBusBootstrap, OnBusShutdown
+  implements Transport, OnBusInit, OnBusBootstrap, OnBusShutdown
 {
   private readonly clients: Clients<'read' | 'command'>;
   private readonly streams: Streams;
@@ -212,11 +211,7 @@ export class RedisStreamsTransport
   private readonly settings: Settings;
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
-  public constructor(
-    @Inject(TransportConfig) config: RedisStreamsTransportConfig,
-  ) {
-    super();
-
+  public constructor(config: RedisStreamsTransportConfig) {
     this.settings = resolveSettings(config);
     this.clients = new Clients(this.settings.url);
     this.streams = new Streams(this.settings.concurrency);
@@ -263,7 +258,14 @@ export class RedisStreamsTransport
     ]);
   }
 
-  public async onModuleInit(): Promise<void> {
+  /** Provides the transport with the given config. */
+  public static withConfig(
+    config: RedisStreamsTransportConfig,
+  ): TransportProvider<RedisStreamsTransport> {
+    return { useFactory: () => new RedisStreamsTransport(config) };
+  }
+
+  public async onBusInit(): Promise<void> {
     await this.clients.get('command');
   }
 
@@ -304,16 +306,11 @@ export class RedisStreamsTransport
     await (await this.clients.get('command')).ping();
   }
 
-  public publish(
-    events: PublishEvent<TransportPublishOptions>[],
-  ): Promise<void>;
-  public publish(
-    event: object,
-    options?: TransportPublishOptions,
-  ): Promise<void>;
+  public publish(events: PublishEvent[]): Promise<void>;
+  public publish(event: object, options?: PublishOptions): Promise<void>;
   public async publish(
-    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
-    options?: TransportPublishOptions,
+    eventOrEvents: object | PublishEvent[],
+    options?: PublishOptions,
   ): Promise<void> {
     const events = Array.isArray(eventOrEvents)
       ? eventOrEvents
@@ -361,7 +358,7 @@ export class RedisStreamsTransport
 
   private async publishEvent(
     event: object,
-    options?: TransportPublishOptions,
+    options?: PublishOptions,
   ): Promise<void> {
     const payload = createEventDto(event, options);
     const json = JSON.stringify(payload);

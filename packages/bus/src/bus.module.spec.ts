@@ -1,10 +1,18 @@
-import { Inject, Injectable, Logger, Scope, type Type } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  Module,
+  Scope,
+  type Type,
+} from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from './bus.module.js';
 import { EventHandler } from './decorators/event-handler.decorator.js';
 import { Transport } from './transport/transport.js';
+import { type TransportProvider } from './transport/provider.js';
 import {
   Dispatcher,
   type PublishEvent,
@@ -31,7 +39,7 @@ class TestEvent {
 }
 
 @Injectable()
-class MockTransport extends Transport {
+class MockTransport implements Transport {
   public static publish = vi.fn(
     async <E extends object>(event: E, options?: PublishOptions) => {
       const payload: EventPayload<E> = {
@@ -115,10 +123,7 @@ describe('BusModule', () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
-          transport: {
-            provider: MockTransport,
-            config: {},
-          },
+          transport: MockTransport,
         }),
       ],
     }).compile();
@@ -146,10 +151,7 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
             providers: [...busProviders],
           }),
         ],
@@ -170,12 +172,113 @@ describe('BusModule', () => {
     },
   );
 
+  describe('transport providers', () => {
+    afterEach(() => {
+      vi.clearAllMocks();
+    });
+
+    @Injectable()
+    class ConfiguredTransport extends MockTransport {
+      public constructor(@Inject('CONFIG') public readonly config: string) {
+        super();
+      }
+    }
+
+    it.each<[string, () => TransportProvider]>([
+      ['a class', () => MockTransport],
+      ['useClass', () => ({ useClass: MockTransport })],
+      ['useValue', () => ({ useValue: new MockTransport() })],
+      ['useFactory', () => ({ useFactory: () => new MockTransport() })],
+    ])('provides a transport given as %s', async (_name, transport) => {
+      const module = await Test.createTestingModule({
+        imports: [BusModule.forRoot({ transport: transport() })],
+      }).compile();
+
+      await module.init();
+
+      const event = new TestEvent({ value: 'test' });
+      await module.get<Dispatcher>(Dispatcher).publish(event);
+
+      expect(MockTransport.publish).toHaveBeenCalledOnce();
+      expect(module.get(Transport)).toBeInstanceOf(MockTransport);
+      expect(module.get(Dispatcher)).toBe(module.get(Transport));
+      expect(MockTransport.onBusBootstrap).toHaveBeenCalledOnce();
+
+      await module.close();
+
+      expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+    });
+
+    it('injects the dependencies of a class', async () => {
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            transport: ConfiguredTransport,
+            providers: [{ provide: 'CONFIG', useValue: 'value' }],
+          }),
+        ],
+      }).compile();
+
+      expect(module.get<ConfiguredTransport>(Transport).config).toBe('value');
+
+      await module.close();
+    });
+
+    it('registers the additional providers of the transport', async () => {
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            transport: {
+              inject: ['CONFIG'],
+              useFactory: (config: string) => new ConfiguredTransport(config),
+              providers: [{ provide: 'CONFIG', useValue: 'extra' }],
+            },
+          }),
+        ],
+      }).compile();
+
+      expect(module.get<ConfiguredTransport>(Transport).config).toBe('extra');
+
+      await module.close();
+    });
+
+    it('uses a transport provided in another module', async () => {
+      @Module({
+        providers: [MockTransport],
+        exports: [MockTransport],
+      })
+      class TransportModule {}
+
+      const module = await Test.createTestingModule({
+        imports: [
+          TransportModule,
+          BusModule.forRoot({
+            imports: [TransportModule],
+            transport: { useExisting: MockTransport },
+          }),
+        ],
+      }).compile();
+
+      await module.init();
+      await module
+        .get<Dispatcher>(Dispatcher)
+        .publish(new TestEvent({ value: 'a' }));
+
+      expect(MockTransport.publish).toHaveBeenCalledOnce();
+      expect(MockTransport.onBusBootstrap).toHaveBeenCalledOnce();
+
+      await module.close();
+
+      expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('lifecycle', () => {
     it('bootstraps the transport once all handlers are subscribed', async () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: { provider: MockTransport, config: {} },
+            transport: MockTransport,
             providers: [TestHandler],
           }),
         ],
@@ -195,7 +298,7 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: { provider: MockTransport, config: {} },
+            transport: MockTransport,
           }),
         ],
       }).compile();
@@ -262,7 +365,7 @@ describe('BusModule', () => {
         const module = await Test.createTestingModule({
           imports: [
             BusModule.forRoot({
-              transport: { provider: MockTransport, config: {} },
+              transport: MockTransport,
               providers: [First, Second, TestHandler],
             }),
           ],
@@ -289,7 +392,7 @@ describe('BusModule', () => {
         const module = await Test.createTestingModule({
           imports: [
             BusModule.forRoot({
-              transport: { provider: MockTransport, config: {} },
+              transport: MockTransport,
               providers: [First, Scoped],
             }),
           ],
@@ -310,7 +413,7 @@ describe('BusModule', () => {
         const module = await Test.createTestingModule({
           imports: [
             BusModule.forRoot({
-              transport: { provider: MockTransport, config: {} },
+              transport: MockTransport,
               providers: [First, Second],
             }),
           ],
@@ -348,7 +451,7 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: { provider: PlainTransport, config: {} },
+            transport: PlainTransport,
           }),
         ],
       }).compile();
@@ -365,10 +468,7 @@ describe('BusModule', () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
-          transport: {
-            provider: MockTransport,
-            config: {},
-          },
+          transport: MockTransport,
           providers: [TestHandler],
         }),
       ],
@@ -405,10 +505,7 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [MultiEventHandler],
@@ -441,10 +538,7 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [MultiEventHandler],
@@ -495,10 +589,7 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [MultiEventHandler, MultiEventMiddleware],
@@ -552,10 +643,7 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             middlewares: [TestMiddleware],
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [TestHandler, TestMiddleware],
@@ -612,10 +700,7 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             middlewares: [MiddlewareA, MiddlewareB],
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [TestHandler, MiddlewareA, MiddlewareB],
@@ -668,10 +753,7 @@ describe('BusModule', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [TestHandler, HandlerWithMiddleware, HandlerMiddleware],
@@ -726,10 +808,7 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             middlewares: [BusLevelMiddleware],
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [
@@ -765,10 +844,7 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             middlewares: [PayloadModifyingMiddleware],
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [TestHandler, PayloadModifyingMiddleware],
@@ -800,10 +876,7 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             middlewares: [ShortCircuitMiddleware],
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [TestHandler, ShortCircuitMiddleware],
@@ -846,10 +919,7 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             middlewares: [DependentMiddleware],
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [TestHandler, Dependency, DependentMiddleware],
@@ -875,10 +945,7 @@ describe('BusModule', () => {
           imports: [
             BusModule.forRoot({
               middlewares: [middleware],
-              transport: {
-                provider: MockTransport,
-                config: {},
-              },
+              transport: MockTransport,
             }),
           ],
           providers,
@@ -1104,10 +1171,7 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             middlewares: [NotProvidedMiddleware],
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers: [TestHandler],
@@ -1135,10 +1199,7 @@ describe('BusModule', () => {
         imports: [
           BusModule.forRoot({
             middlewares: [DuplicatedMiddleware],
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
             providers: [DuplicatedMiddleware],
           }),
         ],
@@ -1158,10 +1219,7 @@ describe('BusModule', () => {
       Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: {
-              provider: MockTransport,
-              config: {},
-            },
+            transport: MockTransport,
           }),
         ],
         providers,

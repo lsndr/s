@@ -33,10 +33,10 @@ import { BusModule, RabbitmqTransport } from '@lsndr/bus';
 @Module({
   imports: [
     BusModule.forRoot({
-      transport: {
-        provider: RabbitmqTransport,
-        config: { url: 'amqp://localhost', group: 'billing' },
-      },
+      transport: RabbitmqTransport.withConfig({
+        url: 'amqp://localhost',
+        group: 'billing',
+      }),
       providers: [OrderPlacedHandler],
     }),
   ],
@@ -45,6 +45,33 @@ export class AppModule {}
 ```
 
 `BusModule` is global and exports `Dispatcher` and `Health`.
+
+### Providing the transport
+
+`transport` takes a Nest provider without its token, so it is resolved like any other provider:
+
+```typescript
+// A transport with its config: the built-in ones have `withConfig`
+BusModule.forRoot({
+  transport: RedisStreamsTransport.withConfig({ url, group }),
+});
+
+// A class, which injects its own dependencies (same as `{ useClass }`)
+BusModule.forRoot({ transport: MyTransport, providers: [MyTransportDeps] });
+
+// A factory, a value, or a transport already provided in another module
+BusModule.forRoot({
+  transport: {
+    useFactory: (cfg: Config) => new MyTransport(cfg),
+    inject: [Config],
+  },
+});
+BusModule.forRoot({ transport: { useExisting: MyTransport } });
+```
+
+A provider in the object form can also carry `providers`, extra providers the transport needs, which are registered in the bus module next to it. For an outbox, the transport it relays to is registered the same way, so it gets the hooks too, ahead of the outbox on startup and after it on shutdown.
+
+The transport is registered under the `Transport` token, and `Dispatcher`, `Subscriber` and `Health` are aliases of it.
 
 ### Defining events
 
@@ -122,10 +149,10 @@ export class BillingModule {}
   imports: [
     BillingModule,
     BusModule.forRoot({
-      transport: {
-        provider: RabbitmqTransport,
-        config: { url: 'amqp://localhost', group: 'billing' },
-      },
+      transport: RabbitmqTransport.withConfig({
+        url: 'amqp://localhost',
+        group: 'billing',
+      }),
     }),
   ],
 })
@@ -185,19 +212,18 @@ await this.health.assertHealthy(); // throws if the broker is unreachable
 
 ### Lifecycle hooks
 
-The bus calls three optional hooks on **every provider of the bus module**: the transport (and the one an `Outbox` relays to), and the classes you give in the `providers` option. A provider implements the ones it needs:
+The bus calls three optional hooks on **every provider of the bus module**: the transport (whichever module provides it), and the classes you give in the `providers` option. A provider implements the ones it needs:
 
 ```typescript
 import {
-  Transport,
+  type Transport,
   type OnBusInit,
   type OnBusBootstrap,
   type OnBusShutdown,
 } from '@lsndr/bus';
 
 class MyTransport
-  extends Transport
-  implements OnBusInit, OnBusBootstrap, OnBusShutdown
+  implements Transport, OnBusInit, OnBusBootstrap, OnBusShutdown
 {
   // Called when the application bootstraps, before the handlers are subscribed
   async onBusInit() {}
@@ -210,15 +236,15 @@ class MyTransport
 }
 ```
 
-They are called one provider after another, in the order the providers are registered (the transport first, then yours), and the bus waits for each. `onBusShutdown` goes in reverse, and a provider that fails to shut down is logged without keeping the others from it. Providers with a request or transient scope have no single instance, so they are skipped, and so are providers of other modules.
+They are called one provider after another, in the order the providers are registered (the transport and its own `providers` first, then yours), and the bus waits for each. `onBusShutdown` goes in reverse, and a provider that fails to shut down is logged without keeping the others from it. Providers with a request or transient scope have no single instance, so they are skipped. Providers of other modules are skipped too, unless the bus module aliases them (like a transport given as `{ useExisting }`). An instance is called once, however many aliases point to it.
 
-The Redis Streams transport starts consuming in `onBusBootstrap`, so calling `subscribe` yourself, without the bus, needs `onBusBootstrap()` afterwards to start reading. Its shutdown logic runs in `onBusShutdown`.
+The built-in transports are plain classes created with `new RedisStreamsTransport(config)`, and do their work in these hooks: they connect in `onBusInit`, the Redis Streams transport starts consuming in `onBusBootstrap`, and both clean up in `onBusShutdown`. Using one without the bus needs these calls yourself, e.g. `onBusInit()` before and `onBusBootstrap()` after `subscribe`.
 
 ## Outbox
 
 `Outbox` is a transport that stores events instead of publishing them, so the event can be written in the same database transaction as your data. A background loop then relays the stored events to a real transport (RabbitMQ, Redis Streams, or your own `Transport`). Subscriptions and health checks go straight to that transport.
 
-Extend `Outbox` with your store and pass the real transport in `config.transport`, using the same `{ provider, config }` shape as `transport`:
+Extend `Outbox` with your store and provide it with `withConfig`. The real transport goes in `config.transport`, as any transport provider accepted by `transport` (`withConfig`, a class, `useFactory`, `useExisting`, …). The outbox is created by Nest, so it can inject its own dependencies, and its config is available as `this.config`:
 
 ```typescript
 import { Outbox, type OutboxConfig, type OutboxRecord } from '@lsndr/bus';
@@ -229,6 +255,10 @@ interface PostgresOutboxConfig extends OutboxConfig {
 
 @Injectable()
 class PostgresOutbox extends Outbox<PostgresOutboxConfig> {
+  constructor(@Inject(Database) private readonly db: Database) {
+    super();
+  }
+
   // Runs inside the caller's transaction: join it here (e.g. via AsyncLocalStorage)
   protected async save(records: OutboxRecord[]) {
     // INSERT INTO outbox (...) VALUES (...), (...)
@@ -245,17 +275,14 @@ class PostgresOutbox extends Outbox<PostgresOutboxConfig> {
 }
 
 BusModule.forRoot({
-  transport: {
-    provider: PostgresOutbox,
-    config: {
-      transport: {
-        provider: RabbitmqTransport,
-        config: { url: 'amqp://localhost', group: 'billing' },
-      },
-      interval: 1000, // optional, ms to wait when idle or after a failure
-      batchSize: 100, // your own option
-    },
-  },
+  transport: PostgresOutbox.withConfig({
+    transport: RabbitmqTransport.withConfig({
+      url: 'amqp://localhost',
+      group: 'billing',
+    }),
+    interval: 1000, // optional, ms to wait when idle or after a failure
+    batchSize: 100, // your own option
+  }),
 });
 ```
 
@@ -263,17 +290,17 @@ BusModule.forRoot({
 - `relay` is called in a loop. It locks pending records, calls `this.dispatch(records)`, and marks them dispatched only if that resolves. It returns the number of records dispatched: if above zero it runs again right away, otherwise it waits `interval`. Batching and limits are up to your implementation.
 - `dispatch` publishes the records as one batch, in order, to the real transport with their original `id`, `name`, `meta` and `publishedAt`. It rejects on the first failure, so roll back and retry. Delivery is at-least-once.
 - Locking with `SKIP LOCKED` lets several instances relay together, at the cost of strict ordering between batches.
-- If you override `onApplicationBootstrap` or `onModuleDestroy`, call `super`.
+- If you override `onBusBootstrap` or `onBusShutdown`, call `super`: they run the relay loop.
 
 ## Configuration
 
 `BusModule.forRoot()` options:
 
-- `transport` — required. `{ provider, config }`, see the options below.
+- `transport` — required. A transport provider, see [Providing the transport](#providing-the-transport). The options below go in the config of `withConfig`.
 - `middlewares` — global middleware classes. They must be provided in a module of the application.
 - `imports`, `providers` — additional Nest imports and providers for the module.
 
-Every transport takes these in its `config`:
+Every built-in transport takes these in its config:
 
 - `group` — required. Consumer group name. RabbitMQ uses it as a prefix for queue names, Redis Streams as the name of the consumer group of every stream.
 - `retries.max` — maximum retries before a message is dropped. Defaults to `5`.
@@ -292,10 +319,10 @@ RabbitMQ adds `url` (required). Redis Streams has more options, see [Redis Strea
 
 ```typescript
 BusModule.forRoot({
-  transport: {
-    provider: RedisStreamsTransport,
-    config: { url: 'redis://localhost:6379', group: 'billing' },
-  },
+  transport: RedisStreamsTransport.withConfig({
+    url: 'redis://localhost:6379',
+    group: 'billing',
+  }),
 });
 ```
 
@@ -304,7 +331,7 @@ Config options: `url` and `group` (required), `retries`, `consumer` (`<hostname>
 - Each event class has its own stream, `<keyPrefix><EventClass>`.
 - Each stream has one consumer group, named after `group` and created at the stream's tail (`$`). Instances of the group share it, so an entry goes to a single instance, which runs all of its handlers for the event in parallel. Every instance of a group must therefore register the same handlers.
 - An instance reads all its streams with one blocking `XREADGROUP` (`COUNT = concurrency`). Each stream has `concurrency` slots, and a stream is part of the next read only while it has a free slot. Entries run as soon as they are read and free their slot on their own, so a stream runs at most `2 * concurrency - 1` entries at once; there is no global limit. When no stream has a free slot, Redis is not called until one frees.
-- Consuming starts when `subscribe` is called, which the discovery does once after all handlers are found.
+- Consuming starts in `onBusBootstrap`, once the discovery has subscribed all handlers.
 - Successful handlers of an entry are recorded in the hash `<keyPrefix>done:<group>:<EventClass>:<id>` (with a TTL), so a redelivery only runs the handlers that haven't succeeded. The entry is acknowledged, and the hash deleted, once every handler has succeeded or failed permanently.
 - Shutdown stops reading and reclaiming, waits for the entries in flight (up to `shutdownTimeout`), then removes the consumer from the groups unless it still has pending entries.
 - The consumer name defaults to the host name and the process id, so instances on the same host don't share pending entries. A stable name avoids leaving stale consumers behind after restarts; it doesn't change recovery, since pending entries are reclaimed by any consumer after `retries.delay`. A consumer is removed from its groups on graceful shutdown unless it still has pending entries.

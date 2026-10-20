@@ -1,25 +1,21 @@
-import {
-  Inject,
-  Logger,
-  type OnApplicationBootstrap,
-  type OnModuleDestroy,
-} from '@nestjs/common';
+import { Inject, Logger, type Type } from '@nestjs/common';
 import { setTimeout } from 'node:timers/promises';
 import { createEventDto, type EventDto } from '../event-dto.js';
-import { type PublishEvent } from '../dispatcher.js';
+import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type EventConstructor } from '../../types.js';
-import {
-  type BusTransport,
-  Transport,
-  type TransportPublishOptions,
-} from '../transport.js';
+import { type OnBusBootstrap, type OnBusShutdown } from '../../lifecycle.js';
+import { type Transport } from '../transport.js';
+import { type TransportProvider, toProviders } from '../provider.js';
 
 export type OutboxRecord = EventDto;
 
 export interface OutboxConfig<T extends Transport = Transport> {
-  /** The transport the stored events are relayed to. */
-  transport: BusTransport<T>;
+  /**
+   * The transport the stored events are relayed to, provided the same way as
+   * the `transport` option of the bus module.
+   */
+  transport: TransportProvider<T>;
   /**
    * How long the relay waits when there is nothing to relay, or after a
    * failure, in milliseconds.
@@ -29,15 +25,15 @@ export interface OutboxConfig<T extends Transport = Transport> {
   interval?: number;
 }
 
-type InferTransport<C> = C extends OutboxConfig<infer T> ? T : unknown;
+type InferConfig<O> = O extends Outbox<infer C> ? C : never;
 
-export const OutboxTransport = Symbol('OutboxTransport');
+type InferTransport<C> = C extends OutboxConfig<infer T> ? T : Transport;
 
-/**
- * Where an outbox gets its config from. Not `TransportConfig`, which the
- * transport it relays to reads its config from.
- */
-export const OutboxConfigToken = Symbol('OutboxConfig');
+/** Where the transport an outbox relays to is registered. */
+const OutboxTransport = Symbol('OutboxTransport');
+
+/** Where the config of an outbox is registered. */
+const OutboxConfigToken = Symbol('OutboxConfig');
 
 /**
  * Base class of transactional outboxes.
@@ -47,18 +43,18 @@ export const OutboxConfigToken = Symbol('OutboxConfig');
  * configured transport. Subscriptions and health checks go straight to that
  * transport.
  *
- * The transport is a provider of the bus module, so the bus calls its
- * lifecycle hooks itself.
+ * Provide an outbox with {@link Outbox.withConfig}. The transport it relays to
+ * is registered in the bus module next to it, so the bus calls its lifecycle
+ * hooks itself, before the ones of the outbox and after them on shutdown.
  *
- * Subclasses that override `onApplicationBootstrap` or `onModuleDestroy` must
- * call `super`.
+ * Subclasses that override `onBusBootstrap` or `onBusShutdown` must call
+ * `super`.
  */
 export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
-  extends Transport<C>
-  implements OnApplicationBootstrap, OnModuleDestroy
+  implements Transport, OnBusBootstrap, OnBusShutdown
 {
   @Inject(OutboxConfigToken)
-  declare public config: C;
+  protected config!: C;
 
   @Inject(OutboxTransport)
   protected transport!: InferTransport<C>;
@@ -66,6 +62,24 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   private readonly logger = new Logger(Outbox.name);
   private abortController?: AbortController;
   private loop?: Promise<void>;
+
+  /**
+   * Provides the outbox with the given config, available as `this.config`,
+   * and registers the transport it relays to. The outbox is created by Nest,
+   * so it can inject its own dependencies.
+   */
+  public static withConfig<O extends Outbox<any>>(
+    this: Type<O>,
+    config: InferConfig<O>,
+  ): TransportProvider<O> {
+    return {
+      useClass: this,
+      providers: [
+        { provide: OutboxConfigToken, useValue: config },
+        ...toProviders(OutboxTransport, config.transport),
+      ],
+    };
+  }
 
   /**
    * Stores the records of one `publish` call, in order. Store them together,
@@ -86,14 +100,14 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
    */
   protected abstract relay(): Promise<number>;
 
-  public onApplicationBootstrap(): void {
+  public onBusBootstrap(): void {
     const abortController = new AbortController();
 
     this.abortController = abortController;
     this.loop = this.runLoop(abortController.signal);
   }
 
-  public async onModuleDestroy(): Promise<void> {
+  public async onBusShutdown(): Promise<void> {
     this.abortController?.abort();
     await this.loop;
   }
@@ -102,16 +116,11 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
     return this.transport.assertHealthy();
   }
 
-  public publish(
-    events: PublishEvent<TransportPublishOptions>[],
-  ): Promise<void>;
-  public publish(
-    event: object,
-    options?: TransportPublishOptions,
-  ): Promise<void>;
+  public publish(events: PublishEvent[]): Promise<void>;
+  public publish(event: object, options?: PublishOptions): Promise<void>;
   public async publish(
-    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
-    options?: TransportPublishOptions,
+    eventOrEvents: object | PublishEvent[],
+    options?: PublishOptions,
   ): Promise<void> {
     const events = Array.isArray(eventOrEvents)
       ? eventOrEvents

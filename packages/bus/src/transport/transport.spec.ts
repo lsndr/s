@@ -16,11 +16,14 @@ import {
   RedisStreamsTransport,
   RedisStreamsTransportConfig,
 } from './redis-streams/transport.js';
-import { TransportConfig, type Transport } from './transport.js';
-import { hasOnBusBootstrap } from '../lifecycle.js';
+import { type Transport } from './transport.js';
+import {
+  hasOnBusBootstrap,
+  hasOnBusInit,
+  hasOnBusShutdown,
+} from '../lifecycle.js';
 import { setTimeout } from 'node:timers/promises';
 import { IsDate, IsString } from 'class-validator';
-import { Test, TestingModule } from '@nestjs/testing';
 
 class TestEvent {
   @IsString()
@@ -53,6 +56,20 @@ interface TransportTest {
   }>;
 }
 
+/** Does what the bus does before the handlers are subscribed. */
+async function init(transport: Transport) {
+  if (hasOnBusInit(transport)) {
+    await transport.onBusInit();
+  }
+}
+
+/** Does what the bus does when it shuts down. */
+async function shutdown(transport: Transport) {
+  if (hasOnBusShutdown(transport)) {
+    await transport.onBusShutdown();
+  }
+}
+
 /** Does what the bus does once the handlers are subscribed. */
 async function bootstrap(transport: Transport) {
   if (hasOnBusBootstrap(transport)) {
@@ -79,32 +96,23 @@ describe('Transport', { timeout: 60_000 }, () => {
           )
           .start();
         const url = `amqp://${container.getHost()}:${container.getMappedPort(5672)}`;
-        const modules: TestingModule[] = [];
+        const transports: Transport[] = [];
 
         const createTransport = async (busConfig: CommonConfig) => {
-          const module = await Test.createTestingModule({
-            imports: [],
-            providers: [
-              RabbitmqTransport,
-              {
-                provide: TransportConfig,
-                useValue: {
-                  url,
-                  ...busConfig,
-                } satisfies RabbitmqTransportConfig,
-              },
-            ],
-          }).compile();
+          const transport = new RabbitmqTransport({
+            url,
+            ...busConfig,
+          } satisfies RabbitmqTransportConfig);
 
-          await module.init();
+          await init(transport);
 
-          modules.push(module);
+          transports.push(transport);
 
-          return module.get<RabbitmqTransport>(RabbitmqTransport);
+          return transport;
         };
 
         const teardown = async () => {
-          await Promise.all(modules.map((m) => m.close()));
+          await Promise.all(transports.map(shutdown));
           await container.stop();
         };
 
@@ -124,39 +132,27 @@ describe('Transport', { timeout: 60_000 }, () => {
           )
           .start();
         const url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
-        const modules: TestingModule[] = [];
+        const transports: Transport[] = [];
 
         const createTransport = async (busConfig: CommonConfig) => {
-          const module = await Test.createTestingModule({
-            providers: [
-              RedisStreamsTransport,
-              {
-                provide: TransportConfig,
-                useValue: {
-                  url,
-                  ...busConfig,
-                  reclaimInterval: 25,
-                  // One entry at a time, so that a busy instance leaves the
-                  // next entries to the others
-                  concurrency: 1,
-                } satisfies RedisStreamsTransportConfig,
-              },
-            ],
-          }).compile();
+          const transport = new RedisStreamsTransport({
+            url,
+            ...busConfig,
+            reclaimInterval: 25,
+            // One entry at a time, so that a busy instance leaves the
+            // next entries to the others
+            concurrency: 1,
+          } satisfies RedisStreamsTransportConfig);
 
-          await module.init();
+          await init(transport);
 
-          modules.push(module);
+          transports.push(transport);
 
-          return module.get<RedisStreamsTransport>(RedisStreamsTransport);
+          return transport;
         };
 
         const teardown = async () => {
-          for (const m of modules) {
-            await m.get(RedisStreamsTransport).onBusShutdown();
-          }
-
-          await Promise.all(modules.map((m) => m.close()));
+          await Promise.all(transports.map(shutdown));
           await container.stop();
         };
 
@@ -408,22 +404,12 @@ describe('Transport', { timeout: 60_000 }, () => {
       });
 
       it('throws when transport is not initialized', async () => {
-        const module = await Test.createTestingModule({
-          providers: [
-            RabbitmqTransport,
-            {
-              provide: TransportConfig,
-              useValue: {
-                url: 'amqp://localhost',
-                group: crypto.randomUUID(),
-                retries: { max: 0, delay: 100 },
-              } satisfies RabbitmqTransportConfig,
-            },
-          ],
-        }).compile();
-
-        // intentionally skip module.init() so channel is never set
-        const transport = module.get(RabbitmqTransport);
+        // intentionally skip onBusInit() so channel is never set
+        const transport = new RabbitmqTransport({
+          url: 'amqp://localhost',
+          group: crypto.randomUUID(),
+          retries: { max: 0, delay: 100 },
+        } satisfies RabbitmqTransportConfig);
 
         await expect(transport.assertHealthy()).rejects.toThrow();
       });
