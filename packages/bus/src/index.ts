@@ -17,12 +17,19 @@ export {
   type OutboxConfig,
   type OutboxRecord,
 } from './transport/outbox/outbox.js';
+export { Transport } from './transport/transport.js';
+export { type BusProvider } from './provider.js';
 export {
-  Transport,
-  type BusTransport,
-  type TransportPublishOptions,
-} from './transport/transport.js';
-export { Dispatcher, type PublishEvent } from './transport/dispatcher.js';
+  Serializer,
+  type SerializedData,
+  type SerializedMessage,
+} from './serialization/serializer.js';
+export { JsonSerializer } from './serialization/json.serializer.js';
+export {
+  Dispatcher,
+  type PublishEvent,
+  type PublishOptions,
+} from './transport/dispatcher.js';
 export { type Subscription } from './transport/subscriber.js';
 export { Health } from './transport/health.js';
 export {
@@ -33,8 +40,10 @@ export {
 export { type EventPayload } from './types.js';
 export { type EventHandlerMiddleware } from './middleware/middleware.js';
 export { BusOtel, type BusOtelOptions } from './telemetry/otel/bus-otel.js';
+export { instrumentTransport } from './telemetry/instrument.js';
 export {
   Telemetry,
+  createTransportTelemetry,
   type Attributes,
   type BusTelemetry,
   type ContextCarrier,
@@ -47,7 +56,9 @@ export {
   type ProcessOperation,
   type PublishMessage,
   type PublishOperation,
+  type TelemetryDescribed,
   type TelemetryDescriptor,
+  type TelemetryInstrumented,
   type TransportSpanOptions,
   type TransportTelemetry,
 } from './telemetry/telemetry.js';

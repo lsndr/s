@@ -1,10 +1,13 @@
 import { Logger } from '@nestjs/common';
-import { type RedisClientType } from 'redis';
+import { type RESP_TYPES, type RedisClientType } from 'redis';
 
 const DEFAULT_KIND = 'default';
 
-/** The kind is required when `Clients` is given kinds, and not allowed otherwise. */
-type KindArgs<K extends string> = [K] extends [never] ? [] : [kind: K];
+function toBinary(client: RedisClientType, blobString: 36) {
+  return client.withTypeMapping({ [blobString]: Buffer });
+}
+
+type BinaryClient = ReturnType<typeof toBinary>;
 
 /**
  * Lazily connected Redis clients.
@@ -21,34 +24,55 @@ export class Clients<K extends string = never> {
   private readonly destroyed = new Set<string>();
   private readonly ids = new Map<string, number>();
   private readonly logger = new Logger(Clients.name);
+  private readonly binaries = new WeakMap<RedisClientType, BinaryClient>();
+  private respTypes?: typeof RESP_TYPES;
 
   public constructor(private readonly url: string) {}
 
   /**
    * Returns the client of a kind, connecting it on the first request.
    *
+   * @param kind - Without kinds, or if left out, the default client.
    * @throws If the client was destroyed.
    */
-  public get(...args: KindArgs<K>): Promise<RedisClientType> {
-    const kind = this.keyOf(args);
+  public get(kind?: K): Promise<RedisClientType> {
+    const key = kind ?? DEFAULT_KIND;
 
-    if (this.destroyed.has(kind)) {
-      return Promise.reject(new Error(`Redis client ${kind} is closed`));
+    if (this.destroyed.has(key)) {
+      return Promise.reject(new Error(`Redis client ${key} is closed`));
     }
 
-    let client = this.clients.get(kind);
+    let client = this.clients.get(key);
 
     if (!client) {
-      client = this.connect(kind).catch((err) => {
+      client = this.connect(key).catch((err) => {
         // Let the next call connect again
-        this.clients.delete(kind);
+        this.clients.delete(key);
 
         throw err;
       });
-      this.clients.set(kind, client);
+      this.clients.set(key, client);
     }
 
     return client;
+  }
+
+  /**
+   * Like {@link Clients.get}, but replies hold blob strings as buffers, so that
+   * binary data survives. It shares the connection of the client.
+   *
+   * @throws If the client was destroyed.
+   */
+  public async getBinary(kind?: K): Promise<BinaryClient> {
+    const client = await this.get(kind);
+    let binary = this.binaries.get(client);
+
+    if (!binary) {
+      binary = toBinary(client, this.respTypes!.BLOB_STRING);
+      this.binaries.set(client, binary);
+    }
+
+    return binary;
   }
 
   /**
@@ -56,23 +80,23 @@ export class Clients<K extends string = never> {
    *
    * @returns `undefined` while the client is not connected.
    */
-  public id(...args: KindArgs<K>): number | undefined {
-    return this.ids.get(this.keyOf(args));
+  public id(kind?: K): number | undefined {
+    return this.ids.get(kind ?? DEFAULT_KIND);
   }
 
   /**
    * Drops the connections right away, which interrupts a command that is
    * blocked on one. The clients can't be got again.
    *
-   * @param args - The kind to destroy. Everything is destroyed without it.
+   * @param kind - The kind to destroy. Everything is destroyed without it.
    */
-  public async destroy(...args: [] | KindArgs<K>): Promise<void> {
+  public async destroy(kind?: K): Promise<void> {
     // Without a kind, the ones that were connected, and the default one that
     // a `Clients` without kinds uses
     const kinds =
-      args.length === 0
+      kind === undefined
         ? [...new Set([...this.clients.keys(), DEFAULT_KIND])]
-        : [this.keyOf(args)];
+        : [kind];
 
     const clients = kinds.flatMap((kind) => {
       const client = this.clients.get(kind);
@@ -94,12 +118,10 @@ export class Clients<K extends string = never> {
     );
   }
 
-  private keyOf(args: KindArgs<K>): string {
-    return args[0] ?? DEFAULT_KIND;
-  }
-
   private async connect(kind: string): Promise<RedisClientType> {
-    const { createClient } = await import('redis');
+    const { createClient, RESP_TYPES } = await import('redis');
+
+    this.respTypes = RESP_TYPES;
     const client = createClient({ url: this.url });
     let identified: Promise<void> = Promise.resolve();
 

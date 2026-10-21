@@ -16,14 +16,23 @@ import {
   RedisStreamsTransport,
   RedisStreamsTransportConfig,
 } from './redis-streams/transport.js';
-import { TransportConfig, type Transport } from './transport.js';
-import { hasOnBusBootstrap } from '../lifecycle.js';
+import { type Transport } from './transport.js';
+import {
+  hasOnBusBootstrap,
+  hasOnBusInit,
+  hasOnBusShutdown,
+} from '../lifecycle.js';
 import { setTimeout } from 'node:timers/promises';
 import { IsDate, IsString } from 'class-validator';
-import { Test, TestingModule } from '@nestjs/testing';
+import { type Serializer } from '../serialization/serializer.js';
+import { JsonSerializer } from '../serialization/json.serializer.js';
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import { createOtelFixture } from '../telemetry/otel/otel.fixture.js';
-import { type BusTelemetry, Telemetry } from '../telemetry/telemetry.js';
+import { instrumentTransport } from '../telemetry/instrument.js';
+import { type BusTelemetry } from '../telemetry/telemetry.js';
+const serializer = new JsonSerializer();
+
+await serializer.onBusInit();
 
 class TestEvent {
   @IsString()
@@ -55,10 +64,25 @@ interface TransportTest {
   setup: () => Promise<{
     createTransport: (
       config: CommonConfig,
+      serializer?: Serializer,
       telemetry?: BusTelemetry,
     ) => Promise<Transport>;
     teardown: () => Promise<void>;
   }>;
+}
+
+/** Does what the bus does before the handlers are subscribed. */
+async function init(transport: Transport) {
+  if (hasOnBusInit(transport)) {
+    await transport.onBusInit();
+  }
+}
+
+/** Does what the bus does when it shuts down. */
+async function shutdown(transport: Transport) {
+  if (hasOnBusShutdown(transport)) {
+    await transport.onBusShutdown();
+  }
 }
 
 /** Does what the bus does once the handlers are subscribed. */
@@ -88,44 +112,35 @@ describe('Transport', { timeout: 60_000 }, () => {
           )
           .start();
         const url = `amqp://${container.getHost()}:${container.getMappedPort(5672)}`;
-        const modules: TestingModule[] = [];
+        const transports: Transport[] = [];
 
         const createTransport = async (
           busConfig: CommonConfig,
+          custom: Serializer = serializer,
           telemetry?: BusTelemetry,
         ) => {
-          const module = await Test.createTestingModule({
-            imports: [],
-            providers: [
-              RabbitmqTransport,
-              {
-                provide: TransportConfig,
-                useValue: {
-                  url,
-                  ...busConfig,
-                } satisfies RabbitmqTransportConfig,
-              },
-              ...(telemetry
-                ? [{ provide: Telemetry, useValue: telemetry }]
-                : []),
-            ],
-          }).compile();
+          const transport = new RabbitmqTransport(
+            {
+              url,
+              ...busConfig,
+            } satisfies RabbitmqTransportConfig,
+            custom,
+            telemetry,
+          );
 
-          await module.init();
-
-          modules.push(module);
-
-          const transport = module.get<RabbitmqTransport>(RabbitmqTransport);
+          await init(transport);
 
           if (telemetry) {
-            transport.instrument(telemetry);
+            instrumentTransport(transport, telemetry);
           }
+
+          transports.push(transport);
 
           return transport;
         };
 
         const teardown = async () => {
-          await Promise.all(modules.map((m) => m.close()));
+          await Promise.all(transports.map(shutdown));
           await container.stop();
         };
 
@@ -146,53 +161,39 @@ describe('Transport', { timeout: 60_000 }, () => {
           )
           .start();
         const url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
-        const modules: TestingModule[] = [];
+        const transports: Transport[] = [];
 
         const createTransport = async (
           busConfig: CommonConfig,
+          custom: Serializer = serializer,
           telemetry?: BusTelemetry,
         ) => {
-          const module = await Test.createTestingModule({
-            providers: [
-              RedisStreamsTransport,
-              {
-                provide: TransportConfig,
-                useValue: {
-                  url,
-                  ...busConfig,
-                  reclaimInterval: 25,
-                  // One entry at a time, so that a busy instance leaves the
-                  // next entries to the others
-                  concurrency: 1,
-                } satisfies RedisStreamsTransportConfig,
-              },
-              ...(telemetry
-                ? [{ provide: Telemetry, useValue: telemetry }]
-                : []),
-            ],
-          }).compile();
-
-          await module.init();
-
-          modules.push(module);
-
-          const transport = module.get<RedisStreamsTransport>(
-            RedisStreamsTransport,
+          const transport = new RedisStreamsTransport(
+            {
+              url,
+              ...busConfig,
+              reclaimInterval: 25,
+              // One entry at a time, so that a busy instance leaves the
+              // next entries to the others
+              concurrency: 1,
+            } satisfies RedisStreamsTransportConfig,
+            custom,
+            telemetry,
           );
 
+          await init(transport);
+
           if (telemetry) {
-            transport.instrument(telemetry);
+            instrumentTransport(transport, telemetry);
           }
+
+          transports.push(transport);
 
           return transport;
         };
 
         const teardown = async () => {
-          for (const m of modules) {
-            await m.get(RedisStreamsTransport).onBusShutdown();
-          }
-
-          await Promise.all(modules.map((m) => m.close()));
+          await Promise.all(transports.map(shutdown));
           await container.stop();
         };
 
@@ -203,6 +204,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     let teardown: () => Promise<void>;
     let createTransport: (
       config: CommonConfig,
+      serializer?: Serializer,
       telemetry?: BusTelemetry,
     ) => Promise<Transport>;
 
@@ -456,6 +458,7 @@ describe('Transport', { timeout: 60_000 }, () => {
           const group = crypto.randomUUID();
           const transport = await createTransport(
             { group, retries: { max: 1, delay: 100 } },
+            undefined,
             otel.telemetry,
           );
           const handler = vi
@@ -534,6 +537,7 @@ describe('Transport', { timeout: 60_000 }, () => {
         try {
           const transport = await createTransport(
             { group: crypto.randomUUID(), retries: { max: 0, delay: 100 } },
+            undefined,
             otel.telemetry,
           );
           const handler = vi.fn().mockRejectedValue(new Error('always'));
@@ -563,22 +567,15 @@ describe('Transport', { timeout: 60_000 }, () => {
       });
 
       it('throws when transport is not initialized', async () => {
-        const module = await Test.createTestingModule({
-          providers: [
-            RabbitmqTransport,
-            {
-              provide: TransportConfig,
-              useValue: {
-                url: 'amqp://localhost',
-                group: crypto.randomUUID(),
-                retries: { max: 0, delay: 100 },
-              } satisfies RabbitmqTransportConfig,
-            },
-          ],
-        }).compile();
-
-        // intentionally skip module.init() so channel is never set
-        const transport = module.get(RabbitmqTransport);
+        // intentionally skip onBusInit() so channel is never set
+        const transport = new RabbitmqTransport(
+          {
+            url: 'amqp://localhost',
+            group: crypto.randomUUID(),
+            retries: { max: 0, delay: 100 },
+          } satisfies RabbitmqTransportConfig,
+          serializer,
+        );
 
         await expect(transport.assertHealthy()).rejects.toThrow();
       });

@@ -158,12 +158,12 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
       expect(process).toHaveBeenCalledTimes(2);
       expect(process).toHaveBeenCalledWith(
         streamOf(name),
-        { id: ids[0], message: { payload: '0' } },
+        { id: ids[0], message: { payload: Buffer.from('0') } },
         2,
       );
       expect(process).toHaveBeenCalledWith(
         streamOf(name),
-        { id: ids[1], message: { payload: '1' } },
+        { id: ids[1], message: { payload: Buffer.from('1') } },
         2,
       );
     });
@@ -199,7 +199,7 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
     it('does not claim the entries in flight', async () => {
       const { next, abandon, hold, stale, process, names } = await setup();
       const [name] = names as [string];
-      const client = await clients.get('command');
+      const client = await clients.getBinary('command');
       const xClaim = vi.spyOn(client, 'xClaim');
       const ids = await abandon(name, 2);
 
@@ -275,7 +275,7 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
       const client = await clients.get('command');
       const original = client.xPendingRange.bind(client);
       const controller = new AbortController();
-      const xClaim = vi.spyOn(client, 'xClaim');
+      const xClaim = vi.spyOn(await clients.getBinary('command'), 'xClaim');
       const [id] = (await abandon(name)) as [string];
 
       vi.spyOn(client, 'xPendingRange').mockImplementation(async (...args) => {
@@ -298,7 +298,7 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
     it('does not run the claimed entries when aborted while claiming them', async () => {
       const { next, abandon, stale, process, names } = await setup();
       const [name] = names as [string];
-      const client = await clients.get('command');
+      const client = await clients.getBinary('command');
       const original = client.xClaim.bind(client);
       const controller = new AbortController();
 

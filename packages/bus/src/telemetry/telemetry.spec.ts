@@ -1,28 +1,40 @@
-import { Inject, Injectable, Module, type OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Module,
+  Optional,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { SpanKind } from '@opentelemetry/api';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from '../bus.module.js';
 import { EventHandler } from '../decorators/event-handler.decorator.js';
-import { Dispatcher, type PublishEvent } from '../transport/dispatcher.js';
-import { createEventDto, parseEventPayload } from '../transport/event-dto.js';
+import {
+  Dispatcher,
+  type PublishEvent,
+  type PublishOptions,
+} from '../transport/dispatcher.js';
+import { Serializer } from '../serialization/serializer.js';
 import { Outbox, type OutboxRecord } from '../transport/outbox/outbox.js';
 import {
   type EventCallback,
   type Subscription,
 } from '../transport/subscriber.js';
-import {
-  Transport,
-  type TransportPublishOptions,
-} from '../transport/transport.js';
-import { type OnBusInit } from '../lifecycle.js';
+import { type Transport } from '../transport/transport.js';
+import { type OnBusBootstrap, type OnBusInit } from '../lifecycle.js';
 import { type EventConstructor } from '../types.js';
 import { createOtelFixture } from './otel/otel.fixture.js';
+import { CONTEXT_META_KEY } from './context.js';
+import { describeTransport } from './instrument.js';
 import {
   type BusTelemetry,
   type ContextCarrier,
+  createTransportTelemetry,
   type ProcessOperation,
   type PublishOperation,
+  Telemetry,
+  type TelemetryDescribed,
   type TelemetryDescriptor,
   type TransportTelemetry,
 } from './telemetry.js';
@@ -33,11 +45,22 @@ class TestEvent {
 
 /** Delivers to the subscriptions in the process, like a broker would. */
 @Injectable()
-class MemoryTransport extends Transport {
+class MemoryTransport implements Transport, TelemetryDescribed {
   public static subscriptions: Subscription[] = [];
-  public static published: TransportPublishOptions[] = [];
+  public static published: PublishOptions[] = [];
 
-  public override getTelemetryDescriptor(): TelemetryDescriptor {
+  protected readonly telemetry: TransportTelemetry;
+
+  public constructor(
+    @Inject(Serializer) private readonly serializer: Serializer,
+    @Optional() @Inject(Telemetry) busTelemetry?: BusTelemetry,
+  ) {
+    this.telemetry = createTransportTelemetry(busTelemetry, () =>
+      this.getTelemetryDescriptor(),
+    );
+  }
+
+  public getTelemetryDescriptor(): TelemetryDescriptor {
     return {
       system: 'memory',
       destination: (eventName, handler) =>
@@ -49,9 +72,11 @@ class MemoryTransport extends Transport {
     return Promise.resolve();
   }
 
+  public publish(events: PublishEvent[]): Promise<void>;
+  public publish(event: object, options?: PublishOptions): Promise<void>;
   public async publish(
-    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
-    options?: TransportPublishOptions,
+    eventOrEvents: object | PublishEvent[],
+    options?: PublishOptions,
   ): Promise<void> {
     const events = Array.isArray(eventOrEvents)
       ? eventOrEvents
@@ -60,12 +85,12 @@ class MemoryTransport extends Transport {
     for (const { event, options } of events) {
       MemoryTransport.published.push(options ?? {});
 
-      const dto = createEventDto(event, options);
+      const message = this.serializer.serialize(event, options);
 
       for (const subscription of MemoryTransport.subscriptions) {
-        if (dto.name === subscription.event.name) {
+        if (message.name === subscription.event.name) {
           await subscription.callback(
-            parseEventPayload(subscription.event, JSON.stringify(dto)),
+            this.serializer.deserialize(subscription.event, message.data),
             { attempt: 1 },
           );
         }
@@ -73,6 +98,11 @@ class MemoryTransport extends Transport {
     }
   }
 
+  public subscribe(subscriptions: Subscription[]): Promise<void>;
+  public subscribe<
+    C extends EventConstructor<any>,
+    E extends InstanceType<C> = InstanceType<C>,
+  >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
   public subscribe(
     eventOrSubscriptions: EventConstructor<any> | Subscription[],
     handler?: string,
@@ -141,7 +171,7 @@ describe('telemetry', () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
-          transport: { provider: MemoryTransport, config: {} },
+          transport: MemoryTransport,
           telemetry: otel.telemetry,
           providers: [TestHandler],
         }),
@@ -177,13 +207,10 @@ describe('telemetry', () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
-          transport: {
-            provider: MemoryOutbox,
-            config: {
-              transport: { provider: MemoryTransport, config: {} },
-              interval: 5,
-            },
-          },
+          transport: MemoryOutbox.withConfig({
+            transport: MemoryTransport,
+            interval: 5,
+          }),
           telemetry: otel.telemetry,
           providers: [TestHandler],
         }),
@@ -201,7 +228,7 @@ describe('telemetry', () => {
       const process = otel.span('process mem:TestEvent:TestHandler');
 
       expect(create.kind).toBe(SpanKind.PRODUCER);
-      expect(MemoryOutbox.saved[0]?.context?.['traceparent']).toContain(
+      expect(String(MemoryOutbox.saved[0]?.data)).toContain(
         create.spanContext().spanId,
       );
       expect(send.kind).toBe(SpanKind.CLIENT);
@@ -212,7 +239,7 @@ describe('telemetry', () => {
         create.spanContext().spanId,
       ]);
       // The stored context was not replaced by the one of the relay
-      expect(MemoryTransport.published[0]?.context?.['traceparent']).toContain(
+      expect(MemoryTransport.published[0]?.meta?.[CONTEXT_META_KEY]).toContain(
         create.spanContext().spanId,
       );
       expect(
@@ -248,7 +275,21 @@ describe('telemetry', () => {
     const module = await Test.createTestingModule({
       imports: [
         BusModule.forRoot({
-          transport: { provider: MemoryTransport, config: {} },
+          transport: MemoryTransport,
+          // The default one is ready once the bus has initialized
+          serializer: {
+            useValue: {
+              serialize: (event: object, options?: PublishOptions) => ({
+                id: options?.id ?? 'id',
+                name: event.constructor.name,
+                publishedAt: new Date(),
+                data: '',
+              }),
+              deserialize: () => {
+                throw new Error('not used');
+              },
+            },
+          },
           telemetry: otel.telemetry,
         }),
         EagerModule,
@@ -276,8 +317,8 @@ describe('telemetry', () => {
     const bootstrap = vi.fn();
 
     @Injectable()
-    class HookedTransport extends MemoryTransport {
-      public onApplicationBootstrap(): void {
+    class HookedTransport extends MemoryTransport implements OnBusBootstrap {
+      public onBusBootstrap(): void {
         bootstrap();
       }
     }
@@ -288,7 +329,7 @@ describe('telemetry', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: { provider: HookedTransport, config: {} },
+            transport: HookedTransport,
             telemetry,
           }),
         ],
@@ -353,12 +394,12 @@ describe('telemetry', () => {
     @Injectable()
     class ReportingTransport extends MemoryTransport {
       public override async publish(
-        eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
-        options?: TransportPublishOptions,
+        eventOrEvents: object | PublishEvent[],
+        options?: PublishOptions,
       ): Promise<void> {
         this.telemetry.counter('published').add(1);
 
-        await super.publish(eventOrEvents, options);
+        await super.publish(eventOrEvents as object, options);
       }
     }
 
@@ -367,7 +408,7 @@ describe('telemetry', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: { provider: ReportingTransport, config: {} },
+            transport: ReportingTransport,
             telemetry,
             providers: [TestHandler],
           }),
@@ -413,7 +454,7 @@ describe('telemetry', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: { provider: ReportingTransport, config: {} },
+            transport: ReportingTransport,
             telemetry,
             providers: [TestHandler],
           }),
@@ -434,13 +475,10 @@ describe('telemetry', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: {
-              provider: MemoryOutbox,
-              config: {
-                transport: { provider: MemoryTransport, config: {} },
-                interval: 5,
-              },
-            },
+            transport: MemoryOutbox.withConfig({
+              transport: MemoryTransport,
+              interval: 5,
+            }),
             telemetry,
             providers: [TestHandler],
           }),
@@ -472,13 +510,10 @@ describe('telemetry', () => {
       const module = await Test.createTestingModule({
         imports: [
           BusModule.forRoot({
-            transport: {
-              provider: MemoryOutbox,
-              config: {
-                transport: { provider: ReportingTransport, config: {} },
-                interval: 5,
-              },
-            },
+            transport: MemoryOutbox.withConfig({
+              transport: ReportingTransport,
+              interval: 5,
+            }),
             telemetry,
           }),
         ],
@@ -494,26 +529,9 @@ describe('telemetry', () => {
     });
 
     it('names the system after the class of a transport without a descriptor', () => {
-      @Injectable()
-      class Bare extends Transport {
-        public assertHealthy(): Promise<void> {
-          return Promise.resolve();
-        }
+      class Bare {}
 
-        public publish(): Promise<void> {
-          return Promise.resolve();
-        }
-
-        public subscribe(): Promise<void> {
-          return Promise.resolve();
-        }
-
-        public describe(): TelemetryDescriptor {
-          return this.getTelemetryDescriptor();
-        }
-      }
-
-      expect(new Bare().describe()).toEqual({ system: 'Bare' });
+      expect(describeTransport(new Bare())).toEqual({ system: 'Bare' });
     });
   });
 });

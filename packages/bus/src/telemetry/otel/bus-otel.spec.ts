@@ -1,18 +1,24 @@
 import { Logger } from '@nestjs/common';
 import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type PublishEvent } from '../../transport/dispatcher.js';
+import {
+  type PublishEvent,
+  type PublishOptions,
+} from '../../transport/dispatcher.js';
 import { Outbox, type OutboxRecord } from '../../transport/outbox/outbox.js';
 import {
   type EventCallback,
   type Subscription,
 } from '../../transport/subscriber.js';
-import {
-  Transport,
-  type TransportPublishOptions,
-} from '../../transport/transport.js';
+import { type Transport } from '../../transport/transport.js';
 import { type EventConstructor, type EventPayload } from '../../types.js';
-import { type Delivery, type TelemetryDescriptor } from '../telemetry.js';
+import { readContext, withContext } from '../context.js';
+import { instrumentTransport } from '../instrument.js';
+import {
+  type Delivery,
+  type TelemetryDescribed,
+  type TelemetryDescriptor,
+} from '../telemetry.js';
 import { BusOtel } from './bus-otel.js';
 import { createOtelFixture } from './otel.fixture.js';
 
@@ -26,12 +32,12 @@ const descriptor: TelemetryDescriptor = {
 };
 
 /** Keeps what it is given, like a broker that is down when told to be. */
-class FakeTransport extends Transport {
-  public readonly published: PublishEvent<TransportPublishOptions>[][] = [];
+class FakeTransport implements Transport, TelemetryDescribed {
+  public readonly published: PublishEvent[][] = [];
   public readonly subscriptions: Subscription[] = [];
   public failWith: unknown;
 
-  public override getTelemetryDescriptor(): TelemetryDescriptor {
+  public getTelemetryDescriptor(): TelemetryDescriptor {
     return descriptor;
   }
 
@@ -39,9 +45,11 @@ class FakeTransport extends Transport {
     return Promise.resolve();
   }
 
+  public publish(events: PublishEvent[]): Promise<void>;
+  public publish(event: object, options?: PublishOptions): Promise<void>;
   public publish(
-    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
-    options?: TransportPublishOptions,
+    eventOrEvents: object | PublishEvent[],
+    options?: PublishOptions,
   ): Promise<void> {
     this.published.push(
       Array.isArray(eventOrEvents)
@@ -55,6 +63,11 @@ class FakeTransport extends Transport {
         Promise.reject(this.failWith);
   }
 
+  public subscribe(subscriptions: Subscription[]): Promise<void>;
+  public subscribe<
+    C extends EventConstructor<any>,
+    E extends InstanceType<C> = InstanceType<C>,
+  >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
   public subscribe(
     eventOrSubscriptions: EventConstructor<any> | Subscription[],
     handler?: string,
@@ -77,13 +90,41 @@ class FakeTransport extends Transport {
 
   /** The creation context sent along with each published message. */
   public contexts(): Record<string, string>[] {
-    return this.published.at(-1)!.map(({ options }) => options!.context!);
+    return this.published
+      .at(-1)!
+      .map(({ options }) => readContext(options!.meta)!);
   }
 }
 
 class FakeOutbox extends Outbox {
   public readonly saved: OutboxRecord[] = [];
   public subscribed = false;
+
+  public constructor() {
+    super();
+
+    this.transport = new FakeTransport();
+    this.serializer = {
+      serialize: (event, options) => ({
+        id: options?.id ?? 'id',
+        name: options?.name ?? event.constructor.name,
+        publishedAt: new Date(),
+        data: JSON.stringify({ meta: options?.meta ?? {} }),
+      }),
+      deserialize: () => {
+        throw new Error('not used');
+      },
+    };
+  }
+
+  /** The creation context stored with the first record. */
+  public savedContext(): Record<string, string> | undefined {
+    const { meta } = JSON.parse(String(this.saved[0]!.data)) as {
+      meta: Record<string, string>;
+    };
+
+    return readContext(meta);
+  }
 
   public override getTelemetryDescriptor(): TelemetryDescriptor {
     return descriptor;
@@ -115,9 +156,8 @@ function payload(id: string, context?: Record<string, string>) {
   return {
     id,
     event: {},
-    meta: {},
+    meta: withContext({}, context) ?? {},
     publishedAt: new Date(),
-    context,
   } as EventPayload<object>;
 }
 
@@ -149,7 +189,7 @@ describe('BusOtel', () => {
     transport = new FakeTransport();
 
     await otel.telemetry.onBusInit();
-    transport.instrument(otel.telemetry);
+    instrumentTransport(transport, otel.telemetry);
   });
 
   afterEach(async () => {
@@ -188,7 +228,7 @@ describe('BusOtel', () => {
   });
 
   it('instruments a transport once', async () => {
-    transport.instrument(otel.telemetry);
+    instrumentTransport(transport, otel.telemetry);
     await transport.publish({}, { id: 'm1', name: 'OrderPlaced' });
 
     expect(otel.spans()).toHaveLength(1);
@@ -274,13 +314,16 @@ describe('BusOtel', () => {
     it('keeps the creation context a message has and links to it', async () => {
       const outbox = new FakeOutbox();
 
-      outbox.instrument(otel.telemetry);
+      instrumentTransport(outbox, otel.telemetry);
       await outbox.publish({}, { id: 'm1', name: 'OrderPlaced' });
 
       const create = otel.span('create ex:OrderPlaced');
-      const context = outbox.saved[0]!.context!;
+      const context = outbox.savedContext()!;
 
-      await transport.publish({}, { id: 'm1', name: 'OrderPlaced', context });
+      await transport.publish(
+        {},
+        { id: 'm1', name: 'OrderPlaced', meta: withContext({}, context) },
+      );
 
       const send = otel.span('send ex:OrderPlaced');
 
@@ -344,7 +387,7 @@ describe('BusOtel', () => {
     it('reports publishing as creating the messages and leaves subscribing alone', async () => {
       const outbox = new FakeOutbox();
 
-      outbox.instrument(otel.telemetry);
+      instrumentTransport(outbox, otel.telemetry);
       await outbox.publish({}, { id: 'm1', name: 'OrderPlaced' });
       await outbox.subscribe();
 
@@ -355,7 +398,7 @@ describe('BusOtel', () => {
         'messaging.operation.name': 'create',
         'messaging.operation.type': 'create',
       });
-      expect(outbox.saved[0]?.context?.['traceparent']).toContain(
+      expect(outbox.savedContext()?.['traceparent']).toContain(
         span.spanContext().spanId,
       );
       expect(outbox.subscribed).toBe(true);
@@ -573,7 +616,7 @@ describe('BusOtel', () => {
       const other = new FakeTransport();
 
       await telemetry.onBusInit();
-      other.instrument(telemetry);
+      instrumentTransport(other, telemetry);
       await other.subscribe(eventClass('OrderPlaced'), 'H', () =>
         Promise.reject(new Error('boom')),
       );

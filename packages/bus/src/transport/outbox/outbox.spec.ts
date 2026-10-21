@@ -1,14 +1,21 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { setTimeout } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from '../../bus.module.js';
 import { EventHandler } from '../../decorators/event-handler.decorator.js';
-import { Dispatcher, type PublishEvent } from '../dispatcher.js';
+import {
+  Dispatcher,
+  type PublishEvent,
+  type PublishOptions,
+} from '../dispatcher.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type EventConstructor } from '../../types.js';
 import { Health } from '../health.js';
-import { Transport, type TransportPublishOptions } from '../transport.js';
+import { Transport } from '../transport.js';
+import { type BusProvider } from '../../provider.js';
+import { Serializer } from '../../serialization/serializer.js';
+import { type JsonSerializer } from '../../serialization/json.serializer.js';
 import { Outbox, type OutboxConfig, type OutboxRecord } from './outbox.js';
 
 class TestEvent {
@@ -23,19 +30,22 @@ interface InnerConfig {
   url: string;
 }
 
-@Injectable()
-class InnerTransport extends Transport<InnerConfig> {
-  public static publish =
-    vi.fn<(events: PublishEvent<TransportPublishOptions>[]) => Promise<void>>();
+class InnerTransport implements Transport {
+  public static publish = vi.fn<(events: PublishEvent[]) => Promise<void>>();
   public static subscribe = vi
     .fn<(subscriptions: Subscription[]) => Promise<void>>()
     .mockResolvedValue(undefined);
   public static assertHealthy = vi.fn().mockResolvedValue(undefined);
   public static onBusBootstrap = vi.fn();
   public static onBusShutdown = vi.fn();
-  public static configs: InnerConfig[] = [];
 
   public assertHealthy = InnerTransport.assertHealthy;
+
+  public constructor(private readonly config: InnerConfig) {}
+
+  public static withConfig(config: InnerConfig): BusProvider<InnerTransport> {
+    return { useFactory: () => new InnerTransport(config) };
+  }
 
   public onBusBootstrap(): void {
     InnerTransport.onBusBootstrap();
@@ -50,8 +60,8 @@ class InnerTransport extends Transport<InnerConfig> {
   }
 
   public publish(
-    eventOrEvents: object | PublishEvent<TransportPublishOptions>[],
-    options?: TransportPublishOptions,
+    eventOrEvents: object | PublishEvent[],
+    options?: PublishOptions,
   ): Promise<void> {
     const events = Array.isArray(eventOrEvents)
       ? eventOrEvents
@@ -83,11 +93,21 @@ interface MemoryOutboxConfig extends OutboxConfig {
   batchSize: number;
 }
 
+const Dependency = Symbol('Dependency');
+
 @Injectable()
 class MemoryOutbox extends Outbox<MemoryOutboxConfig> {
   public static pending: OutboxRecord[] = [];
   public static relay = vi.fn();
   public static save = vi.fn();
+
+  public constructor(@Inject(Dependency) public readonly dependency: string) {
+    super();
+  }
+
+  public getInnerTransport() {
+    return this.transport;
+  }
 
   public getConfig(): MemoryOutboxConfig {
     return this.config;
@@ -121,25 +141,27 @@ class TestHandler {
   public handle = vi.fn();
 }
 
-async function createModule(batchSize = 10) {
+async function createModule(
+  batchSize = 10,
+  transport = InnerTransport.withConfig({
+    url: 'inner://',
+  }),
+) {
   const module = await Test.createTestingModule({
     imports: [
       BusModule.forRoot({
-        transport: {
-          provider: MemoryOutbox,
-          config: {
-            transport: {
-              provider: InnerTransport,
-              config: { url: 'inner://' },
-            },
-            interval: 10,
-            batchSize,
-          },
-        },
-        providers: [TestHandler],
+        transport: MemoryOutbox.withConfig({
+          transport,
+          interval: 10,
+          batchSize,
+        }),
+        providers: [TestHandler, { provide: Dependency, useValue: 'dep' }],
       }),
     ],
   }).compile();
+
+  // The bus initializes it on bootstrap, which tests publish before
+  await module.get<JsonSerializer>(Serializer).onBusInit();
 
   return module;
 }
@@ -164,10 +186,14 @@ describe('Outbox', () => {
       {
         id: 'id-1',
         name: 'TestEvent',
-        event: { value: 'a' },
-        meta: { key: 'value' },
         publishedAt: expect.any(Date),
-        context: {},
+        data: JSON.stringify({
+          id: 'id-1',
+          name: 'TestEvent',
+          event: { value: 'a' },
+          meta: { key: 'value' },
+          publishedAt: MemoryOutbox.pending[0]!.publishedAt.toISOString(),
+        }),
       },
     ]);
     expect(InnerTransport.publish).not.toHaveBeenCalled();
@@ -249,7 +275,6 @@ describe('Outbox', () => {
               name: 'TestEvent',
               meta: {},
               publishedAt: first!.publishedAt,
-              context: {},
             },
           },
         ],
@@ -263,7 +288,6 @@ describe('Outbox', () => {
               name: 'TestEvent',
               meta: {},
               publishedAt: second!.publishedAt,
-              context: {},
             },
           },
         ],
@@ -307,16 +331,53 @@ describe('Outbox', () => {
     await module.close();
   });
 
-  it('gives the transport and the outbox their own config', async () => {
+  it('gives the outbox its config and its dependencies', async () => {
     const module = await createModule(7);
+    const outbox = module.get<MemoryOutbox>(Transport);
 
-    expect(module.get(MemoryOutbox).getConfig()).toMatchObject({
-      batchSize: 7,
-      interval: 10,
-    });
-    expect(module.get(InnerTransport, { strict: false }).getConfig()).toEqual({
-      url: 'inner://',
-    });
+    expect(outbox.getConfig()).toMatchObject({ batchSize: 7, interval: 10 });
+    expect(outbox.dependency).toBe('dep');
+    expect(outbox.getInnerTransport()).toBeInstanceOf(InnerTransport);
+
+    await module.close();
+  });
+
+  it.each<[string, () => BusProvider<Transport>]>([
+    ['a class', () => InnerTransport],
+    ['a value', () => ({ useValue: new InnerTransport({ url: 'inner://' }) })],
+    [
+      'a factory with dependencies',
+      () => ({
+        inject: [Dependency],
+        useFactory: () => new InnerTransport({ url: 'inner://' }),
+      }),
+    ],
+    ['an existing provider', () => ({ useExisting: InnerTransport })],
+  ])('relays to a transport given as %s', async (_name, provider) => {
+    const module = await Test.createTestingModule({
+      imports: [
+        BusModule.forRoot({
+          transport: MemoryOutbox.withConfig({
+            transport: provider(),
+            interval: 10,
+            batchSize: 10,
+          }),
+          providers: [
+            { provide: Dependency, useValue: 'dep' },
+            {
+              provide: InnerTransport,
+              useValue: new InnerTransport({ url: 'inner://' }),
+            },
+          ],
+        }),
+      ],
+    }).compile();
+
+    await module.init();
+    await module
+      .get<Dispatcher>(Dispatcher)
+      .publish(new TestEvent({ value: 'a' }));
+    await vi.waitFor(() => expect(InnerTransport.publish).toHaveBeenCalled());
 
     await module.close();
   });

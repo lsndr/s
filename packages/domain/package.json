@@ -42,7 +42,7 @@
   "devDependencies": {},
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lsndr/labs.git",
+    "url": "git+https://github.com/lsndr/s.git",
     "directory": "packages/domain"
   }
 }

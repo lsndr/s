@@ -165,3 +165,48 @@ export const noopTransportTelemetry: TransportTelemetry = {
   histogram: () => noopInstrument,
   gauge: () => undefined,
 };
+
+/**
+ * What a transport that is reported to the telemetry implements to describe
+ * itself. A transport that does not is described by the name of its class.
+ */
+export interface TelemetryDescribed {
+  /**
+   * Describes the transport to the telemetry. Called after the transport is
+   * created, so its config is available.
+   */
+  getTelemetryDescriptor(): TelemetryDescriptor;
+}
+
+/**
+ * What a transport that is not reported like a broker is implements to take
+ * over its instrumentation. An `Outbox`, for example, only reports publishing,
+ * as the creation of the events. Called by the bus once all of its transports
+ * are created, and replaces the default.
+ */
+export interface TelemetryInstrumented {
+  instrument(telemetry: BusTelemetry): void;
+}
+
+/**
+ * What a transport reports its own details through. It is resolved when it is
+ * first used, and does nothing when the bus has no telemetry.
+ */
+export function createTransportTelemetry(
+  telemetry: BusTelemetry | undefined,
+  describe: () => TelemetryDescriptor,
+): TransportTelemetry {
+  if (!telemetry) {
+    return noopTransportTelemetry;
+  }
+
+  let resolved: TransportTelemetry | undefined;
+  const get = () => (resolved ??= telemetry.transport(describe()));
+
+  return {
+    span: (options, fn) => get().span(options, fn),
+    counter: (name, options) => get().counter(name, options),
+    histogram: (name, options) => get().histogram(name, options),
+    gauge: (name, options, observe) => get().gauge(name, options, observe),
+  };
+}

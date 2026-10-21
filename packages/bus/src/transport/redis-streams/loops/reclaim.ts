@@ -71,9 +71,8 @@ export class ReclaimLoop implements Loop {
           return;
         }
 
-        // min-idle makes sure only one of the competing consumers wins an
-        // entry
-        const claimed = await client.xClaim(
+        const binaryClient = await clients.getBinary('command');
+        const claimed = await binaryClient.xClaim(
           stream,
           group,
           consumer,
@@ -90,10 +89,11 @@ export class ReclaimLoop implements Loop {
 
         for (const entry of claimed) {
           if (entry && !signal.aborted) {
-            const attempt = (deliveries.get(entry.id) ?? 0) + 1;
+            const id = String(entry.id);
+            const attempt = (deliveries.get(id) ?? 0) + 1;
 
-            streams.run(stream, entry.id, (current) =>
-              processor.process(current, entry, attempt),
+            streams.run(stream, id, (current) =>
+              processor.process(current, { ...entry, id }, attempt),
             );
           }
         }
