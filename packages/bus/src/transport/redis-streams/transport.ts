@@ -1,5 +1,5 @@
 import { hostname } from 'node:os';
-import { Logger } from '@nestjs/common';
+import { Inject, Logger } from '@nestjs/common';
 import { type EventConstructor } from '../../types.js';
 import {
   type OnBusBootstrap,
@@ -7,10 +7,10 @@ import {
   type OnBusShutdown,
 } from '../../lifecycle.js';
 import { type Transport } from '../transport.js';
-import { type TransportProvider } from '../provider.js';
+import { type BusProvider } from '../../provider.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
-import { createEventDto } from '../event-dto.js';
+import { Serializer } from '../../serialization/serializer.js';
 import { Clients } from './clients.js';
 import { Handler } from './handler.js';
 import { Loops } from './loops/loops.js';
@@ -202,6 +202,9 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
   };
 }
 
+/** Where the config of the transport is registered. */
+const RedisStreamsTransportConfigToken = Symbol('RedisStreamsTransportConfig');
+
 export class RedisStreamsTransport
   implements Transport, OnBusInit, OnBusBootstrap, OnBusShutdown
 {
@@ -211,7 +214,12 @@ export class RedisStreamsTransport
   private readonly settings: Settings;
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
-  public constructor(config: RedisStreamsTransportConfig) {
+  public constructor(
+    @Inject(RedisStreamsTransportConfigToken)
+    config: RedisStreamsTransportConfig,
+    @Inject(Serializer)
+    private readonly serializer: Serializer,
+  ) {
     this.settings = resolveSettings(config);
     this.clients = new Clients(this.settings.url);
     this.streams = new Streams(this.settings.concurrency);
@@ -227,7 +235,7 @@ export class RedisStreamsTransport
     } = this.settings;
     const { clients, streams } = this;
     const { max: maxRetries, delay: retriesDelay } = this.settings.retries;
-    const processor = new Processor(clients, {
+    const processor = new Processor(clients, serializer, {
       group,
       keyPrefix,
       maxRetries,
@@ -261,8 +269,13 @@ export class RedisStreamsTransport
   /** Provides the transport with the given config. */
   public static withConfig(
     config: RedisStreamsTransportConfig,
-  ): TransportProvider<RedisStreamsTransport> {
-    return { useFactory: () => new RedisStreamsTransport(config) };
+  ): BusProvider<RedisStreamsTransport> {
+    return {
+      useClass: RedisStreamsTransport,
+      providers: [
+        { provide: RedisStreamsTransportConfigToken, useValue: config },
+      ],
+    };
   }
 
   public async onBusInit(): Promise<void> {
@@ -360,18 +373,18 @@ export class RedisStreamsTransport
     event: object,
     options?: PublishOptions,
   ): Promise<void> {
-    const payload = createEventDto(event, options);
-    const json = JSON.stringify(payload);
+    const message = this.serializer.serialize(event, options);
+    const { data } = message;
 
-    this.logger.log(`Publishing event ${payload.name}`);
-    this.logger.verbose(`Event ${payload.name} payload:`, payload);
+    this.logger.log(`Publishing event ${message.name}`);
+    this.logger.verbose(`Event ${message.name} payload:`, event);
 
     const client = await this.clients.get('command');
 
     await client.xAdd(
-      this.getStream(payload.name),
+      this.getStream(message.name),
       '*',
-      { id: payload.id, payload: json },
+      { id: message.id, payload: data },
       {
         TRIM: {
           strategy: 'MAXLEN',
@@ -382,7 +395,7 @@ export class RedisStreamsTransport
       },
     );
 
-    this.logger.debug(`Event ${payload.name} added to the stream`);
+    this.logger.debug(`Event ${message.name} added to the stream`);
   }
 
   /**

@@ -24,6 +24,11 @@ import {
 } from '../lifecycle.js';
 import { setTimeout } from 'node:timers/promises';
 import { IsDate, IsString } from 'class-validator';
+import { type Serializer } from '../serialization/serializer.js';
+import { JsonSerializer } from '../serialization/json.serializer.js';
+const serializer = new JsonSerializer();
+
+await serializer.onBusInit();
 
 class TestEvent {
   @IsString()
@@ -51,7 +56,10 @@ interface CommonConfig {
 interface TransportTest {
   name: string;
   setup: () => Promise<{
-    createTransport: (config: CommonConfig) => Promise<Transport>;
+    createTransport: (
+      config: CommonConfig,
+      serializer?: Serializer,
+    ) => Promise<Transport>;
     teardown: () => Promise<void>;
   }>;
 }
@@ -98,11 +106,17 @@ describe('Transport', { timeout: 60_000 }, () => {
         const url = `amqp://${container.getHost()}:${container.getMappedPort(5672)}`;
         const transports: Transport[] = [];
 
-        const createTransport = async (busConfig: CommonConfig) => {
-          const transport = new RabbitmqTransport({
-            url,
-            ...busConfig,
-          } satisfies RabbitmqTransportConfig);
+        const createTransport = async (
+          busConfig: CommonConfig,
+          custom: Serializer = serializer,
+        ) => {
+          const transport = new RabbitmqTransport(
+            {
+              url,
+              ...busConfig,
+            } satisfies RabbitmqTransportConfig,
+            custom,
+          );
 
           await init(transport);
 
@@ -134,15 +148,21 @@ describe('Transport', { timeout: 60_000 }, () => {
         const url = `redis://${container.getHost()}:${container.getMappedPort(6379)}`;
         const transports: Transport[] = [];
 
-        const createTransport = async (busConfig: CommonConfig) => {
-          const transport = new RedisStreamsTransport({
-            url,
-            ...busConfig,
-            reclaimInterval: 25,
-            // One entry at a time, so that a busy instance leaves the
-            // next entries to the others
-            concurrency: 1,
-          } satisfies RedisStreamsTransportConfig);
+        const createTransport = async (
+          busConfig: CommonConfig,
+          custom: Serializer = serializer,
+        ) => {
+          const transport = new RedisStreamsTransport(
+            {
+              url,
+              ...busConfig,
+              reclaimInterval: 25,
+              // One entry at a time, so that a busy instance leaves the
+              // next entries to the others
+              concurrency: 1,
+            } satisfies RedisStreamsTransportConfig,
+            custom,
+          );
 
           await init(transport);
 
@@ -161,7 +181,10 @@ describe('Transport', { timeout: 60_000 }, () => {
     },
   ])('$name', ({ setup }) => {
     let teardown: () => Promise<void>;
-    let createTransport: (config: CommonConfig) => Promise<Transport>;
+    let createTransport: (
+      config: CommonConfig,
+      serializer?: Serializer,
+    ) => Promise<Transport>;
 
     beforeAll(async () => {
       const setupResult = await setup();
@@ -405,11 +428,14 @@ describe('Transport', { timeout: 60_000 }, () => {
 
       it('throws when transport is not initialized', async () => {
         // intentionally skip onBusInit() so channel is never set
-        const transport = new RabbitmqTransport({
-          url: 'amqp://localhost',
-          group: crypto.randomUUID(),
-          retries: { max: 0, delay: 100 },
-        } satisfies RabbitmqTransportConfig);
+        const transport = new RabbitmqTransport(
+          {
+            url: 'amqp://localhost',
+            group: crypto.randomUUID(),
+            retries: { max: 0, delay: 100 },
+          } satisfies RabbitmqTransportConfig,
+          serializer,
+        );
 
         await expect(transport.assertHealthy()).rejects.toThrow();
       });

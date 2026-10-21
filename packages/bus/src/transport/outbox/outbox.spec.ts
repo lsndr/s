@@ -13,7 +13,9 @@ import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type EventConstructor } from '../../types.js';
 import { Health } from '../health.js';
 import { Transport } from '../transport.js';
-import { type TransportProvider } from '../provider.js';
+import { type BusProvider } from '../../provider.js';
+import { Serializer } from '../../serialization/serializer.js';
+import { type JsonSerializer } from '../../serialization/json.serializer.js';
 import { Outbox, type OutboxConfig, type OutboxRecord } from './outbox.js';
 
 class TestEvent {
@@ -41,9 +43,7 @@ class InnerTransport implements Transport {
 
   public constructor(private readonly config: InnerConfig) {}
 
-  public static withConfig(
-    config: InnerConfig,
-  ): TransportProvider<InnerTransport> {
+  public static withConfig(config: InnerConfig): BusProvider<InnerTransport> {
     return { useFactory: () => new InnerTransport(config) };
   }
 
@@ -160,6 +160,9 @@ async function createModule(
     ],
   }).compile();
 
+  // The bus initializes it on bootstrap, which tests publish before
+  await module.get<JsonSerializer>(Serializer).onBusInit();
+
   return module;
 }
 
@@ -183,9 +186,14 @@ describe('Outbox', () => {
       {
         id: 'id-1',
         name: 'TestEvent',
-        event: { value: 'a' },
-        meta: { key: 'value' },
         publishedAt: expect.any(Date),
+        data: JSON.stringify({
+          id: 'id-1',
+          name: 'TestEvent',
+          event: { value: 'a' },
+          meta: { key: 'value' },
+          publishedAt: MemoryOutbox.pending[0]!.publishedAt.toISOString(),
+        }),
       },
     ]);
     expect(InnerTransport.publish).not.toHaveBeenCalled();
@@ -334,7 +342,7 @@ describe('Outbox', () => {
     await module.close();
   });
 
-  it.each<[string, () => TransportProvider]>([
+  it.each<[string, () => BusProvider<Transport>]>([
     ['a class', () => InnerTransport],
     ['a value', () => ({ useValue: new InnerTransport({ url: 'inner://' }) })],
     [

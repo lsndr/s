@@ -7,27 +7,26 @@ import {
   type Type,
   type ValueProvider,
 } from '@nestjs/common';
-import { type Transport } from './transport.js';
 
 interface WithProviders {
   /**
-   * Additional providers the transport needs. They are registered in the bus
-   * module, next to the transport.
+   * Additional providers the provided value needs. They are registered in the
+   * bus module, next to it.
    */
   providers?: Provider[];
 }
 
-export type TransportProvider<T extends Transport = Transport> =
+/** A Nest provider without its token. */
+export type BusProvider<T> =
   | Type<T>
   | (Omit<ClassProvider<T>, 'provide'> & WithProviders)
   | (Omit<ValueProvider<T>, 'provide'> & WithProviders)
   | (Omit<FactoryProvider<T>, 'provide'> & WithProviders)
   | (Omit<ExistingProvider<T>, 'provide'> & WithProviders);
 
-/** The additional providers of a transport, followed by the transport. */
 export function toProviders(
   token: InjectionToken,
-  provider: TransportProvider,
+  provider: BusProvider<unknown>,
 ): Provider[] {
   if (typeof provider === 'function') {
     return [{ provide: token, useClass: provider }];

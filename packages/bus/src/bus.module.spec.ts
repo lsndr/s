@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from './bus.module.js';
 import { EventHandler } from './decorators/event-handler.decorator.js';
 import { Transport } from './transport/transport.js';
-import { type TransportProvider } from './transport/provider.js';
+import { type BusProvider } from './provider.js';
 import {
   Dispatcher,
   type PublishEvent,
@@ -23,6 +23,11 @@ import {
   type Subscription,
 } from './transport/subscriber.js';
 import { type EventConstructor, EventPayload } from './types.js';
+import {
+  type SerializedMessage,
+  Serializer,
+} from './serialization/serializer.js';
+import { JsonSerializer } from './serialization/json.serializer.js';
 import { type EventHandlerMiddleware } from './middleware/middleware.js';
 import {
   type OnBusBootstrap,
@@ -184,7 +189,7 @@ describe('BusModule', () => {
       }
     }
 
-    it.each<[string, () => TransportProvider]>([
+    it.each<[string, () => BusProvider<Transport>]>([
       ['a class', () => MockTransport],
       ['useClass', () => ({ useClass: MockTransport })],
       ['useValue', () => ({ useValue: new MockTransport() })],
@@ -270,6 +275,129 @@ describe('BusModule', () => {
       await module.close();
 
       expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('serializer', () => {
+    afterEach(() => {
+      vi.clearAllMocks();
+    });
+
+    class CustomSerializer implements Serializer, OnBusInit {
+      public static initialized = false;
+
+      public onBusInit(): void {
+        CustomSerializer.initialized = true;
+      }
+
+      public serialize(): SerializedMessage {
+        return {
+          id: '1',
+          name: 'TestEvent',
+          publishedAt: new Date(),
+          data: '',
+        };
+      }
+
+      public deserialize(): never {
+        throw new Error('not implemented');
+      }
+    }
+
+    it('uses JsonSerializer by default', async () => {
+      const module = await Test.createTestingModule({
+        imports: [BusModule.forRoot({ transport: MockTransport })],
+      }).compile();
+
+      await module.init();
+
+      expect(module.get(Serializer)).toBeInstanceOf(JsonSerializer);
+
+      await module.close();
+    });
+
+    it.each<
+      [string, () => Parameters<typeof BusModule.forRoot>[0]['serializer']]
+    >([
+      ['a class', () => CustomSerializer],
+      ['useValue', () => ({ useValue: new CustomSerializer() })],
+      ['useFactory', () => ({ useFactory: () => new CustomSerializer() })],
+    ])('provides a serializer given as %s', async (_name, serializer) => {
+      CustomSerializer.initialized = false;
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            transport: MockTransport,
+            serializer: serializer(),
+          }),
+        ],
+      }).compile();
+
+      await module.init();
+
+      expect(module.get(Serializer)).toBeInstanceOf(CustomSerializer);
+      expect(CustomSerializer.initialized).toBe(true);
+
+      await module.close();
+    });
+
+    it('initializes the serializer before the transport', async () => {
+      const calls: string[] = [];
+
+      class OrderedSerializer extends CustomSerializer {
+        public override onBusInit(): void {
+          calls.push('serializer');
+        }
+      }
+
+      @Injectable()
+      class OrderedTransport extends MockTransport {
+        public onBusInit(): void {
+          calls.push('transport');
+        }
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            transport: OrderedTransport,
+            serializer: OrderedSerializer,
+          }),
+        ],
+      }).compile();
+
+      await module.init();
+
+      expect(calls).toEqual(['serializer', 'transport']);
+
+      await module.close();
+    });
+
+    it('injects the serializer into a transport', async () => {
+      @Injectable()
+      class SerializingTransport extends MockTransport {
+        public constructor(
+          @Inject(Serializer) public readonly serializer: Serializer,
+        ) {
+          super();
+        }
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            transport: SerializingTransport,
+            serializer: CustomSerializer,
+          }),
+        ],
+      }).compile();
+
+      expect(module.get<SerializingTransport>(Transport).serializer).toBe(
+        module.get(Serializer),
+      );
+
+      await module.close();
     });
   });
 

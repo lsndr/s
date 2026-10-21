@@ -1,21 +1,24 @@
 import { Inject, Logger, type Type } from '@nestjs/common';
 import { setTimeout } from 'node:timers/promises';
-import { createEventDto, type EventDto } from '../event-dto.js';
+import {
+  type SerializedMessage,
+  Serializer,
+} from '../../serialization/serializer.js';
 import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type EventConstructor } from '../../types.js';
 import { type OnBusBootstrap, type OnBusShutdown } from '../../lifecycle.js';
 import { type Transport } from '../transport.js';
-import { type TransportProvider, toProviders } from '../provider.js';
+import { type BusProvider, toProviders } from '../../provider.js';
 
-export type OutboxRecord = EventDto;
+export type OutboxRecord = SerializedMessage;
 
 export interface OutboxConfig<T extends Transport = Transport> {
   /**
    * The transport the stored events are relayed to, provided the same way as
    * the `transport` option of the bus module.
    */
-  transport: TransportProvider<T>;
+  transport: BusProvider<T>;
   /**
    * How long the relay waits when there is nothing to relay, or after a
    * failure, in milliseconds.
@@ -59,6 +62,9 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   @Inject(OutboxTransport)
   protected transport!: InferTransport<C>;
 
+  @Inject(Serializer)
+  protected serializer!: Serializer;
+
   private readonly logger = new Logger(Outbox.name);
   private abortController?: AbortController;
   private loop?: Promise<void>;
@@ -71,7 +77,7 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   public static withConfig<O extends Outbox<any>>(
     this: Type<O>,
     config: InferConfig<O>,
-  ): TransportProvider<O> {
+  ): BusProvider<O> {
     return {
       useClass: this,
       providers: [
@@ -131,7 +137,9 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
     }
 
     await this.save(
-      events.map(({ event, options }) => createEventDto(event, options)),
+      events.map(({ event, options }) =>
+        this.serializer.serialize(event, options),
+      ),
     );
   }
 
@@ -158,23 +166,19 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
     return this.transport.subscribe(subscriptions);
   }
 
-  /**
-   * Publishes records to the configured transport in order, with their
-   * original id, name, meta and publication time. Rejects on the first
-   * failure, so the records are expected to stay pending and be retried
-   * (at-least-once delivery).
-   */
   protected async dispatch(records: OutboxRecord[]): Promise<void> {
     await this.transport.publish(
-      records.map((record) => ({
-        event: record.event,
-        options: {
-          id: record.id,
-          name: record.name,
-          meta: record.meta,
-          publishedAt: new Date(record.publishedAt),
-        },
-      })),
+      records.map((record) => {
+        const { event, meta, publishedAt } = this.serializer.deserialize(
+          Object,
+          record.data,
+        );
+
+        return {
+          event,
+          options: { id: record.id, name: record.name, meta, publishedAt },
+        };
+      }),
     );
   }
 

@@ -1,7 +1,7 @@
-import { Logger } from '@nestjs/common';
+import { Inject, Logger } from '@nestjs/common';
 import { type EventConstructor } from '../../types.js';
 import { type Transport } from '../transport.js';
-import { type TransportProvider } from '../provider.js';
+import { type BusProvider } from '../../provider.js';
 import { type OnBusInit, type OnBusShutdown } from '../../lifecycle.js';
 import {
   type ChannelModel,
@@ -11,10 +11,9 @@ import {
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
 import {
-  createEventDto,
-  parseEventPayload,
-  type EventDto,
-} from '../event-dto.js';
+  type SerializedMessage,
+  Serializer,
+} from '../../serialization/serializer.js';
 
 export interface RabbitmqTransportConfig {
   url: string;
@@ -36,6 +35,9 @@ export interface RabbitmqTransportConfig {
   };
 }
 
+/** Where the config of the transport is registered. */
+const RabbitmqTransportConfigToken = Symbol('RabbitmqTransportConfig');
+
 export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
   private readonly exchange = 'events';
 
@@ -43,13 +45,21 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
   private channel: ConfirmChannel | undefined;
   private readonly logger = new Logger(RabbitmqTransport.name);
 
-  public constructor(private readonly config: RabbitmqTransportConfig) {}
+  public constructor(
+    @Inject(RabbitmqTransportConfigToken)
+    private readonly config: RabbitmqTransportConfig,
+    @Inject(Serializer)
+    private readonly serializer: Serializer,
+  ) {}
 
   /** Provides the transport with the given config. */
   public static withConfig(
     config: RabbitmqTransportConfig,
-  ): TransportProvider<RabbitmqTransport> {
-    return { useFactory: () => new RabbitmqTransport(config) };
+  ): BusProvider<RabbitmqTransport> {
+    return {
+      useClass: RabbitmqTransport,
+      providers: [{ provide: RabbitmqTransportConfigToken, useValue: config }],
+    };
   }
 
   public async onBusShutdown(): Promise<void> {
@@ -91,9 +101,7 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
       : [{ event: eventOrEvents, options }];
 
     for (const { event, options: eventOptions } of events) {
-      const payload = createEventDto(event, eventOptions);
-
-      await this.publishEvent(payload.name, payload);
+      await this.publishEvent(this.serializer.serialize(event, eventOptions));
     }
   }
 
@@ -142,13 +150,16 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
         return;
       }
 
-      const content = message.content.toString();
-
       this.logger.log(`Received message for event ${event.name}`);
-      this.logger.verbose(`Event ${event.name} payload: ${content}`);
 
       Promise.resolve()
-        .then(() => callback(parseEventPayload(event, content)))
+        .then(() => {
+          const payload = this.serializer.deserialize(event, message.content);
+
+          this.logger.verbose(`Event ${event.name} (${payload.id}):`, payload);
+
+          return callback(payload);
+        })
         .then(() => {
           channel.ack(message);
 
@@ -179,20 +190,22 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     });
   }
 
-  private publishEvent(eventName: string, payload: EventDto): Promise<void> {
+  private publishEvent({
+    id,
+    name: eventName,
+    data,
+  }: SerializedMessage): Promise<void> {
     const channel = this.getChannel();
 
-    this.logger.log(`Publishing event ${eventName}`);
-    this.logger.verbose(
-      `Event ${eventName} payload: ${JSON.stringify(payload)}`,
-    );
+    this.logger.log(`Publishing event ${eventName} (${id})`);
+    this.logger.verbose(`Event ${eventName} payload:`, data);
 
     return new Promise<void>((resolve, reject) => {
       const published = channel.publish(
         this.exchange,
         eventName,
-        Buffer.from(JSON.stringify(payload)),
-        { messageId: payload.id, persistent: true },
+        Buffer.from(data),
+        { messageId: id, persistent: true },
         (err) => {
           if (err) {
             const error = err instanceof Error ? err : new Error(String(err));
