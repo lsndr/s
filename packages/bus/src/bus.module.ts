@@ -10,7 +10,9 @@ import { DiscoveryModule, DiscoveryService } from '@nestjs/core';
 import { HandlerDiscoveryService } from './discovery/handler-discovery.service.js';
 import { HandlerInvoker } from './discovery/handler-invoker.js';
 import { Transport } from './transport/transport.js';
-import { type TransportProvider, toProviders } from './transport/provider.js';
+import { type BusProvider, toProviders } from './provider.js';
+import { Serializer } from './serialization/serializer.js';
+import { JsonSerializer } from './serialization/json.serializer.js';
 import { Dispatcher } from './transport/dispatcher.js';
 import { Subscriber } from './transport/subscriber.js';
 import { Health } from './transport/health.js';
@@ -23,7 +25,8 @@ import { GlobalEventHandlerMiddlewares } from './middleware/middleware.js';
 
 export interface BusModuleOptions {
   middlewares?: GlobalEventHandlerMiddlewares;
-  transport: TransportProvider;
+  transport: BusProvider<Transport>;
+  serializer?: BusProvider<Serializer>;
   imports?: any[];
   providers?: Provider[];
 }
@@ -50,6 +53,7 @@ export class BusModule
           provide: GlobalEventHandlerMiddlewares,
           useValue: middlewares,
         },
+        ...toProviders(Serializer, options.serializer ?? JsonSerializer),
         ...toProviders(Transport, options.transport),
         { provide: Dispatcher, useExisting: Transport },
         { provide: Subscriber, useExisting: Transport },

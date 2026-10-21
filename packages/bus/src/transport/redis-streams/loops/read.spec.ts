@@ -143,12 +143,12 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
       expect(process).toHaveBeenCalledTimes(2);
       expect(process).toHaveBeenCalledWith(
         streamOf(name),
-        { id: ids[0], message: { payload: '0' } },
+        { id: ids[0], message: { payload: Buffer.from('0') } },
         1,
       );
       expect(process).toHaveBeenCalledWith(
         streamOf(name),
-        { id: ids[1], message: { payload: '1' } },
+        { id: ids[1], message: { payload: Buffer.from('1') } },
         1,
       );
     });
@@ -187,7 +187,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
     it('does not call Redis when it is aborted', async () => {
       const { next, add, process, names } = await setup();
       const [name] = names as [string];
-      const client = await clients.get('read');
+      const client = await clients.getBinary('read');
       const xReadGroup = vi.spyOn(client, 'xReadGroup');
       const controller = new AbortController();
 

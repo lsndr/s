@@ -47,8 +47,8 @@ export class ReadLoop implements Loop, OnTransportShutdown {
 
     for (const { name, messages } of reply) {
       for (const entry of messages) {
-        streams.run(String(name), entry.id, (stream) =>
-          processor.process(stream, entry, 1),
+        streams.run(String(name), String(entry.id), (stream) =>
+          processor.process(stream, { ...entry, id: String(entry.id) }, 1),
         );
       }
     }
@@ -81,7 +81,7 @@ export class ReadLoop implements Loop, OnTransportShutdown {
 
     // Connected before the streams are known, so that nothing is awaited
     // between taking them and starting the read
-    const client = await clients.get('read');
+    const client = await clients.getBinary('read');
 
     // Waits for a free slot instead of calling Redis when all are full
     const keys = await streams.readable(signal);

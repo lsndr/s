@@ -1,11 +1,11 @@
 import { Logger } from '@nestjs/common';
-import { parseEventPayload } from '../event-dto.js';
+import { type Serializer } from '../../serialization/serializer.js';
 import { type Clients } from './clients.js';
 import { type Stream } from './streams.js';
 
 export interface StreamEntry {
   id: string;
-  message: Record<string, string>;
+  message: Record<string, Buffer>;
 }
 
 export interface ProcessorOptions {
@@ -24,6 +24,7 @@ export class Processor {
 
   public constructor(
     private readonly clients: Clients<'command'>,
+    private readonly serializer: Serializer,
     private readonly options: ProcessorOptions,
   ) {}
 
@@ -59,14 +60,15 @@ export class Processor {
       const client = await clients.get('command');
       const done = await client.hGetAll(doneKey);
       const pending = handlers.filter(({ name }) => !(name in done));
-      const payload = message['payload'] ?? '';
+      const rawPayload = message['payload'] ?? Buffer.alloc(0);
+      const eventPayload = this.serializer.deserialize(event, rawPayload);
 
-      this.logger.verbose(`Event ${eventName} (${id}) payload: ${payload}`);
+      this.logger.verbose(`Event ${eventName} (${id}) payload:`, eventPayload);
 
       const results = await Promise.all(
         pending.map(async ({ name, callback }) => {
           try {
-            await callback(parseEventPayload(event, payload));
+            await callback(eventPayload);
           } catch (err) {
             return { name, error: err };
           }

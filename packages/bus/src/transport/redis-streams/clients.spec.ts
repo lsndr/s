@@ -59,6 +59,40 @@ describe('Clients', { timeout: 60_000 }, () => {
 
       expect(command).not.toBe(read);
     });
+
+    describe('with the binary option', () => {
+      it('returns a client whose replies hold blob strings as buffers', async () => {
+        const clients = create<'command'>();
+        const key = `key:${crypto.randomUUID()}`;
+        const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x80]);
+        const text = await clients.get('command');
+        const binary = await clients.getBinary('command');
+
+        await text.set(key, bytes);
+
+        expect(await binary.get(key)).toEqual(bytes);
+        expect(await text.get(key)).not.toEqual(bytes.toString('latin1'));
+      });
+
+      it('returns the same client every time, on the connection of the kind', async () => {
+        const clients = create<'read' | 'command'>();
+
+        const first = await clients.getBinary('read');
+        const second = await clients.getBinary('read');
+
+        expect(second).toBe(first);
+        expect(clients.id('read')).toBeDefined();
+        expect(await first.clientId()).toBe(clients.id('read'));
+      });
+
+      it('works without kinds', async () => {
+        const clients = create();
+
+        const binary = await clients.getBinary();
+
+        expect(binary.isReady).toBe(true);
+      });
+    });
   });
 
   describe('id', () => {

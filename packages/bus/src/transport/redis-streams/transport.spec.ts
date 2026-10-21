@@ -16,6 +16,10 @@ import {
   type RedisStreamsTransportConfig,
 } from './transport.js';
 import { Streams } from './streams.js';
+import { JsonSerializer } from '../../serialization/json.serializer.js';
+const serializer = new JsonSerializer();
+
+await serializer.onBusInit();
 
 class FirstEvent {
   public constructor(public readonly value: string) {}
@@ -45,14 +49,17 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
   ) {
     const group = config.group ?? `group:${crypto.randomUUID()}`;
     const keyPrefix = config.keyPrefix ?? `${crypto.randomUUID()}:`;
-    const transport = new RedisStreamsTransport({
-      url,
-      retries: { max: 3, delay: 100 },
-      reclaimInterval: 25,
-      ...config,
-      group,
-      keyPrefix,
-    } satisfies RedisStreamsTransportConfig);
+    const transport = new RedisStreamsTransport(
+      {
+        url,
+        retries: { max: 3, delay: 100 },
+        reclaimInterval: 25,
+        ...config,
+        group,
+        keyPrefix,
+      } satisfies RedisStreamsTransportConfig,
+      serializer,
+    );
 
     transports.push(transport);
     await transport.onBusInit();
@@ -208,11 +215,10 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       (option, config) => {
         expect(
           () =>
-            new RedisStreamsTransport({
-              url,
-              group: 'group',
-              ...config,
-            }),
+            new RedisStreamsTransport(
+              { url, group: 'group', ...config },
+              serializer,
+            ),
         ).toThrow(`Invalid Redis Streams option ${option}`);
       },
     );

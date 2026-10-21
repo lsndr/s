@@ -18,7 +18,13 @@ export {
   type OutboxRecord,
 } from './transport/outbox/outbox.js';
 export { Transport } from './transport/transport.js';
-export { type TransportProvider } from './transport/provider.js';
+export { type BusProvider } from './provider.js';
+export {
+  Serializer,
+  type SerializedData,
+  type SerializedMessage,
+} from './serialization/serializer.js';
+export { JsonSerializer } from './serialization/json.serializer.js';
 export {
   Dispatcher,
   type PublishEvent,

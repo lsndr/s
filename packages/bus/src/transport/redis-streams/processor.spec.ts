@@ -10,8 +10,8 @@ import {
 } from 'vitest';
 import { GenericContainer, Wait } from 'testcontainers';
 import { Logger } from '@nestjs/common';
-import { createClient, type RedisClientType } from 'redis';
-import { createEventDto } from '../event-dto.js';
+import { createClient, RESP_TYPES, type RedisClientType } from 'redis';
+import { JsonSerializer } from '../../serialization/json.serializer.js';
 import { Clients } from './clients.js';
 import { Processor, type ProcessorOptions } from './processor.js';
 import { type Callback, Handler } from './handler.js';
@@ -24,7 +24,7 @@ class TestEvent {
 interface SetupOptions {
   handlers: Record<string, Callback>;
   /** Raw message of the entry. Defaults to a serialized `TestEvent`. */
-  message?: Record<string, string>;
+  message?: Record<string, Buffer>;
   options?: Partial<ProcessorOptions>;
 }
 
@@ -33,6 +33,7 @@ describe('Processor', { timeout: 60_000 }, () => {
   let clients: Clients<'command'>;
   let redis: RedisClientType;
   let log: ReturnType<typeof mockLogger>;
+  const serializer = new JsonSerializer();
 
   function mockLogger() {
     return {
@@ -63,19 +64,20 @@ describe('Processor', { timeout: 60_000 }, () => {
       name,
       '*',
       message ?? {
-        payload: JSON.stringify(createEventDto(new TestEvent('hello'))),
+        payload: Buffer.from(serializer.serialize(new TestEvent('hello')).data),
       },
     );
 
-    const reply = await redis.xReadGroup(group, 'consumer', {
-      key: name,
-      id: '>',
-    });
-    const entry = reply?.[0]?.messages[0];
+    const reply = await redis
+      .withTypeMapping({ [RESP_TYPES.BLOB_STRING]: Buffer })
+      .xReadGroup(group, 'consumer', { key: name, id: '>' });
+    const raw = reply?.[0]?.messages[0];
 
-    if (!entry) {
+    if (!raw) {
       throw new Error('Entry was not read');
     }
+
+    const entry = { ...raw, id: String(raw.id) };
 
     const stream: Stream = {
       name,
@@ -89,7 +91,7 @@ describe('Processor', { timeout: 60_000 }, () => {
       stream,
       entry,
       options: processorOptions,
-      processor: new Processor(clients, processorOptions),
+      processor: new Processor(clients, serializer, processorOptions),
       doneKey: `test:done:${group}:TestEvent:${entry.id}`,
       pending: async () => (await redis.xPending(name, group)).pending,
     };
@@ -113,6 +115,8 @@ describe('Processor', { timeout: 60_000 }, () => {
   }
 
   beforeAll(async () => {
+    await serializer.onBusInit();
+
     container = await new GenericContainer('redis:8.2')
       .withExposedPorts(6379)
       .withWaitStrategy(

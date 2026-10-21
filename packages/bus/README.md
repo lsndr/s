@@ -10,7 +10,7 @@ The package is published to GitHub Packages and requires Node.js >= 24.
 npm install @lsndr/bus
 ```
 
-Peer dependencies: `@nestjs/common`, `@nestjs/core`, `reflect-metadata`. To use the built-in RabbitMQ transport, also install the optional peers:
+Peer dependencies: `@nestjs/common`, `@nestjs/core`, `reflect-metadata`. To use the built-in RabbitMQ transport, also install the optional peers (`class-transformer` is used by the default [serializer](#serialization), and not needed with your own):
 
 ```bash
 npm install amqplib class-transformer
@@ -75,7 +75,7 @@ The transport is registered under the `Transport` token, and `Dispatcher`, `Subs
 
 ### Defining events
 
-Events are plain classes. The class name is used as the routing key, and payloads are serialized with `class-transformer`.
+Events are plain classes. The class name is used as the routing key, and payloads are serialized with `class-transformer` unless you provide another [serializer](#serialization).
 
 ```typescript
 export class OrderPlaced {
@@ -202,6 +202,55 @@ Global middlewares run before handler-level ones. A middleware is looked up by i
 
 A middleware can be request-scoped or transient (`@Injectable({ scope: Scope.REQUEST })`), or depend on request-scoped providers. When a handler or any of its middlewares is scoped, they are all resolved anew for every event, in the same context, so they share request-scoped dependencies, and the event payload as received is available as `REQUEST`. Default-scoped middlewares are single shared instances.
 
+### Serialization
+
+A `Serializer` turns an event and its envelope (id, name, meta, `publishedAt`) into the bytes a transport sends, and back. `serialize` receives the event and the publish options, fills in what they leave out (a UUID v7 `id`, the class name as `name`, empty `meta`, the current time) and returns the `id`, `name` and `publishedAt` it used along with the `data`. The default, `JsonSerializer`, writes JSON text and converts the event with `class-transformer`. To use another format, provide your own with the `serializer` option, in any of the forms accepted by `transport`:
+
+```typescript
+import { Injectable } from '@nestjs/common';
+import { pack, unpack } from 'msgpackr';
+import { randomUUID } from 'node:crypto';
+import {
+  type PublishOptions,
+  type Serializer,
+  type SerializedData,
+  type SerializedMessage,
+  type EventPayload,
+} from '@lsndr/bus';
+
+@Injectable()
+class MsgpackSerializer implements Serializer {
+  serialize(event: object, options?: PublishOptions): SerializedMessage {
+    const id = options?.id ?? randomUUID();
+    const name = options?.name ?? event.constructor.name;
+    const publishedAt = options?.publishedAt ?? new Date();
+
+    return {
+      id,
+      name,
+      publishedAt,
+      data: pack({ id, name, event, meta: options?.meta ?? {}, publishedAt }),
+    };
+  }
+
+  deserialize<E extends object>(
+    event: new (...args: any) => E,
+    data: SerializedData,
+  ): EventPayload<E> {
+    const message = unpack(Buffer.from(data));
+
+    return {
+      ...message,
+      event: Object.assign(Object.create(event.prototype), message.event),
+    };
+  }
+}
+
+BusModule.forRoot({ transport, serializer: MsgpackSerializer });
+```
+
+The serializer is initialized before the transport and shut down after it, and receives the [lifecycle hooks](#lifecycle-hooks) like any other provider of the bus module. Changing the serializer of a running system makes messages that are already in flight unreadable, so drain the queues first.
+
 ### Health checks
 
 ```typescript
@@ -238,7 +287,7 @@ class MyTransport
 
 They are called one provider after another, in the order the providers are registered (the transport and its own `providers` first, then yours), and the bus waits for each. `onBusShutdown` goes in reverse, and a provider that fails to shut down is logged without keeping the others from it. Providers with a request or transient scope have no single instance, so they are skipped. Providers of other modules are skipped too, unless the bus module aliases them (like a transport given as `{ useExisting }`). An instance is called once, however many aliases point to it.
 
-The built-in transports are plain classes created with `new RedisStreamsTransport(config)`, and do their work in these hooks: they connect in `onBusInit`, the Redis Streams transport starts consuming in `onBusBootstrap`, and both clean up in `onBusShutdown`. Using one without the bus needs these calls yourself, e.g. `onBusInit()` before and `onBusBootstrap()` after `subscribe`.
+The built-in transports are plain classes created with `new RedisStreamsTransport(config, serializer)`, and do their work in these hooks: they connect in `onBusInit`, the Redis Streams transport starts consuming in `onBusBootstrap`, and both clean up in `onBusShutdown`. Using one without the bus needs these calls yourself, e.g. `onBusInit()` before and `onBusBootstrap()` after `subscribe`.
 
 ## Outbox
 
@@ -286,9 +335,9 @@ BusModule.forRoot({
 });
 ```
 
-- `publish` calls `save` once per call with a list of `OutboxRecord`s (id, event name, plain event data, meta, `publishedAt`), so a batch is stored together.
+- `publish` calls `save` once per call with a list of `OutboxRecord`s (`id`, `name`, `publishedAt` and `data`, the message as the [serializer](#serialization) produced it, a `string` or a `Buffer`, to store as it is, e.g. in a `text` column with the default serializer), so a batch is stored together.
 - `relay` is called in a loop. It locks pending records, calls `this.dispatch(records)`, and marks them dispatched only if that resolves. It returns the number of records dispatched: if above zero it runs again right away, otherwise it waits `interval`. Batching and limits are up to your implementation.
-- `dispatch` publishes the records as one batch, in order, to the real transport with their original `id`, `name`, `meta` and `publishedAt`. It rejects on the first failure, so roll back and retry. Delivery is at-least-once.
+- `dispatch` publishes the records as one batch, in order, to the real transport with their original `id`, `name`, `meta` and `publishedAt`. It deserializes each record without an event class, since the outbox only knows the name, so the transport receives a plain object and serializes it again. A serializer used with an outbox therefore has to accept `Object` as the event class. It rejects on the first failure, so roll back and retry. Delivery is at-least-once.
 - Locking with `SKIP LOCKED` lets several instances relay together, at the cost of strict ordering between batches.
 - If you override `onBusBootstrap` or `onBusShutdown`, call `super`: they run the relay loop.
 
@@ -297,6 +346,7 @@ BusModule.forRoot({
 `BusModule.forRoot()` options:
 
 - `transport` — required. A transport provider, see [Providing the transport](#providing-the-transport). The options below go in the config of `withConfig`.
+- `serializer` — a provider of the [serializer](#serialization). Defaults to `JsonSerializer`.
 - `middlewares` — global middleware classes. They must be provided in a module of the application.
 - `imports`, `providers` — additional Nest imports and providers for the module.
 
