@@ -46,7 +46,6 @@ describe('Processor', { timeout: 60_000 }, () => {
     };
   }
 
-  /** Creates a stream with one entry that is pending for a consumer. */
   async function setup({ handlers, message, options }: SetupOptions) {
     const name = `stream:${crypto.randomUUID()}`;
     const group = `group:${crypto.randomUUID()}`;

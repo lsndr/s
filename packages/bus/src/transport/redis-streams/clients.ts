@@ -10,14 +10,9 @@ function toBinary(client: RedisClientType, blobString: 36) {
 type BinaryClient = ReturnType<typeof toBinary>;
 
 /**
- * Lazily connected Redis clients.
- *
- * Without kinds there is a single client. With kinds, e.g.
- * `Clients<'read' | 'command'>`, there is one client per kind, so that a
- * blocking command doesn't hold up the others.
- *
- * A client that was destroyed is not connected again: getting it
- * rejects, so nothing opens a connection that nobody is left to close.
+ * One client per kind, so that a blocking command doesn't hold up the others.
+ * A client that was destroyed is not connected again: getting it rejects, so
+ * nothing opens a connection that nobody is left to close.
  */
 export class Clients<K extends string = never> {
   private readonly clients = new Map<string, Promise<RedisClientType>>();
@@ -29,12 +24,7 @@ export class Clients<K extends string = never> {
 
   public constructor(private readonly url: string) {}
 
-  /**
-   * Returns the client of a kind, connecting it on the first request.
-   *
-   * @param kind - Without kinds, or if left out, the default client.
-   * @throws If the client was destroyed.
-   */
+  /** @throws If the client was destroyed. */
   public get(kind?: K): Promise<RedisClientType> {
     const key = kind ?? DEFAULT_KIND;
 
@@ -46,7 +36,7 @@ export class Clients<K extends string = never> {
 
     if (!client) {
       client = this.connect(key).catch((err) => {
-        // Let the next call connect again
+        // let the next call connect again
         this.clients.delete(key);
 
         throw err;
@@ -59,7 +49,7 @@ export class Clients<K extends string = never> {
 
   /**
    * Like {@link Clients.get}, but replies hold blob strings as buffers, so that
-   * binary data survives. It shares the connection of the client.
+   * binary data survives.
    *
    * @throws If the client was destroyed.
    */
@@ -75,23 +65,17 @@ export class Clients<K extends string = never> {
     return binary;
   }
 
-  /**
-   * The id of the connection of a kind (`CLIENT ID`). It follows reconnects.
-   *
-   * @returns `undefined` while the client is not connected.
-   */
+  /** @returns `undefined` while the client is not connected. */
   public id(kind?: K): number | undefined {
     return this.ids.get(kind ?? DEFAULT_KIND);
   }
 
   /**
    * Drops the connections right away, which interrupts a command that is
-   * blocked on one. The clients can't be got again.
-   *
-   * @param kind - The kind to destroy. Everything is destroyed without it.
+   * blocked on one. Everything is destroyed when `kind` is left out.
    */
   public async destroy(kind?: K): Promise<void> {
-    // Without a kind, the ones that were connected, and the default one that
+    // without a kind, the ones that were connected, and the default one that
     // a `Clients` without kinds uses
     const kinds =
       kind === undefined
@@ -132,7 +116,7 @@ export class Clients<K extends string = never> {
       );
     });
 
-    // Ready on the first connection and after every reconnect, and the id
+    // ready on the first connection and after every reconnect, and the id
     // changes with each connection
     client.on('ready', () => {
       identified = client.clientId().then(

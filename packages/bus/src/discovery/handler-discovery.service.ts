@@ -61,7 +61,7 @@ export class HandlerDiscoveryService {
     const found = new Set<unknown>();
 
     for (const provider of providers) {
-      // An alias (`useExisting`) points at a provider that is discovered on
+      // an alias (`useExisting`) points at a provider that is discovered on
       // its own
       if (provider.isAlias) {
         continue;
@@ -122,7 +122,7 @@ export class HandlerDiscoveryService {
         );
       }
 
-      // Request-scoped, transient, and the ones depending on them
+      // request-scoped, transient, and the ones depending on them
       if (scope !== Scope.DEFAULT) {
         return { token: type, name: type.name, instance: undefined };
       }
@@ -135,11 +135,6 @@ export class HandlerDiscoveryService {
     });
   }
 
-  /**
-   * The class of a provider is the class of its instance, so that providers
-   * created with `useValue` or `useFactory` are found too. A factory provider
-   * has the factory as its metatype.
-   */
   private getClass(provider: InstanceWrapper): unknown {
     return provider.instance?.constructor ?? provider.metatype;
   }
@@ -148,8 +143,8 @@ export class HandlerDiscoveryService {
     wrapper: InstanceWrapper,
     name: string,
   ): Resolvable<T> {
-    // Transient providers have a static dependency tree, but still must not
-    // be shared
+    // a transient provider with a static dependency tree still has an
+    // instance, which must not be shared, so it is resolved again every time
     if (!wrapper.isDependencyTreeStatic() || wrapper.isTransient) {
       return { token: wrapper.token, name, instance: undefined };
     }

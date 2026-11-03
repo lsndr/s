@@ -29,7 +29,7 @@ Packages are published to the GitHub registry and versioned independently by `nx
 ### Comments
 
 - Comment the why, not the what. If a comment only repeats the code, delete it or make the code clearer with better names.
-- Give abstract classes a short `/** ... */` doc comment that says what the class is for, in plain language. Don't add doc comments to other classes, types, functions or methods unless they hold a non-obvious decision or constraint, which is then explained as above.
+- Give abstract classes and user-facing classes (the ones a package exports from its `index.ts` for consumers to use) a short `/** ... */` doc comment that says what the class is for, in plain language. Don't add doc comments to other classes, types, functions or methods unless they hold a non-obvious decision or constraint, which is then explained as above.
 - Write `/** ... */` blocks as full sentences: start with a capital letter and end with a period. Short `//` comments start with a lowercase letter and have no final period. Keep comments to one or two lines where possible.
 - Explain non-obvious decisions, constraints and workarounds right where they happen, with a link to the issue or docs if there is one.
 - Every `eslint-disable` or `@ts-expect-error` names the rule and gives a reason after `--`.

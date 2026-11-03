@@ -18,7 +18,6 @@ export interface ProcessorOptions {
   reclaimInterval: number;
 }
 
-/** Runs the handlers of stream entries. */
 export class Processor {
   private readonly logger = new Logger(Processor.name);
 
@@ -48,7 +47,7 @@ export class Processor {
     const retryCount = attempt - 1;
     const eventName = event.name;
     const doneKey = `${keyPrefix}done:${group}:${eventName}:${id}`;
-    // Long enough to outlive every retry of an entry
+    // long enough to outlive every retry of an entry
     const doneTtl = Math.max(
       2 * (maxRetries + 1) * (retriesDelay + reclaimInterval),
       3_600_000,
@@ -115,7 +114,7 @@ export class Processor {
         this.logger.log(`Event ${eventName} (${id}) handled successfully`);
       }
     } catch (err) {
-      // Redis failure, the entry stays pending
+      // redis failure, the entry stays pending
       this.logger.error(
         `Failed to process entry ${id} of ${stream.name}: ${String(err)}`,
         err instanceof Error ? err.stack : undefined,

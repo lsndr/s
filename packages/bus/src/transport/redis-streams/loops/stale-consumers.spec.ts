@@ -30,7 +30,6 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
   let clients: Clients<'command'>;
   let redis: RedisClientType;
 
-  /** Creates streams that are registered in `Streams`, and a loop cleaning their groups. */
   async function setup({
     streams: count = 1,
     consumerTtl = 100,
@@ -60,16 +59,13 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
       consumer,
       names,
       next: (signal = new AbortController().signal) => loop.next(signal),
-      /** Adds a consumer that has no pending entries. */
       idle: async (name: string, consumerName: string) => {
         await redis.xGroupCreateConsumer(name, group, consumerName);
       },
-      /** Adds a consumer that has a pending entry. */
       busy: async (name: string, consumerName: string) => {
         await redis.xAdd(name, '*', { payload: '0' });
         await redis.xReadGroup(group, consumerName, { key: name, id: '>' });
       },
-      /** Waits until the consumers have been idle for longer than the TTL. */
       stale: async () => {
         await sleep(consumerTtl + 50);
       },

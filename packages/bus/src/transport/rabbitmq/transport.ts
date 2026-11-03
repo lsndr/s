@@ -35,9 +35,9 @@ export interface RabbitmqTransportConfig {
   };
 }
 
-/** Where the config of the transport is registered. */
 const RabbitmqTransportConfigToken = Symbol('RabbitmqTransportConfig');
 
+/** Transport that publishes and consumes events through RabbitMQ. */
 export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
   private readonly exchange = 'events';
 
@@ -52,7 +52,6 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     private readonly serializer: Serializer,
   ) {}
 
-  /** Provides the transport with the given config. */
   public static withConfig(
     config: RabbitmqTransportConfig,
   ): BusProvider<RabbitmqTransport> {

@@ -31,6 +31,7 @@ export interface BusModuleOptions {
   providers?: Provider[];
 }
 
+/** Nest module that wires a transport, a serializer and the event handlers into a message bus. */
 @Module({})
 export class BusModule
   implements OnApplicationBootstrap, BeforeApplicationShutdown
@@ -87,13 +88,13 @@ export class BusModule
   public async beforeApplicationShutdown(): Promise<void> {
     const errors: unknown[] = [];
 
-    // Reverse order, so that what was registered first is shut down last
+    // reverse order, so that what was registered first is shut down last
     for (const provider of this.findProviders().reverse()) {
       if (!hasOnBusShutdown(provider)) {
         continue;
       }
 
-      // One failing does not keep the others from shutting down
+      // one failing does not keep the others from shutting down
       try {
         await provider.onBusShutdown();
       } catch (error) {
