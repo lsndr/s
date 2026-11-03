@@ -47,7 +47,6 @@ class OtherEvent {
   public readonly kind = 'other';
 }
 
-/** Options that every transport takes. */
 interface CommonConfig {
   group: string;
   retries: { max: number; delay: number };
@@ -64,21 +63,18 @@ interface TransportTest {
   }>;
 }
 
-/** Does what the bus does before the handlers are subscribed. */
 async function init(transport: Transport) {
   if (hasOnBusInit(transport)) {
     await transport.onBusInit();
   }
 }
 
-/** Does what the bus does when it shuts down. */
 async function shutdown(transport: Transport) {
   if (hasOnBusShutdown(transport)) {
     await transport.onBusShutdown();
   }
 }
 
-/** Does what the bus does once the handlers are subscribed. */
 async function bootstrap(transport: Transport) {
   if (hasOnBusBootstrap(transport)) {
     await transport.onBusBootstrap();
@@ -157,7 +153,7 @@ describe('Transport', { timeout: 60_000 }, () => {
               url,
               ...busConfig,
               reclaimInterval: 25,
-              // One entry at a time, so that a busy instance leaves the
+              // one entry at a time, so that a busy instance leaves the
               // next entries to the others
               concurrency: 1,
             } satisfies RedisStreamsTransportConfig,
@@ -317,7 +313,7 @@ describe('Transport', { timeout: 60_000 }, () => {
         retries: { max: 0, delay: 100 },
       };
       const subscribe = async () => {
-        // Stays busy, so that the other entries go to the other instances
+        // stays busy, so that the other entries go to the other instances
         const handler = vi.fn((_payload: unknown) => setTimeout(1_000));
         const transport = await createTransport(config);
         await transport.subscribe(TestEvent, 'TestHandler', handler);

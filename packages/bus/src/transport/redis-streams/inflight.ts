@@ -3,14 +3,11 @@ import { Logger } from '@nestjs/common';
 import { Signal } from './signal.js';
 
 /**
- * The entries in flight of the streams. Each stream has `size` slots and every
- * entry it runs holds one, so a stream with a free slot may be read.
- *
- * Running is not limited by the free count: entries that are read or reclaimed
- * run immediately, so a stream can hold more entries than it has slots.
+ * Each stream has `size` slots and every entry it runs holds one. Running is
+ * not limited by the free count: entries that are read or reclaimed run
+ * immediately, so a stream can hold more entries than it has slots.
  */
 export class Inflight {
-  /** Entries that are running, by stream and id. */
   private readonly inflight = new Map<string, Map<string, Promise<void>>>();
   private readonly changes = new Signal();
   private readonly logger = new Logger(Inflight.name);
@@ -25,9 +22,8 @@ export class Inflight {
   }
 
   /**
-   * Starts an entry of a stream without waiting for it. It holds a slot until
-   * `work` settles. Does nothing if the entry is running already. A failure of
-   * `work` is logged, it doesn't reject.
+   * Starts the entry without waiting for it, and does nothing if it is running
+   * already. A failure of `work` is logged, it doesn't reject.
    *
    * @throws If the stream is not registered.
    */
@@ -55,11 +51,10 @@ export class Inflight {
       });
 
     entries.set(id, promise);
-    // A slot is taken, which whoever waits for a change has to know
+    // a slot is taken, which whoever waits for a change has to know
     this.changes.notify();
   }
 
-  /** Ids of the entries of a stream that are running. */
   public ids(stream: string): string[] {
     return [...(this.inflight.get(stream)?.keys() ?? [])];
   }
@@ -72,7 +67,6 @@ export class Inflight {
    * Streams that have at least one free slot. When there are none, waits
    * until a slot is released or a stream is added.
    *
-   * @param signal - Stops the wait.
    * @param options.exclude - Streams that don't count, so it waits for a
    * stream that isn't one of them.
    * @returns The streams, or an empty list once `signal` is aborted.
@@ -97,8 +91,6 @@ export class Inflight {
   }
 
   /**
-   * Waits for the entries that are running now, of all streams, to finish.
-   *
    * @param timeout - Gives up after this many milliseconds. Without it, waits
    * for as long as it takes.
    * @returns `false` if the timeout was reached with entries still running.
@@ -127,25 +119,17 @@ export class Inflight {
     try {
       return await Promise.race([drained, timedOut]);
     } finally {
-      // Don't keep the process alive for a timeout that is not needed
+      // don't keep the process alive for a timeout that is not needed
       timer.abort();
     }
   }
 
-  /** Streams that have at least one free slot, if any. */
   private free(): string[] {
     return [...this.inflight]
       .filter(([, entries]) => entries.size < this.size)
       .map(([stream]) => stream);
   }
 
-  /**
-   * Waits for the next change: an entry that takes or releases a slot, or a
-   * stream that is added. A change that happens while nobody waits is not
-   * remembered, so check the state right before waiting.
-   *
-   * @param signal - Stops the wait.
-   */
   private async changed(signal: AbortSignal): Promise<void> {
     if (signal.aborted) {
       return;

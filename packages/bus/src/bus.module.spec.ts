@@ -512,7 +512,7 @@ describe('BusModule', () => {
         calls.length = 0;
         await module.close();
 
-        // In reverse, so that what is registered first is shut down last
+        // in reverse, so that what is registered first is shut down last
         expect(calls).toEqual(['Second.shutdown', 'First.shutdown']);
       });
 
@@ -550,7 +550,7 @@ describe('BusModule', () => {
         await module.init();
         calls.length = 0;
 
-        // Nest logs what a shutdown hook throws
+        // nest logs what a shutdown hook throws
         const logged = vi.spyOn(Logger, 'error').mockReturnValue();
 
         await module.close();
@@ -607,7 +607,7 @@ describe('BusModule', () => {
       `Event handler ${TestHandler.name} is provided more than once`,
     );
 
-    // Nest rethrows the failed initialization on close
+    // nest rethrows the failed initialization on close
     await module.close().catch(() => undefined);
   });
 

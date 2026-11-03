@@ -7,7 +7,6 @@ import { type Loop } from './loop.js';
 export interface ReclaimLoopOptions {
   group: string;
   consumer: string;
-  /** Maximum number of entries claimed from a stream at once. */
   batchSize: number;
   /** How long an entry has to be pending before it is claimed. */
   retriesDelay: number;
@@ -15,7 +14,6 @@ export interface ReclaimLoopOptions {
   reclaimInterval: number;
 }
 
-/** Claims the entries that have been pending for too long, and runs them. */
 export class ReclaimLoop implements Loop {
   private readonly logger = new Logger(ReclaimLoop.name);
 
@@ -27,7 +25,7 @@ export class ReclaimLoop implements Loop {
   ) {}
 
   public interval(): number {
-    // Jitter keeps instances from polling at the same moment
+    // jitter keeps instances from polling at the same moment
     return this.options.reclaimInterval * (0.9 + Math.random() * 0.2);
   }
 
@@ -60,7 +58,7 @@ export class ReclaimLoop implements Loop {
           continue;
         }
 
-        // Claiming counts as a delivery, so don't claim what will not run
+        // claiming counts as a delivery, so don't claim what will not run
         if (signal.aborted) {
           return;
         }

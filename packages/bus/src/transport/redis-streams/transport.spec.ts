@@ -32,7 +32,6 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
   const transports: RedisStreamsTransport[] = [];
   const shutDown = new WeakSet<RedisStreamsTransport>();
 
-  /** Shuts the transport down once, as the bus does. */
   async function shutdown(transport: RedisStreamsTransport) {
     if (!shutDown.has(transport)) {
       shutDown.add(transport);
@@ -264,7 +263,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       const drain = Streams.prototype.drain;
       let finished = false;
 
-      // Lets the entry finish once shutdown has started to wait for it
+      // lets the entry finish once shutdown has started to wait for it
       vi.spyOn(Streams.prototype, 'drain').mockImplementation(function (
         this: Streams,
         ...args

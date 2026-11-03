@@ -33,7 +33,6 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
   let redis: RedisClientType;
   const releases: (() => void)[] = [];
 
-  /** Creates streams that are registered in `Streams`, and a loop reclaiming them. */
   async function setup({
     streams: count = 1,
     batchSize = 10,
@@ -72,7 +71,6 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
       consumer,
       names,
       next: (signal = new AbortController().signal) => loop.next(signal),
-      /** Adds entries and makes them pending for a consumer that is gone. */
       abandon: async (name: string, n = 1) => {
         const ids: string[] = [];
 
@@ -89,11 +87,9 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
 
         return ids;
       },
-      /** Waits until the entries have been idle for longer than the delay. */
       stale: async () => {
         await sleep(retriesDelay + 50);
       },
-      /** Lists the given entries as in flight until released. */
       hold: (name: string, ids: string[]) => {
         const held = Promise.withResolvers<void>();
 

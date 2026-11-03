@@ -160,7 +160,7 @@ async function createModule(
     ],
   }).compile();
 
-  // The bus initializes it on bootstrap, which tests publish before
+  // the bus initializes it on bootstrap, which tests publish before
   await module.get<JsonSerializer>(Serializer).onBusInit();
 
   return module;

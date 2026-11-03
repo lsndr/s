@@ -31,7 +31,6 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
   let clients: Clients<'read' | 'command'>;
   let redis: RedisClientType;
 
-  /** Creates streams that are registered in `Streams`, and a loop reading them. */
   async function setup({
     streams: count = 1,
     slotsPerStream = 10,
@@ -95,7 +94,6 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
     };
   }
 
-  /** Resolves once Redis is blocked on a read. */
   async function blocked() {
     await vi.waitFor(async () => {
       const list = await redis.clientList();
@@ -279,7 +277,6 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
   describe('unblocking', () => {
     const BLOCK = 10_000;
 
-    /** Starts a read that blocks for a long time, once Redis blocks on it. */
     async function block(options: SetupOptions = {}) {
       const ctx = await setup({ ...options, blockTimeout: BLOCK });
       const started = performance.now();
@@ -308,7 +305,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
       const [full] = ctx.names as [string];
       const held = Promise.withResolvers<void>();
 
-      // Fills the slot of the first stream, so only the second one is read
+      // fills the slot of the first stream, so only the second one is read
       await ctx.add(full);
       ctx.process.mockReturnValueOnce(held.promise);
       await ctx.next(AbortSignal.abort());
@@ -338,7 +335,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
 
       expect(result).toBe('blocked');
 
-      // Ends the blocked read of the test
+      // ends the blocked read of the test
       await redis.clientUnblock(clients.id('read')!, 'TIMEOUT');
       await reading;
     });
@@ -364,7 +361,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
       const command = await clients.get('command');
       const clientUnblock = vi.spyOn(command, 'clientUnblock');
 
-      // As if the command reached Redis before the read blocked
+      // as if the command reached Redis before the read blocked
       clientUnblock.mockResolvedValueOnce(0);
 
       const { reading, register, elapsed } = await block();

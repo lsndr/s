@@ -13,10 +13,6 @@ export interface Loop extends Partial<OnTransportShutdown> {
    * wait for something itself.
    */
   interval?(): number;
-  /**
-   * One round of the loop.
-   *
-   * @param signal - Aborted when the loops are told to stop.
-   */
+  /** @param signal - Aborted when the loops are told to stop. */
   next(signal: AbortSignal): Promise<void>;
 }

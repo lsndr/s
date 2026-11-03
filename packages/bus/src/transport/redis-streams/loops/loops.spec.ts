@@ -4,8 +4,8 @@ import { Logger } from '@nestjs/common';
 import { type Loop } from './loop.js';
 import { Loops } from './loops.js';
 
-// Fake timers don't cover `node:timers/promises`, so it is routed to the global
-// (faked) setTimeout, keeping the abort behaviour of the real one.
+// fake timers don't cover `node:timers/promises`, so it is routed to the global
+// (faked) setTimeout, keeping the abort behaviour of the real one
 vi.mock('node:timers/promises', () => ({
   setTimeout: (
     ms: number,
@@ -33,14 +33,12 @@ vi.mock('node:timers/promises', () => ({
     }),
 }));
 
-/** Iterates right away, yielding so the event loop is not starved. */
 class CountingLoop implements Loop {
   public readonly next = vi.fn(async (_signal: AbortSignal) => {
     await setTimeout(0);
   });
 }
 
-/** Waits for the abort, like a read that blocks until there is something to do. */
 class BlockingLoop implements Loop {
   public readonly next = vi.fn(async (signal: AbortSignal) => {
     if (signal.aborted) {
@@ -53,7 +51,6 @@ class BlockingLoop implements Loop {
   });
 }
 
-/** Iterates like {@link CountingLoop}, and has a shutdown hook. */
 class ShuttingDownLoop extends CountingLoop {
   public onTransportShutdown = vi.fn<() => void | Promise<void>>();
 }
@@ -141,7 +138,7 @@ describe('Loops', () => {
 
     loops.start();
     await vi.advanceTimersByTimeAsync(0);
-    // The running iteration is not interrupted, it needs its timer to fire
+    // the running iteration is not interrupted, it needs its timer to fire
     await Promise.all([loops.onTransportShutdown(), vi.runAllTimersAsync()]);
 
     const calls = loop.next.mock.calls.length;
@@ -282,7 +279,7 @@ describe('Loops', () => {
 
       await vi.advanceTimersByTimeAsync(0);
 
-      // The second loop doesn't wait for the first
+      // the second loop doesn't wait for the first
       expect(second.onTransportShutdown).toHaveBeenCalledOnce();
 
       release.resolve();

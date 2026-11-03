@@ -1,10 +1,8 @@
 import { type EventConstructor, type EventPayload } from '../types.js';
 import { type PublishOptions } from '../transport/dispatcher.js';
 
-/** What a serializer produces: text or raw bytes. */
 export type SerializedData = Buffer | string;
 
-/** An event serialized for a transport, with what identifies it. */
 export interface SerializedMessage {
   id: string;
   /** Event name, which transports route by. */
@@ -14,11 +12,8 @@ export interface SerializedMessage {
 }
 
 /**
- * Converts events to the bytes a transport sends, and back.
- *
- * It covers the whole message, the envelope included, so the format is up to
- * the implementation. Provide one with the `serializer` option of the bus
- * module.
+ * Covers the whole message, the envelope included, so the format is up to the
+ * implementation.
  */
 export interface Serializer {
   /**
@@ -32,9 +27,6 @@ export interface Serializer {
   serialize(event: object, options?: PublishOptions): SerializedMessage;
 
   /**
-   * Decodes a message.
-   *
-   * @param event - Class to instantiate the event with.
    * @param data - What {@link Serializer.serialize} returned. Transports pass
    * the bytes they received, as a `Buffer`, and the outbox passes what it
    * stored, which is a `string` if the serializer produced one.

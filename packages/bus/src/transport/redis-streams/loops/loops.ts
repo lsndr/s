@@ -7,10 +7,8 @@ import { type Loop } from './loop.js';
 const FAILURE_DELAY = 1_000;
 
 /**
- * Runs background loops until they are aborted.
- *
  * An iteration that throws is logged and the loop carries on, so a loop only
- * ends when {@link Loops.abort} is called.
+ * ends when the loops are shut down.
  */
 export class Loops implements OnTransportShutdown {
   private readonly controller = new AbortController();
@@ -19,7 +17,6 @@ export class Loops implements OnTransportShutdown {
 
   public constructor(private readonly loops: Loop[]) {}
 
-  /** Starts the loops. Does nothing when they are started already. */
   public start(): void {
     if (this.running.length > 0) {
       return;
@@ -72,7 +69,7 @@ export class Loops implements OnTransportShutdown {
           err instanceof Error ? err.stack : undefined,
         );
 
-        // Keeps a loop without an interval from spinning on a failure
+        // keeps a loop without an interval from spinning on a failure
         await this.pause(FAILURE_DELAY);
       }
     }
@@ -82,7 +79,7 @@ export class Loops implements OnTransportShutdown {
     try {
       await sleep(ms, undefined, { signal: this.controller.signal });
     } catch {
-      // Aborted, which is how the loops are woken up
+      // aborted, which is how the loops are woken up
     }
   }
 }

@@ -29,7 +29,6 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
   let redis: RedisClientType;
   const releases: (() => void)[] = [];
 
-  /** Creates streams that are registered in `Streams`, and a loop refreshing them. */
   async function setup({
     streams: count = 1,
     retriesDelay = 1000,
@@ -60,7 +59,6 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
       consumer,
       names,
       next: () => loop.next(),
-      /** Adds entries and makes them pending for the consumer. */
       deliver: async (name: string, n = 1) => {
         for (let i = 0; i < n; i++) {
           await redis.xAdd(name, '*', { payload: `${i}` });
@@ -84,7 +82,6 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
 
         return ids;
       },
-      /** Lists the given entries as in flight until released. */
       hold: (name: string, ids: string[]) => {
         const held = Promise.withResolvers<void>();
 
