@@ -32,11 +32,8 @@ export function EventHandler<
   options?: EventHandlerOptions,
 ): <
   T extends new (...args: any[]) => {
-    // Declared as a function-typed property (not a method) so that
-    // strictFunctionTypes checks the parameter contravariantly: a handler
-    // that only accepts a subset of the union (e.g. just EventPayload<C[0]>)
-    // is rejected instead of being silently allowed through method
-    // bivariance.
+    // keep this a property, not a method: TypeScript only rejects a handler
+    // that accepts too few events when the type is declared as a property
     handle: (event: EventPayloadOf<C[number]>) => Promise<void> | void;
   },
 >(

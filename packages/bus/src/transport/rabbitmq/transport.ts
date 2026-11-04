@@ -43,7 +43,6 @@ export interface RabbitmqTransportConfig {
   };
 }
 
-/** The address of the server in an AMQP URL, if it is a valid one. */
 function parseServer(url: string): TelemetryDescriptor['server'] {
   try {
     const { hostname, port, protocol } = new URL(url);
@@ -57,9 +56,9 @@ function parseServer(url: string): TelemetryDescriptor['server'] {
   }
 }
 
-/** Where the config of the transport is registered. */
 const RabbitmqTransportConfigToken = Symbol('RabbitmqTransportConfig');
 
+/** Transport that publishes and consumes events through RabbitMQ. */
 export class RabbitmqTransport
   implements Transport, TelemetryDescribed, OnBusInit, OnBusShutdown
 {
@@ -84,7 +83,6 @@ export class RabbitmqTransport
     );
   }
 
-  /** Provides the transport with the given config. */
   public static withConfig(
     config: RabbitmqTransportConfig,
   ): BusProvider<RabbitmqTransport> {

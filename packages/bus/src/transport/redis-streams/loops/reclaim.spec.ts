@@ -33,7 +33,6 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
   let redis: RedisClientType;
   const releases: (() => void)[] = [];
 
-  /** Creates streams that are registered in `Streams`, and a loop reclaiming them. */
   async function setup({
     streams: count = 1,
     batchSize = 10,
@@ -72,7 +71,6 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
       consumer,
       names,
       next: (signal = new AbortController().signal) => loop.next(signal),
-      /** Adds entries and makes them pending for a consumer that is gone. */
       abandon: async (name: string, n = 1) => {
         const ids: string[] = [];
 
@@ -89,11 +87,9 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
 
         return ids;
       },
-      /** Waits until the entries have been idle for longer than the delay. */
       stale: async () => {
         await sleep(retriesDelay + 50);
       },
-      /** Lists the given entries as in flight until released. */
       hold: (name: string, ids: string[]) => {
         const held = Promise.withResolvers<void>();
 
@@ -148,13 +144,17 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
 
   describe('reclaiming', () => {
     it('runs abandoned entries with the next attempt', async () => {
+      // arrange
       const { next, abandon, stale, process, names, streamOf } = await setup();
       const [name] = names as [string];
       const ids = await abandon(name, 2);
 
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(process).toHaveBeenCalledTimes(2);
       expect(process).toHaveBeenCalledWith(
         streamOf(name),
@@ -169,27 +169,34 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
     });
 
     it('takes the ownership of the claimed entries', async () => {
+      // arrange
       const { next, abandon, stale, pending, names, consumer } = await setup();
       const [name] = names as [string];
       const [id] = (await abandon(name)) as [string];
 
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(await pending(name)).toEqual([
         expect.objectContaining({ id, consumer, deliveriesCounter: 2 }),
       ]);
     });
 
     it('does not claim the entries that are not idle for long enough', async () => {
+      // arrange
       const { next, abandon, process, pending, names } = await setup({
         retriesDelay: 10_000,
       });
       const [name] = names as [string];
       const [id] = (await abandon(name)) as [string];
 
+      // act
       await next();
 
+      // assert
       expect(process).not.toHaveBeenCalled();
       expect(await pending(name)).toEqual([
         expect.objectContaining({ id, consumer: 'dead', deliveriesCounter: 1 }),
@@ -197,6 +204,7 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
     });
 
     it('does not claim the entries in flight', async () => {
+      // arrange
       const { next, abandon, hold, stale, process, names } = await setup();
       const [name] = names as [string];
       const client = await clients.getBinary('command');
@@ -205,8 +213,11 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
 
       hold(name, ids);
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(xClaim).not.toHaveBeenCalled();
       expect(process).not.toHaveBeenCalled();
     });
@@ -214,6 +225,7 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
     it.each([1, 5])(
       'claims at most batch size entries of a stream at once',
       async (batchSize) => {
+        // arrange
         const { next, abandon, stale, process, names } = await setup({
           batchSize,
         });
@@ -221,13 +233,17 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
 
         await abandon(name, batchSize * 2);
         await stale();
+
+        // act
         await next();
 
+        // assert
         expect(process).toHaveBeenCalledTimes(batchSize);
       },
     );
 
     it('reclaims the entries of several streams', async () => {
+      // arrange
       const { next, abandon, stale, process, names, streamOf } = await setup({
         streams: 2,
       });
@@ -236,8 +252,11 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
       const [idB] = await abandon(b);
 
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(process).toHaveBeenCalledTimes(2);
       expect(process).toHaveBeenCalledWith(
         streamOf(a),
@@ -254,6 +273,7 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
 
   describe('abort', () => {
     it('does not call Redis when it is aborted', async () => {
+      // arrange
       const { next, abandon, stale, process, names } = await setup();
       const [name] = names as [string];
       const client = await clients.get('command');
@@ -263,13 +283,17 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
       await abandon(name);
       await stale();
       controller.abort();
+
+      // act
       await next(controller.signal);
 
+      // assert
       expect(xPendingRange).not.toHaveBeenCalled();
       expect(process).not.toHaveBeenCalled();
     });
 
     it('does not claim the entries when aborted while checking them', async () => {
+      // arrange
       const { next, abandon, stale, process, pending, names } = await setup();
       const [name] = names as [string];
       const client = await clients.get('command');
@@ -286,8 +310,11 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
         return reply;
       });
       await stale();
+
+      // act
       await next(controller.signal);
 
+      // assert
       expect(xClaim).not.toHaveBeenCalled();
       expect(process).not.toHaveBeenCalled();
       expect(await pending(name)).toEqual([
@@ -296,6 +323,7 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
     });
 
     it('does not run the claimed entries when aborted while claiming them', async () => {
+      // arrange
       const { next, abandon, stale, process, names } = await setup();
       const [name] = names as [string];
       const client = await clients.getBinary('command');
@@ -311,12 +339,16 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
         return reply;
       });
       await stale();
+
+      // act
       await next(controller.signal);
 
+      // assert
       expect(process).not.toHaveBeenCalled();
     });
 
     it('does not log the errors that happen after it is aborted', async () => {
+      // arrange
       const { next, names } = await setup();
       const [name] = names as [string];
       const client = await clients.get('command');
@@ -329,13 +361,17 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
         return Promise.reject(new Error(`Connection lost: ${name}`));
       });
 
-      await expect(next(controller.signal)).resolves.toBeUndefined();
+      // act
+      await next(controller.signal);
+
+      // assert
       expect(error).not.toHaveBeenCalled();
     });
   });
 
   describe('errors', () => {
     it('logs a failing stream and still reclaims the others', async () => {
+      // arrange
       const { next, abandon, stale, process, names, streamOf } = await setup({
         streams: 2,
       });
@@ -348,8 +384,11 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
         new Error('Connection lost'),
       );
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(error).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(failing),
         expect.any(String),
@@ -370,11 +409,16 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
     ])(
       'is $expected ms when the jitter is $random',
       async ({ random, expected }) => {
+        // arrange
         const { loop } = await setup({ reclaimInterval: 1000 });
 
         vi.spyOn(Math, 'random').mockReturnValue(random);
 
-        expect(loop.interval()).toBeCloseTo(expected, 0);
+        // act
+        const interval = loop.interval();
+
+        // assert
+        expect(interval).toBeCloseTo(expected, 0);
       },
     );
   });

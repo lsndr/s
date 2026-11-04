@@ -30,11 +30,6 @@ import { Processor } from './processor.js';
 import { Streams } from './streams.js';
 
 export interface RedisStreamsTransportConfig {
-  /**
-   * Redis connection URL.
-   *
-   * @example 'redis://localhost:6379'
-   */
   url: string;
   /**
    * Consumer group name. Every stream has one group with this name, so
@@ -120,7 +115,6 @@ export interface RedisStreamsTransportConfig {
   shutdownTimeout?: number;
 }
 
-/** Values of the config with the defaults applied. */
 interface Settings {
   url: string;
   group: string;
@@ -140,11 +134,7 @@ interface Settings {
   shutdownTimeout: number | undefined;
 }
 
-/**
- * Applies the defaults to the config and checks the values.
- *
- * @throws If a value is out of range.
- */
+/** @throws If a value is out of range. */
 function resolveSettings(config: RedisStreamsTransportConfig): Settings {
   const fail = (option: string, requirement: string): never => {
     throw new Error(`Invalid Redis Streams option ${option}: ${requirement}`);
@@ -177,7 +167,7 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
     return result as number | T;
   };
 
-  // The entries in flight are refreshed every half of the delay
+  // the entries in flight are refreshed every half of the delay
   const delay = atLeast('retries.delay', config.retries?.delay, 300_000, 20);
   return {
     url: config.url,
@@ -194,7 +184,7 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
       config.reclaimInterval,
       Math.max(delay / 4, 1_000),
     ),
-    // Not configurable. The TTL has to stay longer than the block timeout,
+    // not configurable: the TTL has to stay longer than the block timeout,
     // which is how often a live consumer shows activity
     blockTimeout: 5_000,
     consumerTtl: 3_600_000,
@@ -210,7 +200,6 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
   };
 }
 
-/** The address of the server in a Redis URL, if it is a valid one. */
 function parseServer(url: string): TelemetryDescriptor['server'] {
   try {
     const { hostname, port } = new URL(url);
@@ -223,9 +212,9 @@ function parseServer(url: string): TelemetryDescriptor['server'] {
   }
 }
 
-/** Where the config of the transport is registered. */
 const RedisStreamsTransportConfigToken = Symbol('RedisStreamsTransportConfig');
 
+/** Transport that publishes and consumes events through Redis Streams. */
 export class RedisStreamsTransport
   implements
     Transport,
@@ -316,7 +305,6 @@ export class RedisStreamsTransport
     ]);
   }
 
-  /** Provides the transport with the given config. */
   public static withConfig(
     config: RedisStreamsTransportConfig,
   ): BusProvider<RedisStreamsTransport> {
@@ -379,7 +367,7 @@ export class RedisStreamsTransport
       );
     }
 
-    // After the drain, so that the consumer doesn't own what was in flight
+    // after the drain, so that the consumer doesn't own what was in flight
     for (const { name } of this.streams.all()) {
       await this.removeConsumerIfIdle(name).catch((err) =>
         this.logger.warn(

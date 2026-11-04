@@ -34,8 +34,9 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
   let redis: RedisClientType;
   const transports: RedisStreamsTransport[] = [];
   const shutDown = new WeakSet<RedisStreamsTransport>();
+  // resolvers of handlers that a test leaves running
+  const holds: (() => void)[] = [];
 
-  /** Shuts the transport down once, as the bus does. */
   async function shutdown(transport: RedisStreamsTransport) {
     if (!shutDown.has(transport)) {
       shutDown.add(transport);
@@ -102,56 +103,70 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
 
   afterAll(async () => {
     await redis.close();
-    for (const transport of transports) {
-      await shutdown(transport);
-    }
-
     await container.stop();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+
+    for (const resolve of holds.splice(0)) {
+      resolve();
+    }
+
+    for (const transport of transports.splice(0)) {
+      await shutdown(transport);
+    }
   });
 
   describe('subscribe', () => {
     it('names the stream after the key prefix and the event', async () => {
+      // arrange
       const keyPrefix = `custom:${crypto.randomUUID()}:`;
       const { transport } = await createTransport({ keyPrefix });
 
+      // act
       await transport.subscribe(FirstEvent, 'Handler', vi.fn());
 
+      // assert
       expect(await redis.exists(`${keyPrefix}FirstEvent`)).toBe(1);
     });
 
     it('joins a group that already exists', async () => {
+      // arrange
       const { transport, group, stream } = await createTransport();
       const other = await createTransport({
         group,
         keyPrefix: stream(FirstEvent).replace(/FirstEvent$/, ''),
       });
-
       await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+
+      // act
       const subscribed = other.transport.subscribe(
         FirstEvent,
         'Handler',
         vi.fn(),
       );
 
+      // assert
       await expect(subscribed).resolves.toBeUndefined();
     });
 
     it('rejects a handler that is already subscribed to the event', async () => {
+      // arrange
       const { transport } = await createTransport();
-
       await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+
+      // act
       const subscribed = transport.subscribe(FirstEvent, 'Handler', vi.fn());
 
+      // assert
       await expect(subscribed).rejects.toThrow(/already subscribed/);
     });
   });
 
   describe('publish', () => {
     it('trims the acknowledged entries above the max length', async () => {
+      // arrange
       const { transport, group, stream } = await createTransport({
         trim: { maxLength: 10 },
       });
@@ -171,12 +186,16 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
         group,
         entries.map(({ id }) => id),
       );
+
+      // act
       await transport.publish(new FirstEvent('trigger'));
 
+      // assert
       expect(await redis.xLen(key)).toBeLessThan(count);
     });
 
     it('keeps the unacknowledged entries above the max length', async () => {
+      // arrange
       const { transport, group, stream } = await createTransport({
         trim: { maxLength: 10 },
       });
@@ -184,16 +203,20 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       const count = 500;
 
       await redis.xGroupCreate(key, group, '0', { MKSTREAM: true });
+
+      // act
       await transport.publish(
         Array.from({ length: count }, (_, i) => ({
           event: new FirstEvent(String(i)),
         })),
       );
 
+      // assert
       expect(await redis.xLen(key)).toBe(count);
     });
 
     it('trims unacknowledged entries above the max length when not only acknowledged', async () => {
+      // arrange
       const { transport, group, stream } = await createTransport({
         trim: { maxLength: 10, onlyAcked: false },
       });
@@ -201,12 +224,15 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       const count = 500;
 
       await redis.xGroupCreate(key, group, '0', { MKSTREAM: true });
+
+      // act
       await transport.publish(
         Array.from({ length: count }, (_, i) => ({
           event: new FirstEvent(String(i)),
         })),
       );
 
+      // assert
       expect(await redis.xLen(key)).toBeLessThan(count);
     });
   });
@@ -222,27 +248,33 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
     ] satisfies [string, Partial<RedisStreamsTransportConfig>][])(
       'rejects an invalid %s',
       (option, config) => {
-        expect(
-          () =>
-            new RedisStreamsTransport(
-              { url, group: 'group', ...config },
-              serializer,
-            ),
-        ).toThrow(`Invalid Redis Streams option ${option}`);
+        // act
+        const create = () =>
+          new RedisStreamsTransport(
+            { url, group: 'group', ...config },
+            serializer,
+          );
+
+        // assert
+        expect(create).toThrow(`Invalid Redis Streams option ${option}`);
       },
     );
   });
 
   describe('consumer', () => {
     it('reads with the configured name', async () => {
+      // arrange
       const { transport, group, stream } = await createTransport({
         consumer: 'my-consumer',
       });
 
       await transport.subscribe(FirstEvent, 'Handler', vi.fn());
       transport.onBusBootstrap();
+
+      // act
       await transport.publish(new FirstEvent('x'));
 
+      // assert
       await vi.waitFor(async () => {
         const consumers = await redis.xInfoConsumers(stream(FirstEvent), group);
         expect(consumers.map(({ name }) => name)).toEqual(['my-consumer']);
@@ -250,12 +282,16 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
     });
 
     it('defaults the name to the host name and the process id', async () => {
+      // arrange
       const { transport, group, stream } = await createTransport();
 
       await transport.subscribe(FirstEvent, 'Handler', vi.fn());
       transport.onBusBootstrap();
+
+      // act
       await transport.publish(new FirstEvent('x'));
 
+      // assert
       await vi.waitFor(async () => {
         const consumers = await redis.xInfoConsumers(stream(FirstEvent), group);
         expect(consumers.map(({ name }) => name)).toEqual([
@@ -322,13 +358,14 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
 
   describe('shutdown', () => {
     it('waits for the entries in flight and removes the consumer', async () => {
+      // arrange
       const { transport, group, stream } = await createTransport();
       const started = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       const drain = Streams.prototype.drain;
       let finished = false;
 
-      // Lets the entry finish once shutdown has started to wait for it
+      // lets the entry finish once shutdown has started to wait for it
       vi.spyOn(Streams.prototype, 'drain').mockImplementation(function (
         this: Streams,
         ...args
@@ -345,13 +382,17 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       transport.onBusBootstrap();
       await transport.publish(new FirstEvent('x'));
       await started.promise;
+
+      // act
       await shutdown(transport);
 
+      // assert
       expect(finished).toBe(true);
       expect(await redis.xInfoConsumers(stream(FirstEvent), group)).toEqual([]);
     });
 
     it('stops waiting after the shutdown timeout and keeps the entry pending', async () => {
+      // arrange
       const warn = vi.spyOn(Logger.prototype, 'warn').mockReturnValue();
       vi.spyOn(Logger.prototype, 'error').mockReturnValue();
       const { transport, group, stream } = await createTransport({
@@ -361,6 +402,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       const started = Promise.withResolvers<void>();
       const stuck = Promise.withResolvers<void>();
 
+      holds.push(stuck.resolve);
       await transport.subscribe(FirstEvent, 'Stuck', () => {
         started.resolve();
 
@@ -369,8 +411,11 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       transport.onBusBootstrap();
       await transport.publish(new FirstEvent('x'));
       await started.promise;
+
+      // act
       await shutdown(transport);
 
+      // assert
       const pending = await redis.xPending(stream(FirstEvent), group);
       const consumers = await redis.xInfoConsumers(stream(FirstEvent), group);
       expect(pending.pending).toBe(1);
@@ -378,8 +423,6 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining('Shutdown timeout reached'),
       );
-
-      stuck.resolve();
     });
   });
 });

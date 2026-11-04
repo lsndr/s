@@ -7,14 +7,12 @@
 export class Signal {
   private waiters = new Set<() => void>();
 
-  /** Resolves on the next {@link Signal.notify}. */
   public wait(): Promise<void> {
     return new Promise((resolve) => {
       this.waiters.add(resolve);
     });
   }
 
-  /** Wakes every waiter, if there are any. */
   public notify(): void {
     const waiters = this.waiters;
 

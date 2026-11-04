@@ -46,23 +46,15 @@ type InferConfig<O> = O extends Outbox<infer C> ? C : never;
 
 type InferTransport<C> = C extends OutboxConfig<infer T> ? T : Transport;
 
-/** Where the transport an outbox relays to is registered. */
 const OutboxTransport = Symbol('OutboxTransport');
 
-/** Where the config of an outbox is registered. */
 const OutboxConfigToken = Symbol('OutboxConfig');
 
 /**
- * Base class of transactional outboxes.
- *
- * `publish` only stores the event with {@link Outbox.save}. A background loop
- * calls {@link Outbox.relay}, which forwards the stored events to the
- * configured transport. Subscriptions and health checks go straight to that
- * transport.
- *
- * Provide an outbox with {@link Outbox.withConfig}. The transport it relays to
- * is registered in the bus module next to it, so the bus calls its lifecycle
- * hooks itself, before the ones of the outbox and after them on shutdown.
+ * Base class of transactional outboxes: `publish` only stores the event with
+ * {@link Outbox.save}, and a background loop forwards the stored events to the
+ * transport with {@link Outbox.relay}. Subscriptions and health checks go
+ * straight to that transport.
  *
  * Subclasses that override `onBusBootstrap` or `onBusShutdown` must call
  * `super`.
@@ -94,9 +86,9 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   private loop?: Promise<void>;
 
   /**
-   * Provides the outbox with the given config, available as `this.config`,
-   * and registers the transport it relays to. The outbox is created by Nest,
-   * so it can inject its own dependencies.
+   * The transport is registered in the bus module next to the outbox, so the
+   * bus calls its lifecycle hooks itself, before the ones of the outbox and
+   * after them on shutdown.
    */
   public static withConfig<O extends Outbox<any>>(
     this: Type<O>,

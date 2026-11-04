@@ -12,10 +12,6 @@ interface StreamState extends Stream {
   readonly handlers: Handler[];
 }
 
-/**
- * The streams an instance consumes, with their handlers. The entries in flight,
- * and the slots they hold, are kept by {@link Inflight}.
- */
 export class Streams {
   private readonly streams = new Map<string, StreamState>();
   private readonly entries: Inflight;
@@ -33,8 +29,6 @@ export class Streams {
   }
 
   /**
-   * Adds a handler to a stream, which is added too if it is new.
-   *
    * @throws If the stream is registered for another event, or the handler is
    * already registered for the stream.
    */
@@ -70,7 +64,6 @@ export class Streams {
    * Names of the streams that have a free slot. Waits while there are none,
    * so nothing is read from a full stream.
    *
-   * @param signal - Stops the wait.
    * @param options.exclude - Streams that don't count, so it waits for a
    * stream that isn't one of them.
    * @returns The streams, or an empty list once `signal` is aborted.
@@ -83,8 +76,7 @@ export class Streams {
   }
 
   /**
-   * Starts an entry of a stream without waiting for it. It is in flight until
-   * `work` settles, see {@link Streams.drain}. Does nothing if the entry is in
+   * Starts the entry without waiting for it, and does nothing if it is in
    * flight already. A failure of `work` is logged.
    *
    * @throws If the stream is not registered.
@@ -103,7 +95,6 @@ export class Streams {
     this.entries.run(name, id, () => work(stream));
   }
 
-  /** Ids of the entries of a stream that are in flight. */
   public inflight(name: string): string[] {
     return this.entries.ids(name);
   }
@@ -113,8 +104,6 @@ export class Streams {
   }
 
   /**
-   * Waits for the entries that are in flight now, of all streams, to finish.
-   *
    * @param timeout - Gives up after this many milliseconds. Without it, waits
    * for as long as it takes.
    * @returns `false` if the timeout was reached with entries still running.

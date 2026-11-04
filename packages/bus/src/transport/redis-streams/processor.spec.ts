@@ -46,7 +46,6 @@ describe('Processor', { timeout: 60_000 }, () => {
     };
   }
 
-  /** Creates a stream with one entry that is pending for a consumer. */
   async function setup({ handlers, message, options }: SetupOptions) {
     const name = `stream:${crypto.randomUUID()}`;
     const group = `group:${crypto.randomUUID()}`;
@@ -150,12 +149,15 @@ describe('Processor', { timeout: 60_000 }, () => {
 
   describe('when every handler succeeds', () => {
     it('acknowledges the entry and clears the done hash', async () => {
+      // arrange
       const { processor, stream, entry, doneKey, pending } = await setup({
         handlers: { A: vi.fn(), B: vi.fn() },
       });
 
+      // act
       await processor.process(stream, entry, 1);
 
+      // assert
       expect(await pending()).toBe(0);
       expect(await redis.exists(doneKey)).toBe(0);
       expect(log.log).toHaveBeenCalledWith(
@@ -164,13 +166,16 @@ describe('Processor', { timeout: 60_000 }, () => {
     });
 
     it('passes the parsed event to the handlers', async () => {
+      // arrange
       const handler = vi.fn();
       const { processor, stream, entry } = await setup({
         handlers: { A: handler },
       });
 
+      // act
       await processor.process(stream, entry, 1);
 
+      // assert
       expect(handler).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           name: 'TestEvent',
@@ -190,14 +195,17 @@ describe('Processor', { timeout: 60_000 }, () => {
 
   describe('when a handler fails and retries are left', () => {
     it('leaves the entry pending and records the handlers that succeeded', async () => {
+      // arrange
       const ok = vi.fn();
       const flaky = vi.fn().mockRejectedValue(new Error('boom'));
       const { processor, stream, entry, doneKey, pending } = await setup({
         handlers: { Ok: ok, Flaky: flaky },
       });
 
+      // act
       await processor.process(stream, entry, 1);
 
+      // assert
       expect(await pending()).toBe(1);
       expect(await redis.hGetAll(doneKey)).toEqual({ Ok: '1' });
       expect(await redis.pTTL(doneKey)).toBeGreaterThan(0);
@@ -208,6 +216,7 @@ describe('Processor', { timeout: 60_000 }, () => {
     });
 
     it('runs only the handlers that have not succeeded yet on the next attempt', async () => {
+      // arrange
       const ok = vi.fn();
       const flaky = vi
         .fn()
@@ -218,8 +227,11 @@ describe('Processor', { timeout: 60_000 }, () => {
       });
 
       await processor.process(stream, entry, 1);
+
+      // act
       await processor.process(stream, entry, 2);
 
+      // assert
       expect(ok).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
         expect.anything(),
@@ -230,6 +242,7 @@ describe('Processor', { timeout: 60_000 }, () => {
     });
 
     it('skips the handlers that are already in the done hash', async () => {
+      // arrange
       const done = vi.fn();
       const todo = vi.fn();
       const { processor, stream, entry, doneKey } = await setup({
@@ -237,8 +250,11 @@ describe('Processor', { timeout: 60_000 }, () => {
       });
 
       await redis.hSet(doneKey, 'Done', '1');
+
+      // act
       await processor.process(stream, entry, 2);
 
+      // assert
       expect(done).not.toHaveBeenCalled();
       expect(todo).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
@@ -249,6 +265,7 @@ describe('Processor', { timeout: 60_000 }, () => {
 
   describe('when a handler fails and retries are exhausted', () => {
     it('acknowledges the entry, clears the done hash and logs the failure', async () => {
+      // arrange
       const { processor, stream, entry, doneKey, pending } = await setup({
         handlers: {
           Ok: vi.fn(),
@@ -257,8 +274,10 @@ describe('Processor', { timeout: 60_000 }, () => {
         options: { maxRetries: 2 },
       });
 
+      // act
       await processor.process(stream, entry, 3);
 
+      // assert
       expect(await pending()).toBe(0);
       expect(await redis.exists(doneKey)).toBe(0);
       expect(log.error).toHaveBeenCalledWith(
@@ -270,19 +289,23 @@ describe('Processor', { timeout: 60_000 }, () => {
     });
 
     it('keeps the entry pending on the last attempt that still has a retry', async () => {
+      // arrange
       const { processor, stream, entry, pending } = await setup({
         handlers: { Broken: vi.fn().mockRejectedValue(new Error('boom')) },
         options: { maxRetries: 2 },
       });
 
+      // act
       await processor.process(stream, entry, 2);
 
+      // assert
       expect(await pending()).toBe(1);
     });
   });
 
   describe('when something goes wrong', () => {
     it('still acknowledges the entry if recording a handler fails', async () => {
+      // arrange
       const handler = vi.fn();
       const { processor, stream, entry, doneKey, pending } = await setup({
         handlers: { A: handler },
@@ -290,8 +313,11 @@ describe('Processor', { timeout: 60_000 }, () => {
 
       // 1st multi() records the handler, 2nd one acknowledges the entry
       await failExecOfMulti(1);
+
+      // act
       await processor.process(stream, entry, 1);
 
+      // assert
       expect(handler).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
         expect.anything(),

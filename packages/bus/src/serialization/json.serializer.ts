@@ -9,10 +9,7 @@ import {
   type Serializer,
 } from './serializer.js';
 
-/**
- * The default serializer: JSON, with the event converted by
- * `class-transformer`, which has to be installed.
- */
+/** Default serializer, which encodes events as JSON and needs `class-transformer` to be installed. */
 export class JsonSerializer implements Serializer, OnBusInit {
   private classTransformerModule?: typeof ClassTransformer;
 

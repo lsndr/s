@@ -29,7 +29,6 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
   let redis: RedisClientType;
   const releases: (() => void)[] = [];
 
-  /** Creates streams that are registered in `Streams`, and a loop refreshing them. */
   async function setup({
     streams: count = 1,
     retriesDelay = 1000,
@@ -60,7 +59,6 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
       consumer,
       names,
       next: () => loop.next(),
-      /** Adds entries and makes them pending for the consumer. */
       deliver: async (name: string, n = 1) => {
         for (let i = 0; i < n; i++) {
           await redis.xAdd(name, '*', { payload: `${i}` });
@@ -84,7 +82,6 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
 
         return ids;
       },
-      /** Lists the given entries as in flight until released. */
       hold: (name: string, ids: string[]) => {
         const held = Promise.withResolvers<void>();
 
@@ -130,14 +127,18 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
 
   describe('refreshing', () => {
     it('resets the idle time of the entries in flight', async () => {
+      // arrange
       const { next, deliver, hold, pending, names } = await setup();
       const [name] = names as [string];
       const ids = await deliver(name, 2);
       hold(name, ids);
       await sleep(100);
-
       const before = await pending(name);
+
+      // act
       await next();
+
+      // assert
       const after = await pending(name);
 
       for (const entry of after) {
@@ -150,14 +151,17 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
     });
 
     it('does not refresh the entries that are not in flight', async () => {
+      // arrange
       const { next, deliver, hold, pending, names } = await setup();
       const [name] = names as [string];
       const [running, idle] = (await deliver(name, 2)) as [string, string];
       hold(name, [running]);
-
       await sleep(500);
+
+      // act
       await next();
 
+      // assert
       const entries = await pending(name);
       const runningEntries = entries.find(({ id }) => id === running);
       const idleEntries = entries.find(({ id }) => id === idle);
@@ -169,40 +173,50 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
     });
 
     it('does not count a refresh as a delivery', async () => {
+      // arrange
       const { next, deliver, hold, pending, names } = await setup();
       const [name] = names as [string];
       const ids = await deliver(name);
-
       hold(name, ids);
       await next();
+
+      // act
       await next();
 
+      // assert
       expect(await pending(name)).toEqual([
         expect.objectContaining({ id: ids[0], deliveriesCounter: 1 }),
       ]);
     });
 
     it('ignores the entries in flight that are no longer pending', async () => {
+      // arrange
       const { next, deliver, hold, pending, names, group } = await setup();
       const [name] = names as [string];
       const ids = await deliver(name);
-
       hold(name, ids);
       await redis.xAck(name, group, ids);
 
-      await expect(next()).resolves.toBeUndefined();
+      // act
+      const refreshing = next();
+
+      // assert
+      await expect(refreshing).resolves.toBeUndefined();
       expect(await pending(name)).toHaveLength(0);
     });
 
     it('does not call Redis for a stream without entries in flight', async () => {
+      // arrange
       const { next, deliver, names } = await setup();
       const [name] = names as [string];
       const client = await clients.get('command');
       const xClaimJustId = vi.spyOn(client, 'xClaimJustId');
-
       await deliver(name);
+
+      // act
       await next();
 
+      // assert
       expect(xClaimJustId).not.toHaveBeenCalled();
     });
   });
@@ -216,9 +230,14 @@ describe('RefreshLoop', { timeout: 60_000 }, () => {
     ])(
       'is $expected ms for a retries delay of $retriesDelay ms',
       async ({ retriesDelay, expected }) => {
+        // arrange
         const { loop } = await setup({ retriesDelay });
 
-        expect(loop.interval()).toBe(expected);
+        // act
+        const interval = loop.interval();
+
+        // assert
+        expect(interval).toBe(expected);
       },
     );
   });

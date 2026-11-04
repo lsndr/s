@@ -50,10 +50,6 @@ export interface StaleConsumersLoopOptions {
   consumerTtl: number;
 }
 
-/**
- * Deletes the other consumers of the groups that have no pending entries and
- * have been idle for longer than `consumerTtl`.
- */
 export class StaleConsumersLoop implements Loop {
   private readonly logger = new Logger(StaleConsumersLoop.name);
 
@@ -105,11 +101,7 @@ export class StaleConsumersLoop implements Loop {
     }
   }
 
-  /**
-   * Runs the script for a stream.
-   *
-   * @returns Names of the deleted consumers.
-   */
+  /** @returns Names of the deleted consumers. */
   private async deleteStale(
     client: RedisClientType,
     stream: string,
@@ -130,7 +122,7 @@ export class StaleConsumersLoop implements Loop {
         throw err;
       }
 
-      // Not cached by the server yet, EVAL caches it for the next call
+      // not cached by the server yet, EVAL caches it for the next call
       return (await client.eval(DELETE_STALE_CONSUMERS, options)) as string[];
     }
   }

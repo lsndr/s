@@ -11,11 +11,14 @@ class TestEvent {
 
 describe('JsonSerializer', () => {
   it('fails until it is initialized', () => {
+    // arrange
     const serializer = new JsonSerializer();
 
-    expect(() => serializer.serialize(new TestEvent())).toThrow(
-      'not initialized',
-    );
+    // act
+    const serialize = () => serializer.serialize(new TestEvent());
+
+    // assert
+    expect(serialize).toThrow('not initialized');
   });
 
   describe('once initialized', () => {
@@ -28,14 +31,18 @@ describe('JsonSerializer', () => {
     }
 
     it('writes the envelope and the plain event as JSON', async () => {
+      // arrange
       const serializer = await setup();
       const publishedAt = new Date('2026-02-03T04:05:06.000Z');
+
+      // act
       const message = serializer.serialize(new TestEvent(), {
         id: 'id-1',
         meta: { key: 'value' },
         publishedAt,
       });
 
+      // assert
       expect(message).toMatchObject({
         id: 'id-1',
         name: 'TestEvent',
@@ -50,22 +57,50 @@ describe('JsonSerializer', () => {
       });
     });
 
-    it('produces a string, and reads a string or a buffer', async () => {
+    it('produces a string', async () => {
+      // arrange
+      const serializer = await setup();
+
+      // act
+      const { data } = serializer.serialize(new TestEvent(), { id: 'id-1' });
+
+      // assert
+      expect(typeof data).toBe('string');
+    });
+
+    it('reads a string', async () => {
+      // arrange
       const serializer = await setup();
       const { data } = serializer.serialize(new TestEvent(), { id: 'id-1' });
 
-      expect(typeof data).toBe('string');
-      expect(serializer.deserialize(TestEvent, data).id).toBe('id-1');
-      expect(serializer.deserialize(TestEvent, Buffer.from(data)).id).toBe(
-        'id-1',
-      );
+      // act
+      const payload = serializer.deserialize(TestEvent, data);
+
+      // assert
+      expect(payload.id).toBe('id-1');
+    });
+
+    it('reads a buffer', async () => {
+      // arrange
+      const serializer = await setup();
+      const { data } = serializer.serialize(new TestEvent(), { id: 'id-1' });
+
+      // act
+      const payload = serializer.deserialize(TestEvent, Buffer.from(data));
+
+      // assert
+      expect(payload.id).toBe('id-1');
     });
 
     it('restores the event instance and the dates', async () => {
+      // arrange
       const serializer = await setup();
       const message = serializer.serialize(new TestEvent(), { id: 'id-1' });
+
+      // act
       const payload = serializer.deserialize(TestEvent, message.data);
 
+      // assert
       expect(payload.event).toBeInstanceOf(TestEvent);
       expect(payload).toMatchObject({
         id: 'id-1',
@@ -76,27 +111,40 @@ describe('JsonSerializer', () => {
     });
 
     it('fills in what the options leave out', async () => {
+      // arrange
       const serializer = await setup();
-      const { id, name, publishedAt, data } = serializer.serialize(
-        new TestEvent(),
-      );
 
+      // act
+      const { id, name, publishedAt } = serializer.serialize(new TestEvent());
+
+      // assert
       expect(id).toEqual(expect.any(String));
       expect(name).toBe('TestEvent');
       expect(publishedAt).toBeInstanceOf(Date);
-      expect(serializer.deserialize(TestEvent, data)).toMatchObject({
-        id,
-        meta: {},
-        publishedAt,
-      });
+    });
+
+    it('reads back what the options left out', async () => {
+      // arrange
+      const serializer = await setup();
+      const { id, publishedAt, data } = serializer.serialize(new TestEvent());
+
+      // act
+      const payload = serializer.deserialize(TestEvent, data);
+
+      // assert
+      expect(payload).toMatchObject({ id, meta: {}, publishedAt });
     });
 
     it('rejects data that is not JSON', async () => {
+      // arrange
       const serializer = await setup();
 
-      expect(() =>
-        serializer.deserialize(TestEvent, Buffer.from('nope')),
-      ).toThrow();
+      // act
+      const deserialize = () =>
+        serializer.deserialize(TestEvent, Buffer.from('nope'));
+
+      // assert
+      expect(deserialize).toThrow();
     });
   });
 });

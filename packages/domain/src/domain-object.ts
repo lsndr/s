@@ -10,13 +10,16 @@ export abstract class DomainObject<S> {
     this.state = state;
   }
 
-  protected static assert(expression: boolean, key: string): void {
+  protected static assert(
+    expression: boolean,
+    key: string,
+  ): asserts expression {
     if (!expression) {
       throw new DomainError(this.name, key);
     }
   }
 
-  protected assert(expression: boolean, key: string): void {
+  protected assert(expression: boolean, key: string): asserts expression {
     if (!expression) {
       throw new DomainError(this.constructor.name, key);
     }

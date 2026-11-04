@@ -18,7 +18,6 @@ export interface OnBusBootstrap {
 }
 
 export interface OnBusShutdown {
-  /** Called when the bus shuts down. */
   onBusShutdown(): Promise<void> | void;
 }
 

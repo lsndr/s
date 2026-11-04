@@ -1,5 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
+import { Inject, Injectable, type ModuleMetadata } from '@nestjs/common';
+import { Test, type TestingModule } from '@nestjs/testing';
 import { setTimeout } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from '../../bus.module.js';
@@ -141,13 +141,32 @@ class TestHandler {
   public handle = vi.fn();
 }
 
+const modules: TestingModule[] = [];
+const closed = new WeakSet<TestingModule>();
+
+// closing twice would run the shutdown hooks twice
+async function close(module: TestingModule) {
+  if (!closed.has(module)) {
+    closed.add(module);
+    await module.close();
+  }
+}
+
+async function compile(metadata: ModuleMetadata) {
+  const module = await Test.createTestingModule(metadata).compile();
+
+  modules.push(module);
+
+  return module;
+}
+
 async function createModule(
   batchSize = 10,
   transport = InnerTransport.withConfig({
     url: 'inner://',
   }),
 ) {
-  const module = await Test.createTestingModule({
+  const module = await compile({
     imports: [
       BusModule.forRoot({
         transport: MemoryOutbox.withConfig({
@@ -158,30 +177,37 @@ async function createModule(
         providers: [TestHandler, { provide: Dependency, useValue: 'dep' }],
       }),
     ],
-  }).compile();
+  });
 
-  // The bus initializes it on bootstrap, which tests publish before
+  // the bus initializes it on bootstrap, which tests publish before
   await module.get<JsonSerializer>(Serializer).onBusInit();
 
   return module;
 }
 
 describe('Outbox', () => {
-  afterEach(() => {
+  afterEach(async () => {
+    for (const module of modules.splice(0)) {
+      await close(module);
+    }
+
     vi.clearAllMocks();
     InnerTransport.publish.mockReset();
     MemoryOutbox.pending = [];
   });
 
-  it('stores published events without publishing them', async () => {
+  it('stores published events', async () => {
+    // arrange
     const module = await createModule();
     const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+    // act
     await dispatcher.publish(new TestEvent({ value: 'a' }), {
       id: 'id-1',
       meta: { key: 'value' },
     });
 
+    // assert
     expect(MemoryOutbox.pending).toEqual([
       {
         id: 'id-1',
@@ -196,43 +222,75 @@ describe('Outbox', () => {
         }),
       },
     ]);
-    expect(InnerTransport.publish).not.toHaveBeenCalled();
-
-    await module.close();
   });
 
-  it('forwards the bus lifecycle hooks to the inner transport', async () => {
+  it('does not publish the stored events right away', async () => {
+    // arrange
+    const module = await createModule();
+    const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+    // act
+    await dispatcher.publish(new TestEvent({ value: 'a' }), { id: 'id-1' });
+
+    // assert
+    expect(InnerTransport.publish).not.toHaveBeenCalled();
+  });
+
+  it('bootstraps the inner transport with the bus', async () => {
+    // arrange
+    const module = await createModule();
+
+    // act
+    await module.init();
+
+    // assert
+    expect(InnerTransport.onBusBootstrap).toHaveBeenCalledOnce();
+    expect(InnerTransport.onBusShutdown).not.toHaveBeenCalled();
+  });
+
+  it('shuts the inner transport down with the bus', async () => {
+    // arrange
     const module = await createModule();
 
     await module.init();
 
-    expect(InnerTransport.onBusBootstrap).toHaveBeenCalledOnce();
-    expect(InnerTransport.onBusShutdown).not.toHaveBeenCalled();
+    // act
+    await close(module);
 
-    await module.close();
-
+    // assert
     expect(InnerTransport.onBusShutdown).toHaveBeenCalledOnce();
   });
 
   it('stores a batch of events with a single save', async () => {
+    // arrange
     const module = await createModule();
     const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+    // act
     await dispatcher.publish([
       { event: new TestEvent({ value: 'a' }), options: { id: 'id-1' } },
       { event: new TestEvent({ value: 'b' }), options: { id: 'id-2' } },
     ]);
 
+    // assert
     expect(MemoryOutbox.save).toHaveBeenCalledOnce();
     expect(MemoryOutbox.pending.map(({ id }) => id)).toEqual(['id-1', 'id-2']);
+  });
 
+  it('does not save an empty batch', async () => {
+    // arrange
+    const module = await createModule();
+    const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+    // act
     await dispatcher.publish([]);
-    expect(MemoryOutbox.save).toHaveBeenCalledOnce();
 
-    await module.close();
+    // assert
+    expect(MemoryOutbox.save).not.toHaveBeenCalled();
   });
 
   it('relays a batch of stored events with a single publish', async () => {
+    // arrange
     const module = await createModule(2);
     const dispatcher = module.get<Dispatcher>(Dispatcher);
 
@@ -241,20 +299,21 @@ describe('Outbox', () => {
       { event: new TestEvent({ value: 'b' }), options: { id: 'id-2' } },
     ]);
 
+    // act
     await module.init();
     await vi.waitFor(() => expect(MemoryOutbox.pending).toHaveLength(0));
 
+    // assert
     expect(InnerTransport.publish).toHaveBeenCalledOnce();
     expect(
       InnerTransport.publish.mock.calls[0]![0].map(
         ({ options }) => options?.id,
       ),
     ).toEqual(['id-1', 'id-2']);
-
-    await module.close();
   });
 
   it('relays stored events to the transport as they were stored', async () => {
+    // arrange
     const module = await createModule(1);
     const dispatcher = module.get<Dispatcher>(Dispatcher);
 
@@ -262,9 +321,11 @@ describe('Outbox', () => {
     await dispatcher.publish(new TestEvent({ value: 'b' }), { id: 'id-2' });
     const [first, second] = MemoryOutbox.pending;
 
+    // act
     await module.init();
     await vi.waitFor(() => expect(MemoryOutbox.pending).toHaveLength(0));
 
+    // assert
     expect(InnerTransport.publish.mock.calls).toEqual([
       [
         [
@@ -293,30 +354,33 @@ describe('Outbox', () => {
         ],
       ],
     ]);
-
-    await module.close();
   });
 
   it('keeps records pending and retries when the transport fails', async () => {
+    // arrange
     InnerTransport.publish.mockRejectedValueOnce(new Error('broker down'));
 
     const module = await createModule();
     const dispatcher = module.get<Dispatcher>(Dispatcher);
 
     await dispatcher.publish(new TestEvent({ value: 'a' }), { id: 'id-1' });
+
+    // act
     await module.init();
-
     await vi.waitFor(() => expect(MemoryOutbox.pending).toHaveLength(0));
-    expect(InnerTransport.publish).toHaveBeenCalledTimes(2);
 
-    await module.close();
+    // assert
+    expect(InnerTransport.publish).toHaveBeenCalledTimes(2);
   });
 
-  it('subscribes handlers and checks health through the transport', async () => {
+  it('subscribes handlers through the transport', async () => {
+    // arrange
     const module = await createModule();
 
+    // act
     await module.init();
 
+    // assert
     expect(InnerTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
       {
         event: TestEvent,
@@ -324,22 +388,32 @@ describe('Outbox', () => {
         callback: expect.any(Function),
       },
     ]);
+  });
 
+  it('checks health through the transport', async () => {
+    // arrange
+    const module = await createModule();
+
+    await module.init();
+
+    // act
     await module.get<Health>(Health).assertHealthy();
-    expect(InnerTransport.assertHealthy).toHaveBeenCalledOnce();
 
-    await module.close();
+    // assert
+    expect(InnerTransport.assertHealthy).toHaveBeenCalledOnce();
   });
 
   it('gives the outbox its config and its dependencies', async () => {
+    // arrange
     const module = await createModule(7);
+
+    // act
     const outbox = module.get<MemoryOutbox>(Transport);
 
+    // assert
     expect(outbox.getConfig()).toMatchObject({ batchSize: 7, interval: 10 });
     expect(outbox.dependency).toBe('dep');
     expect(outbox.getInnerTransport()).toBeInstanceOf(InnerTransport);
-
-    await module.close();
   });
 
   it.each<[string, () => BusProvider<Transport>]>([
@@ -354,7 +428,8 @@ describe('Outbox', () => {
     ],
     ['an existing provider', () => ({ useExisting: InnerTransport })],
   ])('relays to a transport given as %s', async (_name, provider) => {
-    const module = await Test.createTestingModule({
+    // arrange
+    const module = await compile({
       imports: [
         BusModule.forRoot({
           transport: MemoryOutbox.withConfig({
@@ -371,27 +446,33 @@ describe('Outbox', () => {
           ],
         }),
       ],
-    }).compile();
+    });
 
     await module.init();
+
+    // act
     await module
       .get<Dispatcher>(Dispatcher)
       .publish(new TestEvent({ value: 'a' }));
-    await vi.waitFor(() => expect(InnerTransport.publish).toHaveBeenCalled());
 
-    await module.close();
+    // assert
+    await vi.waitFor(() => expect(InnerTransport.publish).toHaveBeenCalled());
   });
 
   it('stops relaying when the module is closed', async () => {
+    // arrange
     const module = await createModule();
 
     await module.init();
     await vi.waitFor(() => expect(MemoryOutbox.relay).toHaveBeenCalled());
-    await module.close();
+    await close(module);
 
     const calls = MemoryOutbox.relay.mock.calls.length;
+
+    // act
     await setTimeout(50);
 
+    // assert
     expect(MemoryOutbox.relay).toHaveBeenCalledTimes(calls);
   });
 });

@@ -16,7 +16,6 @@ interface WithProviders {
   providers?: Provider[];
 }
 
-/** A Nest provider without its token. */
 export type BusProvider<T> =
   | Type<T>
   | (Omit<ClassProvider<T>, 'provide'> & WithProviders)

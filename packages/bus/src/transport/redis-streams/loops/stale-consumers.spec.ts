@@ -30,7 +30,6 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
   let clients: Clients<'command'>;
   let redis: RedisClientType;
 
-  /** Creates streams that are registered in `Streams`, and a loop cleaning their groups. */
   async function setup({
     streams: count = 1,
     consumerTtl = 100,
@@ -60,16 +59,13 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
       consumer,
       names,
       next: (signal = new AbortController().signal) => loop.next(signal),
-      /** Adds a consumer that has no pending entries. */
       idle: async (name: string, consumerName: string) => {
         await redis.xGroupCreateConsumer(name, group, consumerName);
       },
-      /** Adds a consumer that has a pending entry. */
       busy: async (name: string, consumerName: string) => {
         await redis.xAdd(name, '*', { payload: '0' });
         await redis.xReadGroup(group, consumerName, { key: name, id: '>' });
       },
-      /** Waits until the consumers have been idle for longer than the TTL. */
       stale: async () => {
         await sleep(consumerTtl + 50);
       },
@@ -112,52 +108,69 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
 
   describe('deleting', () => {
     it('deletes the consumers without pending entries that are idle for long enough', async () => {
+      // arrange
       const { next, idle, stale, consumers, names } = await setup();
       const [name] = names as [string];
 
       await idle(name, 'gone');
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(await consumers(name)).toEqual([]);
     });
 
     it('does not delete the consumers that are not idle for long enough', async () => {
+      // arrange
       const { next, idle, consumers, names } = await setup({
         consumerTtl: 10_000,
       });
       const [name] = names as [string];
 
       await idle(name, 'recent');
+
+      // act
       await next();
 
+      // assert
       expect(await consumers(name)).toEqual(['recent']);
     });
 
     it('does not delete the consumers that have pending entries', async () => {
+      // arrange
       const { next, busy, stale, consumers, names } = await setup();
       const [name] = names as [string];
 
       await busy(name, 'working');
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(await consumers(name)).toEqual(['working']);
     });
 
     it('does not delete its own consumer', async () => {
+      // arrange
       const { next, idle, stale, consumers, consumer, names } = await setup();
       const [name] = names as [string];
 
       await idle(name, consumer);
       await idle(name, 'gone');
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(await consumers(name)).toEqual([consumer]);
     });
 
     it('deletes the stale consumers of several streams', async () => {
+      // arrange
       const { next, idle, stale, consumers, names } = await setup({
         streams: 2,
       });
@@ -166,21 +179,28 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
       await idle(a, 'gone');
       await idle(b, 'gone');
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(await consumers(a)).toEqual([]);
       expect(await consumers(b)).toEqual([]);
     });
 
     it('logs the deleted consumers', async () => {
+      // arrange
       const { next, idle, stale, group, names } = await setup();
       const [name] = names as [string];
       const log = vi.spyOn(Logger.prototype, 'log').mockReturnValue();
 
       await idle(name, 'gone');
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(log).toHaveBeenCalledExactlyOnceWith(
         `Removed stale consumer gone of group ${group}`,
       );
@@ -189,6 +209,7 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
 
   describe('abort', () => {
     it('does not call Redis when it is aborted', async () => {
+      // arrange
       const { next, idle, stale, consumers, names } = await setup();
       const [name] = names as [string];
       const client = await clients.get('command');
@@ -199,14 +220,18 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
       await idle(name, 'gone');
       await stale();
       controller.abort();
+
+      // act
       await next(controller.signal);
 
+      // assert
       expect(evalSha).not.toHaveBeenCalled();
       expect(evalScript).not.toHaveBeenCalled();
       expect(await consumers(name)).toEqual(['gone']);
     });
 
     it('does not move on to the next stream when aborted while cleaning one', async () => {
+      // arrange
       const { next, idle, stale, consumers, names } = await setup({
         streams: 2,
       });
@@ -225,13 +250,17 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
         }
       });
       await stale();
+
+      // act
       await next(controller.signal);
 
+      // assert
       expect(await consumers(first)).toEqual([]);
       expect(await consumers(second)).toEqual(['gone']);
     });
 
     it('does not log the errors that happen after it is aborted', async () => {
+      // arrange
       const { next, names } = await setup();
       const [name] = names as [string];
       const client = await clients.get('command');
@@ -244,13 +273,17 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
         return Promise.reject(new Error(`Connection lost: ${name}`));
       });
 
-      await expect(next(controller.signal)).resolves.toBeUndefined();
+      // act
+      await next(controller.signal);
+
+      // assert
       expect(error).not.toHaveBeenCalled();
     });
   });
 
   describe('errors', () => {
     it('logs a failing stream and still cleans the others', async () => {
+      // arrange
       const { next, idle, stale, consumers, group, names } = await setup({
         streams: 2,
       });
@@ -260,8 +293,11 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
       await redis.xGroupDestroy(failing, group);
       await idle(working, 'gone');
       await stale();
+
+      // act
       await next();
 
+      // assert
       expect(error).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(failing),
         expect.any(String),
@@ -277,9 +313,14 @@ describe('StaleConsumersLoop', { timeout: 60_000 }, () => {
     ])(
       'is $expected ms for a consumer TTL of $consumerTtl ms',
       async ({ consumerTtl, expected }) => {
+        // arrange
         const { loop } = await setup({ consumerTtl });
 
-        expect(loop.interval()).toBe(expected);
+        // act
+        const interval = loop.interval();
+
+        // assert
+        expect(interval).toBe(expected);
       },
     );
   });
