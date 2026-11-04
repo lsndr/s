@@ -3,15 +3,17 @@ import {
   Injectable,
   Logger,
   Module,
+  type ModuleMetadata,
   Scope,
   type Type,
 } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
-import { Test } from '@nestjs/testing';
+import { Test, type TestingModule } from '@nestjs/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusModule } from './bus.module.js';
 import { EventHandler } from './decorators/event-handler.decorator.js';
 import { Transport } from './transport/transport.js';
+import { Health } from './transport/health.js';
 import { type BusProvider } from './provider.js';
 import {
   Dispatcher,
@@ -119,24 +121,85 @@ class TestHandler {
   public handle = vi.fn<(event: EventPayload<TestEvent>) => Promise<void>>();
 }
 
+const modules: TestingModule[] = [];
+const closed = new WeakSet<TestingModule>();
+
+// closing twice would run the shutdown hooks twice
+async function close(module: TestingModule) {
+  if (!closed.has(module)) {
+    closed.add(module);
+    await module.close();
+  }
+}
+
+async function compile(metadata: ModuleMetadata) {
+  const module = await Test.createTestingModule(metadata).compile();
+
+  modules.push(module);
+
+  return module;
+}
+
 describe('BusModule', () => {
-  afterEach(() => {
+  afterEach(async () => {
+    for (const module of modules.splice(0)) {
+      // nest rethrows the failed initialization of a module on close
+      await close(module).catch(() => undefined);
+    }
+
     vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('provides Dispatcher', async () => {
-    const module = await Test.createTestingModule({
+    // arrange
+    const module = await compile({
       imports: [
         BusModule.forRoot({
           transport: MockTransport,
         }),
       ],
-    }).compile();
+    });
 
+    // act
     const dispatcher = module.get<Dispatcher>(Dispatcher);
-    expect(dispatcher).toBeInstanceOf(MockTransport);
 
-    await module.close();
+    // assert
+    expect(dispatcher).toBeInstanceOf(MockTransport);
+  });
+
+  it('provides Health', async () => {
+    // arrange
+    const module = await compile({
+      imports: [
+        BusModule.forRoot({
+          transport: MockTransport,
+        }),
+      ],
+    });
+
+    // act
+    const health = module.get<Health>(Health);
+
+    // assert
+    expect(health).toBe(module.get(Transport));
+  });
+
+  it('checks health through the transport', async () => {
+    // arrange
+    const module = await compile({
+      imports: [
+        BusModule.forRoot({
+          transport: MockTransport,
+        }),
+      ],
+    });
+
+    // act
+    await module.get<Health>(Health).assertHealthy();
+
+    // assert
+    expect(MockTransport.assertHealthy).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -153,7 +216,8 @@ describe('BusModule', () => {
   ])(
     'registers handlers provided in $name module',
     async ({ busProviders, parentProviders: mainProviders }) => {
-      const module = await Test.createTestingModule({
+      // arrange
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: MockTransport,
@@ -161,10 +225,12 @@ describe('BusModule', () => {
           }),
         ],
         providers: [...mainProviders],
-      }).compile();
+      });
 
+      // act
       await module.init();
 
+      // assert
       expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
         {
           event: TestEvent,
@@ -172,8 +238,6 @@ describe('BusModule', () => {
           callback: expect.any(Function),
         },
       ]);
-
-      await module.close();
     },
   );
 
@@ -189,48 +253,90 @@ describe('BusModule', () => {
       }
     }
 
-    it.each<[string, () => BusProvider<Transport>]>([
+    const providers: [string, () => BusProvider<Transport>][] = [
       ['a class', () => MockTransport],
       ['useClass', () => ({ useClass: MockTransport })],
       ['useValue', () => ({ useValue: new MockTransport() })],
       ['useFactory', () => ({ useFactory: () => new MockTransport() })],
-    ])('provides a transport given as %s', async (_name, transport) => {
-      const module = await Test.createTestingModule({
-        imports: [BusModule.forRoot({ transport: transport() })],
-      }).compile();
+    ];
 
-      await module.init();
+    it.each(providers)(
+      'provides a transport given as %s',
+      async (_name, transport) => {
+        // arrange
+        const module = await compile({
+          imports: [BusModule.forRoot({ transport: transport() })],
+        });
 
-      const event = new TestEvent({ value: 'test' });
-      await module.get<Dispatcher>(Dispatcher).publish(event);
+        // act
+        await module.init();
 
-      expect(MockTransport.publish).toHaveBeenCalledOnce();
-      expect(module.get(Transport)).toBeInstanceOf(MockTransport);
-      expect(module.get(Dispatcher)).toBe(module.get(Transport));
-      expect(MockTransport.onBusBootstrap).toHaveBeenCalledOnce();
+        // assert
+        expect(module.get(Transport)).toBeInstanceOf(MockTransport);
+        expect(module.get(Dispatcher)).toBe(module.get(Transport));
+        expect(MockTransport.onBusBootstrap).toHaveBeenCalledOnce();
+      },
+    );
 
-      await module.close();
+    it.each(providers)(
+      'publishes through a transport given as %s',
+      async (_name, transport) => {
+        // arrange
+        const module = await compile({
+          imports: [BusModule.forRoot({ transport: transport() })],
+        });
 
-      expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
-    });
+        await module.init();
+
+        // act
+        await module
+          .get<Dispatcher>(Dispatcher)
+          .publish(new TestEvent({ value: 'test' }));
+
+        // assert
+        expect(MockTransport.publish).toHaveBeenCalledOnce();
+      },
+    );
+
+    it.each(providers)(
+      'shuts down a transport given as %s',
+      async (_name, transport) => {
+        // arrange
+        const module = await compile({
+          imports: [BusModule.forRoot({ transport: transport() })],
+        });
+
+        await module.init();
+
+        // act
+        await close(module);
+
+        // assert
+        expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+      },
+    );
 
     it('injects the dependencies of a class', async () => {
-      const module = await Test.createTestingModule({
+      // arrange
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: ConfiguredTransport,
             providers: [{ provide: 'CONFIG', useValue: 'value' }],
           }),
         ],
-      }).compile();
+      });
 
-      expect(module.get<ConfiguredTransport>(Transport).config).toBe('value');
+      // act
+      const transport = module.get<ConfiguredTransport>(Transport);
 
-      await module.close();
+      // assert
+      expect(transport.config).toBe('value');
     });
 
     it('registers the additional providers of the transport', async () => {
-      const module = await Test.createTestingModule({
+      // arrange
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: {
@@ -240,41 +346,69 @@ describe('BusModule', () => {
             },
           }),
         ],
-      }).compile();
+      });
 
-      expect(module.get<ConfiguredTransport>(Transport).config).toBe('extra');
+      // act
+      const transport = module.get<ConfiguredTransport>(Transport);
 
-      await module.close();
+      // assert
+      expect(transport.config).toBe('extra');
     });
 
-    it('uses a transport provided in another module', async () => {
+    describe('provided in another module', () => {
       @Module({
         providers: [MockTransport],
         exports: [MockTransport],
       })
       class TransportModule {}
 
-      const module = await Test.createTestingModule({
-        imports: [
-          TransportModule,
-          BusModule.forRoot({
-            imports: [TransportModule],
-            transport: { useExisting: MockTransport },
-          }),
-        ],
-      }).compile();
+      async function setup() {
+        const module = await compile({
+          imports: [
+            TransportModule,
+            BusModule.forRoot({
+              imports: [TransportModule],
+              transport: { useExisting: MockTransport },
+            }),
+          ],
+        });
 
-      await module.init();
-      await module
-        .get<Dispatcher>(Dispatcher)
-        .publish(new TestEvent({ value: 'a' }));
+        await module.init();
 
-      expect(MockTransport.publish).toHaveBeenCalledOnce();
-      expect(MockTransport.onBusBootstrap).toHaveBeenCalledOnce();
+        return module;
+      }
 
-      await module.close();
+      it('publishes through it', async () => {
+        // arrange
+        const module = await setup();
 
-      expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+        // act
+        await module
+          .get<Dispatcher>(Dispatcher)
+          .publish(new TestEvent({ value: 'a' }));
+
+        // assert
+        expect(MockTransport.publish).toHaveBeenCalledOnce();
+      });
+
+      it('bootstraps it', async () => {
+        // act
+        await setup();
+
+        // assert
+        expect(MockTransport.onBusBootstrap).toHaveBeenCalledOnce();
+      });
+
+      it('shuts it down', async () => {
+        // arrange
+        const module = await setup();
+
+        // act
+        await close(module);
+
+        // assert
+        expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+      });
     });
   });
 
@@ -305,15 +439,16 @@ describe('BusModule', () => {
     }
 
     it('uses JsonSerializer by default', async () => {
-      const module = await Test.createTestingModule({
+      // arrange
+      const module = await compile({
         imports: [BusModule.forRoot({ transport: MockTransport })],
-      }).compile();
+      });
 
+      // act
       await module.init();
 
+      // assert
       expect(module.get(Serializer)).toBeInstanceOf(JsonSerializer);
-
-      await module.close();
     });
 
     it.each<
@@ -323,26 +458,28 @@ describe('BusModule', () => {
       ['useValue', () => ({ useValue: new CustomSerializer() })],
       ['useFactory', () => ({ useFactory: () => new CustomSerializer() })],
     ])('provides a serializer given as %s', async (_name, serializer) => {
+      // arrange
       CustomSerializer.initialized = false;
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: MockTransport,
             serializer: serializer(),
           }),
         ],
-      }).compile();
+      });
 
+      // act
       await module.init();
 
+      // assert
       expect(module.get(Serializer)).toBeInstanceOf(CustomSerializer);
       expect(CustomSerializer.initialized).toBe(true);
-
-      await module.close();
     });
 
     it('initializes the serializer before the transport', async () => {
+      // arrange
       const calls: string[] = [];
 
       class OrderedSerializer extends CustomSerializer {
@@ -358,23 +495,24 @@ describe('BusModule', () => {
         }
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: OrderedTransport,
             serializer: OrderedSerializer,
           }),
         ],
-      }).compile();
+      });
 
+      // act
       await module.init();
 
+      // assert
       expect(calls).toEqual(['serializer', 'transport']);
-
-      await module.close();
     });
 
     it('injects the serializer into a transport', async () => {
+      // arrange
       @Injectable()
       class SerializingTransport extends MockTransport {
         public constructor(
@@ -384,59 +522,78 @@ describe('BusModule', () => {
         }
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: SerializingTransport,
             serializer: CustomSerializer,
           }),
         ],
-      }).compile();
+      });
 
-      expect(module.get<SerializingTransport>(Transport).serializer).toBe(
-        module.get(Serializer),
-      );
+      // act
+      const transport = module.get<SerializingTransport>(Transport);
 
-      await module.close();
+      // assert
+      expect(transport.serializer).toBe(module.get(Serializer));
     });
   });
 
   describe('lifecycle', () => {
     it('bootstraps the transport once all handlers are subscribed', async () => {
-      const module = await Test.createTestingModule({
+      // arrange
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: MockTransport,
             providers: [TestHandler],
           }),
         ],
-      }).compile();
+      });
 
+      // act
       await module.init();
 
+      // assert
       expect(MockTransport.onBusBootstrap).toHaveBeenCalledOnce();
       expect(MockTransport.subscribe).calledBefore(
         MockTransport.onBusBootstrap,
       );
-
-      await module.close();
     });
 
-    it('shuts the transport down when the module closes', async () => {
-      const module = await Test.createTestingModule({
+    it('does not shut the transport down before the module closes', async () => {
+      // arrange
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: MockTransport,
           }),
         ],
-      }).compile();
+      });
+
+      // act
+      await module.init();
+
+      // assert
+      expect(MockTransport.onBusShutdown).not.toHaveBeenCalled();
+    });
+
+    it('shuts the transport down when the module closes', async () => {
+      // arrange
+      const module = await compile({
+        imports: [
+          BusModule.forRoot({
+            transport: MockTransport,
+          }),
+        ],
+      });
 
       await module.init();
 
-      expect(MockTransport.onBusShutdown).not.toHaveBeenCalled();
+      // act
+      await close(module);
 
-      await module.close();
-
+      // assert
       expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
     });
 
@@ -484,23 +641,26 @@ describe('BusModule', () => {
       });
 
       it('calls them on every provider of the bus module, around subscribing the handlers', async () => {
+        // arrange
         MockTransport.subscribe.mockImplementationOnce(() => {
           calls.push('subscribe');
 
           return Promise.resolve();
         });
 
-        const module = await Test.createTestingModule({
+        const module = await compile({
           imports: [
             BusModule.forRoot({
               transport: MockTransport,
               providers: [First, Second, TestHandler],
             }),
           ],
-        }).compile();
+        });
 
+        // act
         await module.init();
 
+        // assert
         expect(calls).toEqual([
           'First.init',
           'Second.init',
@@ -508,16 +668,32 @@ describe('BusModule', () => {
           'First.bootstrap',
           'Second.bootstrap',
         ]);
+      });
 
+      it('shuts them down in reverse, so that what is registered first is shut down last', async () => {
+        // arrange
+        const module = await compile({
+          imports: [
+            BusModule.forRoot({
+              transport: MockTransport,
+              providers: [First, Second, TestHandler],
+            }),
+          ],
+        });
+
+        await module.init();
         calls.length = 0;
-        await module.close();
 
-        // in reverse, so that what is registered first is shut down last
+        // act
+        await close(module);
+
+        // assert
         expect(calls).toEqual(['Second.shutdown', 'First.shutdown']);
       });
 
       it('leaves out the providers of other modules and the ones that are scoped', async () => {
-        const module = await Test.createTestingModule({
+        // arrange
+        const module = await compile({
           imports: [
             BusModule.forRoot({
               transport: MockTransport,
@@ -525,75 +701,120 @@ describe('BusModule', () => {
             }),
           ],
           providers: [Outside],
-        }).compile();
+        });
 
         await module.init();
-        await module.close();
 
+        // act
+        await close(module);
+
+        // assert
         expect(new Set(calls)).toEqual(
           new Set(['First.init', 'First.bootstrap', 'First.shutdown']),
         );
       });
 
-      it('shuts the others down when a provider fails to', async () => {
-        Recorder.failOnShutdown = true;
+      describe('when a provider fails to shut down', () => {
+        async function setup() {
+          Recorder.failOnShutdown = true;
 
-        const module = await Test.createTestingModule({
-          imports: [
-            BusModule.forRoot({
-              transport: MockTransport,
-              providers: [First, Second],
-            }),
-          ],
-        }).compile();
+          const module = await compile({
+            imports: [
+              BusModule.forRoot({
+                transport: MockTransport,
+                providers: [First, Second],
+              }),
+            ],
+          });
 
-        await module.init();
-        calls.length = 0;
+          await module.init();
+          calls.length = 0;
 
-        // nest logs what a shutdown hook throws
-        const logged = vi.spyOn(Logger, 'error').mockReturnValue();
+          // nest logs what a shutdown hook throws
+          const logged = vi.spyOn(Logger, 'error').mockReturnValue();
 
-        await module.close();
+          return { module, logged };
+        }
 
-        expect(calls).toEqual(['Second.shutdown', 'First.shutdown']);
-        expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
-        expect(logged).toHaveBeenCalledWith(
-          expect.objectContaining({ message: 'boom' }),
-          expect.any(String),
-        );
+        it('shuts the others down', async () => {
+          // arrange
+          const { module } = await setup();
 
-        logged.mockRestore();
+          // act
+          await close(module);
+
+          // assert
+          expect(calls).toEqual(['Second.shutdown', 'First.shutdown']);
+          expect(MockTransport.onBusShutdown).toHaveBeenCalledOnce();
+        });
+
+        it('logs the failure', async () => {
+          // arrange
+          const { module, logged } = await setup();
+
+          // act
+          await close(module);
+
+          // assert
+          expect(logged).toHaveBeenCalledWith(
+            expect.objectContaining({ message: 'boom' }),
+            expect.any(String),
+          );
+        });
       });
     });
 
-    it('works with a transport without the hooks', async () => {
-      class PlainTransport extends MockTransport {}
+    describe('with a transport without the hooks', () => {
+      async function setup() {
+        class PlainTransport extends MockTransport {}
 
-      Object.defineProperty(PlainTransport.prototype, 'onBusBootstrap', {
-        value: undefined,
+        Object.defineProperty(PlainTransport.prototype, 'onBusBootstrap', {
+          value: undefined,
+        });
+        Object.defineProperty(PlainTransport.prototype, 'onBusShutdown', {
+          value: undefined,
+        });
+
+        const module = await compile({
+          imports: [
+            BusModule.forRoot({
+              transport: PlainTransport,
+            }),
+          ],
+        });
+
+        return module;
+      }
+
+      it('works when the module is initialized', async () => {
+        // arrange
+        const module = await setup();
+
+        // act
+        await module.init();
+
+        // assert
+        expect(MockTransport.onBusBootstrap).not.toHaveBeenCalled();
       });
-      Object.defineProperty(PlainTransport.prototype, 'onBusShutdown', {
-        value: undefined,
+
+      it('works when the module is closed', async () => {
+        // arrange
+        const module = await setup();
+
+        await module.init();
+
+        // act
+        await close(module);
+
+        // assert
+        expect(MockTransport.onBusShutdown).not.toHaveBeenCalled();
       });
-
-      const module = await Test.createTestingModule({
-        imports: [
-          BusModule.forRoot({
-            transport: PlainTransport,
-          }),
-        ],
-      }).compile();
-
-      await module.init();
-      await module.close();
-
-      expect(MockTransport.onBusBootstrap).not.toHaveBeenCalled();
-      expect(MockTransport.onBusShutdown).not.toHaveBeenCalled();
     });
   });
 
   it('throws if a handler is provided in both BusModule and a parent module', async () => {
-    const module = await Test.createTestingModule({
+    // arrange
+    const module = await compile({
       imports: [
         BusModule.forRoot({
           transport: MockTransport,
@@ -601,14 +822,15 @@ describe('BusModule', () => {
         }),
       ],
       providers: [TestHandler],
-    }).compile();
+    });
 
-    await expect(module.init()).rejects.toThrow(
+    // act
+    const initializing = module.init();
+
+    // assert
+    await expect(initializing).rejects.toThrow(
       `Event handler ${TestHandler.name} is provided more than once`,
     );
-
-    // nest rethrows the failed initialization on close
-    await module.close().catch(() => undefined);
   });
 
   describe('multiple events', () => {
@@ -625,22 +847,25 @@ describe('BusModule', () => {
     }
 
     it('subscribes to each event', async () => {
+      // arrange
       @EventHandler([TestEvent, OtherEvent])
       class MultiEventHandler {
         public handle = vi.fn();
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: MockTransport,
           }),
         ],
         providers: [MultiEventHandler],
-      }).compile();
+      });
 
+      // act
       await module.init();
 
+      // assert
       expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
         {
           event: TestEvent,
@@ -653,24 +878,23 @@ describe('BusModule', () => {
           callback: expect.any(Function),
         },
       ]);
-
-      await module.close();
     });
 
     it('dispatches every subscribed event to the handler', async () => {
+      // arrange
       @EventHandler([TestEvent, OtherEvent])
       class MultiEventHandler {
         public handle = vi.fn<(event: EventPayload<object>) => void>();
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: MockTransport,
           }),
         ],
         providers: [MultiEventHandler],
-      }).compile();
+      });
 
       await module.init();
 
@@ -678,9 +902,11 @@ describe('BusModule', () => {
       const testEvent = new TestEvent({ value: 'test' });
       const otherEvent = new OtherEvent({ value2: 'other' });
 
+      // act
       await dispatcher.publish(testEvent);
       await dispatcher.publish(otherEvent);
 
+      // assert
       const handler = module.get(MultiEventHandler);
       expect(handler.handle).toHaveBeenCalledWith(
         expect.objectContaining({ event: testEvent }),
@@ -688,11 +914,10 @@ describe('BusModule', () => {
       expect(handler.handle).toHaveBeenCalledWith(
         expect.objectContaining({ event: otherEvent }),
       );
-
-      await module.close();
     });
 
     it('applies handler-level middleware to every subscribed event', async () => {
+      // arrange
       @Injectable()
       class MultiEventMiddleware implements EventHandlerMiddleware {
         public static use = vi.fn(
@@ -714,36 +939,40 @@ describe('BusModule', () => {
         public handle = vi.fn();
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: MockTransport,
           }),
         ],
         providers: [MultiEventHandler, MultiEventMiddleware],
-      }).compile();
+      });
 
       await module.init();
 
       const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+      // act
       await dispatcher.publish(new TestEvent({ value: 'test' }));
       await dispatcher.publish(new OtherEvent({ value2: 'other' }));
 
+      // assert
       expect(MultiEventMiddleware.use).toHaveBeenCalledTimes(2);
-
-      await module.close();
     });
 
     it('throws when given an empty array of events', () => {
-      expect(() => {
+      // act
+      const declare = () => {
         @EventHandler([])
         class EmptyHandler {
           public handle = vi.fn();
         }
 
         return EmptyHandler;
-      }).toThrow();
+      };
+
+      // assert
+      expect(declare).toThrow();
     });
   });
 
@@ -753,6 +982,7 @@ describe('BusModule', () => {
     });
 
     it('applies bus-level middleware to handler', async () => {
+      // arrange
       @Injectable()
       class TestMiddleware implements EventHandlerMiddleware {
         public static use = vi.fn(
@@ -767,7 +997,7 @@ describe('BusModule', () => {
         public use = TestMiddleware.use;
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             middlewares: [TestMiddleware],
@@ -775,15 +1005,17 @@ describe('BusModule', () => {
           }),
         ],
         providers: [TestHandler, TestMiddleware],
-      }).compile();
+      });
 
       await module.init();
 
       const event = new TestEvent({ value: 'test' });
       const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+      // act
       await dispatcher.publish(event);
 
+      // assert
       expect(TestMiddleware.use).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ event }),
         expect.any(Function),
@@ -793,11 +1025,10 @@ describe('BusModule', () => {
       expect(handler.handle).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ event }),
       );
-
-      await module.close();
     });
 
     it('executes multiple bus-level middlewares in declared order', async () => {
+      // arrange
       const executionOrder: string[] = [];
 
       @Injectable()
@@ -824,7 +1055,7 @@ describe('BusModule', () => {
         }
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             middlewares: [MiddlewareA, MiddlewareB],
@@ -832,25 +1063,26 @@ describe('BusModule', () => {
           }),
         ],
         providers: [TestHandler, MiddlewareA, MiddlewareB],
-      }).compile();
+      });
 
       await module.init();
 
       const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+      // act
       await dispatcher.publish(new TestEvent({ value: 'test' }));
 
+      // assert
       expect(executionOrder).toEqual([
         'A:before',
         'B:before',
         'B:after',
         'A:after',
       ]);
-
-      await module.close();
     });
 
     it('applies handler-level middleware only to the decorated handler', async () => {
+      // arrange
       @Injectable()
       class HandlerMiddleware implements EventHandlerMiddleware {
         public static use = vi.fn(
@@ -878,29 +1110,31 @@ describe('BusModule', () => {
         public handle = vi.fn();
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             transport: MockTransport,
           }),
         ],
         providers: [TestHandler, HandlerWithMiddleware, HandlerMiddleware],
-      }).compile();
+      });
 
       await module.init();
 
       const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+      // act
       await dispatcher.publish(new TestEvent({ value: 'test' }));
+
+      // assert
       expect(HandlerMiddleware.use).not.toHaveBeenCalled();
 
       await dispatcher.publish(new AnotherEvent({ value: 'test' }));
       expect(HandlerMiddleware.use).toHaveBeenCalledOnce();
-
-      await module.close();
     });
 
     it('executes bus-level middlewares before handler-level middlewares', async () => {
+      // arrange
       const executionOrder: string[] = [];
 
       @Injectable()
@@ -932,7 +1166,7 @@ describe('BusModule', () => {
         });
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             middlewares: [BusLevelMiddleware],
@@ -944,20 +1178,21 @@ describe('BusModule', () => {
           BusLevelMiddleware,
           HandlerLevelMiddleware,
         ],
-      }).compile();
+      });
 
       await module.init();
 
       const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+      // act
       await dispatcher.publish(new TestEvent({ value: 'test' }));
 
+      // assert
       expect(executionOrder).toEqual(['bus', 'handler', 'handle']);
-
-      await module.close();
     });
 
     it('allows middleware to modify event payload', async () => {
+      // arrange
       @Injectable()
       class PayloadModifyingMiddleware implements EventHandlerMiddleware {
         public async use(
@@ -968,7 +1203,7 @@ describe('BusModule', () => {
         }
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             middlewares: [PayloadModifyingMiddleware],
@@ -976,23 +1211,24 @@ describe('BusModule', () => {
           }),
         ],
         providers: [TestHandler, PayloadModifyingMiddleware],
-      }).compile();
+      });
 
       await module.init();
 
       const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+      // act
       await dispatcher.publish(new TestEvent({ value: 'test' }));
 
+      // assert
       const handler = module.get(TestHandler);
       expect(handler.handle).toHaveBeenCalledWith(
         expect.objectContaining({ meta: { injected: 'value' } }),
       );
-
-      await module.close();
     });
 
     it('allows middleware to short-circuit by not calling next', async () => {
+      // arrange
       @Injectable()
       class ShortCircuitMiddleware implements EventHandlerMiddleware {
         public async use() {
@@ -1000,7 +1236,7 @@ describe('BusModule', () => {
         }
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             middlewares: [ShortCircuitMiddleware],
@@ -1008,21 +1244,22 @@ describe('BusModule', () => {
           }),
         ],
         providers: [TestHandler, ShortCircuitMiddleware],
-      }).compile();
+      });
 
       await module.init();
 
       const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+      // act
       await dispatcher.publish(new TestEvent({ value: 'test' }));
 
+      // assert
       const handler = module.get(TestHandler);
       expect(handler.handle).not.toHaveBeenCalled();
-
-      await module.close();
     });
 
     it('resolves middleware dependencies from the module providing it', async () => {
+      // arrange
       @Injectable()
       class Dependency {
         public readonly seen = vi.fn();
@@ -1043,7 +1280,7 @@ describe('BusModule', () => {
         }
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             middlewares: [DependentMiddleware],
@@ -1051,17 +1288,17 @@ describe('BusModule', () => {
           }),
         ],
         providers: [TestHandler, Dependency, DependentMiddleware],
-      }).compile();
+      });
 
       await module.init();
 
+      // act
       await module
         .get<Dispatcher>(Dispatcher)
         .publish(new TestEvent({ value: 'test' }));
 
+      // assert
       expect(module.get(Dependency).seen).toHaveBeenCalledOnce();
-
-      await module.close();
     });
 
     describe('scopes and provider kinds', () => {
@@ -1069,7 +1306,7 @@ describe('BusModule', () => {
         middleware: Type<EventHandlerMiddleware>,
         providers: any[],
       ) =>
-        Test.createTestingModule({
+        compile({
           imports: [
             BusModule.forRoot({
               middlewares: [middleware],
@@ -1077,9 +1314,10 @@ describe('BusModule', () => {
             }),
           ],
           providers,
-        }).compile();
+        });
 
       it('resolves a request-scoped middleware for every event with the payload as request', async () => {
+        // arrange
         const instances: object[] = [];
         const requests: unknown[] = [];
 
@@ -1109,9 +1347,11 @@ describe('BusModule', () => {
         const first = new TestEvent({ value: 'first' });
         const second = new TestEvent({ value: 'second' });
 
+        // act
         await dispatcher.publish(first);
         await dispatcher.publish(second);
 
+        // assert
         expect(instances).toHaveLength(2);
         expect(instances[0]).not.toBe(instances[1]);
         expect(requests).toEqual([
@@ -1119,11 +1359,10 @@ describe('BusModule', () => {
           expect.objectContaining({ event: second }),
         ]);
         expect(module.get(TestHandler).handle).toHaveBeenCalledTimes(2);
-
-        await module.close();
       });
 
       it('resolves a transient middleware for every event', async () => {
+        // arrange
         const instances: object[] = [];
 
         @Injectable({ scope: Scope.TRANSIENT })
@@ -1146,16 +1385,17 @@ describe('BusModule', () => {
 
         const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+        // act
         await dispatcher.publish(new TestEvent({ value: 'first' }));
         await dispatcher.publish(new TestEvent({ value: 'second' }));
 
+        // assert
         expect(instances).toHaveLength(2);
         expect(instances[0]).not.toBe(instances[1]);
-
-        await module.close();
       });
 
       it('shares request-scoped dependencies between middleware and handler within an event', async () => {
+        // arrange
         const seen: [object, object][] = [];
 
         @Injectable({ scope: Scope.REQUEST })
@@ -1198,15 +1438,15 @@ describe('BusModule', () => {
 
         const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+        // act
         await dispatcher.publish(new TestEvent({ value: 'first' }));
         await dispatcher.publish(new TestEvent({ value: 'second' }));
 
+        // assert
         expect(seen).toHaveLength(2);
         expect(seen[0]![0]).toBe(seen[0]![1]);
         expect(seen[1]![0]).toBe(seen[1]![1]);
         expect(seen[0]![0]).not.toBe(seen[1]![0]);
-
-        await module.close();
       });
 
       it.each([
@@ -1225,6 +1465,7 @@ describe('BusModule', () => {
           }),
         },
       ])('applies a middleware provided with $name', async ({ provide }) => {
+        // arrange
         @Injectable()
         class CustomProvidedMiddleware implements EventHandlerMiddleware {
           public use = vi.fn(
@@ -1243,16 +1484,17 @@ describe('BusModule', () => {
 
         await module.init();
 
+        // act
         await module
           .get<Dispatcher>(Dispatcher)
           .publish(new TestEvent({ value: 'test' }));
 
+        // assert
         expect(middleware.use).toHaveBeenCalledOnce();
-
-        await module.close();
       });
 
       it('applies a middleware once when it is also provided with useExisting', async () => {
+        // arrange
         @Injectable()
         class AliasedMiddleware implements EventHandlerMiddleware {
           public static use = vi.fn();
@@ -1274,17 +1516,18 @@ describe('BusModule', () => {
 
         await module.init();
 
+        // act
         await module
           .get<Dispatcher>(Dispatcher)
           .publish(new TestEvent({ value: 'test' }));
 
+        // assert
         expect(AliasedMiddleware.use).toHaveBeenCalledOnce();
-
-        await module.close();
       });
     });
 
     it('throws if a middleware is not provided in any module', async () => {
+      // arrange
       @Injectable()
       class NotProvidedMiddleware implements EventHandlerMiddleware {
         public async use(
@@ -1295,7 +1538,7 @@ describe('BusModule', () => {
         }
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             middlewares: [NotProvidedMiddleware],
@@ -1303,16 +1546,19 @@ describe('BusModule', () => {
           }),
         ],
         providers: [TestHandler],
-      }).compile();
+      });
 
-      await expect(module.init()).rejects.toThrow(
+      // act
+      const initializing = module.init();
+
+      // assert
+      await expect(initializing).rejects.toThrow(
         'Middleware NotProvidedMiddleware is not provided in any module',
       );
-
-      await module.close().catch(() => undefined);
     });
 
     it('throws if a handler middleware is not provided in any module', async () => {
+      // arrange
       @Injectable()
       class NotProvidedMiddleware implements EventHandlerMiddleware {
         public async use(
@@ -1328,19 +1574,22 @@ describe('BusModule', () => {
         public handle = vi.fn();
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [BusModule.forRoot({ transport: MockTransport })],
         providers: [HandlerWithMiddleware],
-      }).compile();
+      });
 
-      await expect(module.init()).rejects.toThrow(
+      // act
+      const initializing = module.init();
+
+      // assert
+      await expect(initializing).rejects.toThrow(
         'Middleware NotProvidedMiddleware is not provided in any module',
       );
-
-      await module.close().catch(() => undefined);
     });
 
     it('resolves a middleware provided in the providers of the bus module', async () => {
+      // arrange
       @Injectable()
       class BusProvidedMiddleware implements EventHandlerMiddleware {
         public static use = vi.fn();
@@ -1354,7 +1603,7 @@ describe('BusModule', () => {
         }
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [
           BusModule.forRoot({
             middlewares: [BusProvidedMiddleware],
@@ -1363,20 +1612,21 @@ describe('BusModule', () => {
           }),
         ],
         providers: [TestHandler],
-      }).compile();
+      });
 
       await module.init();
 
+      // act
       await module
         .get<Dispatcher>(Dispatcher)
         .publish(new TestEvent({ value: 'test' }));
 
+      // assert
       expect(BusProvidedMiddleware.use).toHaveBeenCalledOnce();
-
-      await module.close();
     });
 
     it('resolves a request-scoped handler middleware for every event with the payload as request', async () => {
+      // arrange
       const instances: object[] = [];
       const requests: unknown[] = [];
 
@@ -1400,10 +1650,10 @@ describe('BusModule', () => {
         public handle = vi.fn();
       }
 
-      const module = await Test.createTestingModule({
+      const module = await compile({
         imports: [BusModule.forRoot({ transport: MockTransport })],
         providers: [HandlerWithMiddleware, ScopedMiddleware],
-      }).compile();
+      });
 
       await module.init();
 
@@ -1411,32 +1661,33 @@ describe('BusModule', () => {
       const first = new TestEvent({ value: 'first' });
       const second = new TestEvent({ value: 'second' });
 
+      // act
       await dispatcher.publish(first);
       await dispatcher.publish(second);
 
+      // assert
       expect(instances).toHaveLength(2);
       expect(instances[0]).not.toBe(instances[1]);
       expect(requests).toEqual([
         expect.objectContaining({ event: first }),
         expect.objectContaining({ event: second }),
       ]);
-
-      await module.close();
     });
   });
 
   describe('handler scopes', () => {
     const createModule = (providers: any[]) =>
-      Test.createTestingModule({
+      compile({
         imports: [
           BusModule.forRoot({
             transport: MockTransport,
           }),
         ],
         providers,
-      }).compile();
+      });
 
     it('resolves a request-scoped handler for every event with the payload as request', async () => {
+      // arrange
       const instances: object[] = [];
       const requests: unknown[] = [];
 
@@ -1458,20 +1709,21 @@ describe('BusModule', () => {
       const first = new TestEvent({ value: 'first' });
       const second = new TestEvent({ value: 'second' });
 
+      // act
       await dispatcher.publish(first);
       await dispatcher.publish(second);
 
+      // assert
       expect(instances).toHaveLength(2);
       expect(instances[0]).not.toBe(instances[1]);
       expect(requests).toEqual([
         expect.objectContaining({ event: first }),
         expect.objectContaining({ event: second }),
       ]);
-
-      await module.close();
     });
 
     it('resolves a transient handler for every event', async () => {
+      // arrange
       const instances: object[] = [];
 
       @EventHandler(TestEvent, { scope: Scope.TRANSIENT })
@@ -1487,16 +1739,17 @@ describe('BusModule', () => {
 
       const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+      // act
       await dispatcher.publish(new TestEvent({ value: 'first' }));
       await dispatcher.publish(new TestEvent({ value: 'second' }));
 
+      // assert
       expect(instances).toHaveLength(2);
       expect(instances[0]).not.toBe(instances[1]);
-
-      await module.close();
     });
 
     it('resolves a handler depending on a request-scoped provider for every event', async () => {
+      // arrange
       const dependencies: object[] = [];
 
       @Injectable({ scope: Scope.REQUEST })
@@ -1519,23 +1772,26 @@ describe('BusModule', () => {
 
       const dispatcher = module.get<Dispatcher>(Dispatcher);
 
+      // act
       await dispatcher.publish(new TestEvent({ value: 'first' }));
       await dispatcher.publish(new TestEvent({ value: 'second' }));
 
+      // assert
       expect(dependencies).toHaveLength(2);
       expect(dependencies[0]).not.toBe(dependencies[1]);
-
-      await module.close();
     });
 
     it('registers a handler once when it is also provided with useExisting', async () => {
+      // arrange
       const module = await createModule([
         TestHandler,
         { provide: 'HANDLER_ALIAS', useExisting: TestHandler },
       ]);
 
+      // act
       await module.init();
 
+      // assert
       expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
         {
           event: TestEvent,
@@ -1543,11 +1799,10 @@ describe('BusModule', () => {
           callback: expect.any(Function),
         },
       ]);
-
-      await module.close();
     });
 
     it('registers a handler provided with useValue', async () => {
+      // arrange
       @EventHandler(TestEvent)
       class ValueHandler {
         public handle = vi.fn();
@@ -1560,10 +1815,12 @@ describe('BusModule', () => {
 
       await module.init();
 
+      // act
       await module
         .get<Dispatcher>(Dispatcher)
         .publish(new TestEvent({ value: 'test' }));
 
+      // assert
       expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
         {
           event: TestEvent,
@@ -1572,11 +1829,10 @@ describe('BusModule', () => {
         },
       ]);
       expect(handler.handle).toHaveBeenCalledOnce();
-
-      await module.close();
     });
 
     it('registers a handler provided by a factory', async () => {
+      // arrange
       @EventHandler(TestEvent)
       class FactoryHandler {
         public handle = vi.fn();
@@ -1589,10 +1845,12 @@ describe('BusModule', () => {
 
       await module.init();
 
+      // act
       await module
         .get<Dispatcher>(Dispatcher)
         .publish(new TestEvent({ value: 'test' }));
 
+      // assert
       expect(MockTransport.subscribe).toHaveBeenCalledExactlyOnceWith([
         {
           event: TestEvent,
@@ -1601,8 +1859,6 @@ describe('BusModule', () => {
         },
       ]);
       expect(handler.handle).toHaveBeenCalledOnce();
-
-      await module.close();
     });
   });
 });
