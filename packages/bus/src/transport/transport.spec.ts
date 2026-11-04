@@ -194,6 +194,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('republishes persisted data under its original id, name and time', async () => {
+      // arrange
       const config: CommonConfig = {
         group: crypto.randomUUID(),
         retries: { max: 0, delay: 100 },
@@ -205,11 +206,14 @@ describe('Transport', { timeout: 60_000 }, () => {
       await transport.subscribe(TestEvent, 'TestHandler', handler);
 
       await bootstrap(transport);
+
+      // act
       await transport.publish(
         { value: 'hello' },
         { id: 'persisted-id', name: 'TestEvent', meta: { a: 1 }, publishedAt },
       );
 
+      // assert
       await vi.waitFor(() => {
         expect(handler).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -223,6 +227,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('subscribes and publishes in batches', async () => {
+      // arrange
       const transport = await createTransport({
         group: crypto.randomUUID(),
         retries: { max: 0, delay: 100 },
@@ -236,12 +241,15 @@ describe('Transport', { timeout: 60_000 }, () => {
       ]);
 
       await bootstrap(transport);
+
+      // act
       await transport.publish([
         { event: new TestEvent({ value: 'first' }), options: { id: 'id-1' } },
         { event: new OtherEvent(), options: { id: 'id-2' } },
         { event: new TestEvent({ value: 'second' }), options: { id: 'id-3' } },
       ]);
 
+      // assert
       await vi.waitFor(() => {
         expect(testHandler.mock.calls.map(([payload]) => payload.id)).toEqual(
           expect.arrayContaining(['id-1', 'id-3']),
@@ -254,6 +262,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('delivers message to multiple groups', async () => {
+      // arrange
       const subscribe = async () => {
         const handler = vi.fn();
         const config: CommonConfig = {
@@ -276,8 +285,10 @@ describe('Transport', { timeout: 60_000 }, () => {
       });
       const event = new TestEvent({ value: 'hello' });
 
+      // act
       await publisher.publish(event);
 
+      // assert
       await vi.waitFor(() => {
         expect(subscriber1).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -307,6 +318,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('distributes messages between multiple instances of the same consumers in the same group', async () => {
+      // arrange
       const group = crypto.randomUUID();
       const config: CommonConfig = {
         group,
@@ -330,10 +342,12 @@ describe('Transport', { timeout: 60_000 }, () => {
       const event2 = new TestEvent({ value: '2' });
       const event3 = new TestEvent({ value: '3' });
 
+      // act
       await publisher.publish(event1);
       await publisher.publish(event2);
       await publisher.publish(event3);
 
+      // assert
       await vi.waitFor(() => {
         expect(subscriber1).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -363,6 +377,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     });
 
     it('delivers message to multiple handlers in the same group', async () => {
+      // arrange
       const config: CommonConfig = {
         group: crypto.randomUUID(),
         retries: { max: 0, delay: 100 },
@@ -378,8 +393,11 @@ describe('Transport', { timeout: 60_000 }, () => {
 
       const publisher = await createTransport(config);
       const event = new TestEvent({ value: 'multi-handler' });
+
+      // act
       await publisher.publish(event);
 
+      // assert
       await vi.waitFor(() => {
         expect(handler1).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ event }),
@@ -393,6 +411,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     it.each([1, 5, 10])(
       'retries a failing callback up to %s times',
       async (max) => {
+        // arrange
         const delay = 100;
         const config: CommonConfig = {
           group: crypto.randomUUID(),
@@ -405,24 +424,32 @@ describe('Transport', { timeout: 60_000 }, () => {
         await transport.subscribe(TestEvent, 'TestHandler', handler);
         await bootstrap(transport);
 
+        // act
         await transport.publish(new TestEvent({ value: 'retry-me' }));
-
         await setTimeout(delay * (max * 2));
+
+        // assert
         expect(handler).toHaveBeenCalledTimes(max + 1); // 1 initial attempt + max retries
       },
     );
 
     describe('assertHealthy', () => {
       it('resolves when transport is connected', async () => {
+        // arrange
         const transport = await createTransport({
           group: crypto.randomUUID(),
           retries: { max: 0, delay: 100 },
         });
 
-        await expect(transport.assertHealthy()).resolves.toBeUndefined();
+        // act
+        const healthy = transport.assertHealthy();
+
+        // assert
+        await expect(healthy).resolves.toBeUndefined();
       });
 
       it('throws when transport is not initialized', async () => {
+        // arrange
         // intentionally skip onBusInit() so channel is never set
         const transport = new RabbitmqTransport(
           {
@@ -433,7 +460,11 @@ describe('Transport', { timeout: 60_000 }, () => {
           serializer,
         );
 
-        await expect(transport.assertHealthy()).rejects.toThrow();
+        // act
+        const healthy = transport.assertHealthy();
+
+        // assert
+        await expect(healthy).rejects.toThrow();
       });
     });
   });
