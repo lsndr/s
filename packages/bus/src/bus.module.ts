@@ -31,10 +31,10 @@ export interface BusModuleOptions {
   transport: BusProvider<Transport>;
   serializer?: BusProvider<Serializer>;
   /**
-   * Reports spans and metrics of the bus, e.g. `new BusOtel()`. Nothing is
-   * reported by default.
+   * Reports spans and metrics of the bus, e.g. `BusOtel.withConfig()`.
+   * Nothing is reported by default.
    */
-  telemetry?: BusTelemetry;
+  telemetry?: BusProvider<BusTelemetry>;
   imports?: any[];
   providers?: Provider[];
 }
@@ -51,14 +51,12 @@ export class BusModule
     @Inject(DiscoveryService)
     private readonly discoveryService: DiscoveryService,
     @Optional()
-    @Optional()
     @Inject(Telemetry)
     private readonly telemetry?: BusTelemetry,
   ) {}
 
   public static forRoot(options: BusModuleOptions): DynamicModule {
     const middlewares = options.middlewares ?? [];
-    const { telemetry } = options;
 
     return {
       global: true,
@@ -69,7 +67,7 @@ export class BusModule
           provide: GlobalEventHandlerMiddlewares,
           useValue: middlewares,
         },
-        ...(telemetry ? [{ provide: Telemetry, useValue: telemetry }] : []),
+        ...(options.telemetry ? toProviders(Telemetry, options.telemetry) : []),
         ...toProviders(Serializer, options.serializer ?? JsonSerializer),
         ...toProviders(Transport, options.transport),
         { provide: Dispatcher, useExisting: Transport },

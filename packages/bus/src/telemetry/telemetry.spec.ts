@@ -172,7 +172,7 @@ describe('telemetry', () => {
       imports: [
         BusModule.forRoot({
           transport: MemoryTransport,
-          telemetry: otel.telemetry,
+          telemetry: { useValue: otel.telemetry },
           providers: [TestHandler],
         }),
       ],
@@ -211,7 +211,7 @@ describe('telemetry', () => {
             transport: MemoryTransport,
             interval: 5,
           }),
-          telemetry: otel.telemetry,
+          telemetry: { useValue: otel.telemetry },
           providers: [TestHandler],
         }),
       ],
@@ -290,7 +290,7 @@ describe('telemetry', () => {
               },
             },
           },
-          telemetry: otel.telemetry,
+          telemetry: { useValue: otel.telemetry },
         }),
         EagerModule,
       ],
@@ -330,7 +330,7 @@ describe('telemetry', () => {
         imports: [
           BusModule.forRoot({
             transport: HookedTransport,
-            telemetry,
+            telemetry: telemetry && { useValue: telemetry },
           }),
         ],
       }).compile();
@@ -409,7 +409,7 @@ describe('telemetry', () => {
         imports: [
           BusModule.forRoot({
             transport: ReportingTransport,
-            telemetry,
+            telemetry: { useValue: telemetry },
             providers: [TestHandler],
           }),
         ],
@@ -455,7 +455,7 @@ describe('telemetry', () => {
         imports: [
           BusModule.forRoot({
             transport: ReportingTransport,
-            telemetry,
+            telemetry: { useValue: telemetry },
             providers: [TestHandler],
           }),
         ],
@@ -479,7 +479,7 @@ describe('telemetry', () => {
               transport: MemoryTransport,
               interval: 5,
             }),
-            telemetry,
+            telemetry: { useValue: telemetry },
             providers: [TestHandler],
           }),
         ],
@@ -514,7 +514,7 @@ describe('telemetry', () => {
               transport: ReportingTransport,
               interval: 5,
             }),
-            telemetry,
+            telemetry: { useValue: telemetry },
           }),
         ],
       }).compile();

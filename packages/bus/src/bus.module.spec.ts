@@ -4,6 +4,7 @@ import {
   Logger,
   Module,
   type ModuleMetadata,
+  Optional,
   Scope,
   type Type,
 } from '@nestjs/common';
@@ -31,6 +32,12 @@ import {
 } from './serialization/serializer.js';
 import { JsonSerializer } from './serialization/json.serializer.js';
 import { type EventHandlerMiddleware } from './middleware/middleware.js';
+import {
+  type BusTelemetry,
+  noopTransportTelemetry,
+  Telemetry,
+  type TransportTelemetry,
+} from './telemetry/telemetry.js';
 import {
   type OnBusBootstrap,
   type OnBusInit,
@@ -536,6 +543,131 @@ describe('BusModule', () => {
 
       // assert
       expect(transport.serializer).toBe(module.get(Serializer));
+    });
+  });
+
+  describe('telemetry', () => {
+    @Injectable()
+    class CustomTelemetry implements BusTelemetry, OnBusInit {
+      public static initialized = false;
+
+      public constructor(@Inject('CONFIG') public readonly config: string) {}
+
+      public onBusInit(): void {
+        CustomTelemetry.initialized = true;
+      }
+
+      public transport(): TransportTelemetry {
+        return noopTransportTelemetry;
+      }
+    }
+
+    it.each<[string, () => BusProvider<BusTelemetry>, string?]>([
+      [
+        'a class',
+        () => ({
+          useClass: CustomTelemetry,
+          providers: [{ provide: 'CONFIG', useValue: 'class' }],
+        }),
+        'class',
+      ],
+      ['useValue', () => ({ useValue: new CustomTelemetry('value') }), 'value'],
+      [
+        'useFactory',
+        () => ({
+          useFactory: (config: string) => new CustomTelemetry(config),
+          inject: ['CONFIG'],
+          providers: [{ provide: 'CONFIG', useValue: 'factory' }],
+        }),
+        'factory',
+      ],
+    ])(
+      'provides a telemetry given as %s',
+      async (_name, telemetry, expectedConfig) => {
+        // arrange
+        CustomTelemetry.initialized = false;
+
+        const module = await compile({
+          imports: [
+            BusModule.forRoot({
+              transport: MockTransport,
+              telemetry: telemetry(),
+            }),
+          ],
+        });
+
+        // act
+        await module.init();
+
+        // assert
+        const resolved = module.get<CustomTelemetry>(Telemetry);
+
+        expect(resolved).toBeInstanceOf(CustomTelemetry);
+        expect(resolved.config).toBe(expectedConfig);
+        expect(CustomTelemetry.initialized).toBe(true);
+      },
+    );
+
+    it('injects the telemetry into a transport', async () => {
+      // arrange
+      @Injectable()
+      class ReportingTransport extends MockTransport {
+        public constructor(
+          @Optional()
+          @Inject(Telemetry)
+          public readonly telemetry?: BusTelemetry,
+        ) {
+          super();
+        }
+      }
+
+      const module = await compile({
+        imports: [
+          BusModule.forRoot({
+            transport: ReportingTransport,
+            telemetry: { useValue: new CustomTelemetry('value') },
+          }),
+        ],
+      });
+
+      // act
+      const transport = module.get<ReportingTransport>(Transport);
+
+      // assert
+      expect(transport.telemetry).toBe(module.get(Telemetry));
+    });
+
+    it('initializes the telemetry before the transport', async () => {
+      // arrange
+      const calls: string[] = [];
+
+      class OrderedTelemetry extends CustomTelemetry {
+        public override onBusInit(): void {
+          calls.push('telemetry');
+        }
+      }
+
+      @Injectable()
+      class OrderedTransport extends MockTransport {
+        public onBusInit(): void {
+          calls.push('transport');
+        }
+      }
+
+      const module = await compile({
+        imports: [
+          BusModule.forRoot({
+            transport: OrderedTransport,
+            telemetry: { useValue: new OrderedTelemetry('value') },
+          }),
+        ],
+      });
+
+      // act
+      await module.init();
+
+      // assert
+      expect(calls).toEqual(['telemetry', 'transport']);
     });
   });
 

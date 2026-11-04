@@ -1,5 +1,6 @@
-import { Logger } from '@nestjs/common';
+import { Inject, Logger, Optional } from '@nestjs/common';
 import { type OnBusInit } from '../../lifecycle.js';
+import { type BusProvider } from '../../provider.js';
 import type * as OtelApi from '@opentelemetry/api';
 import type * as OtelLogs from '@opentelemetry/api-logs';
 import {
@@ -20,6 +21,8 @@ type Api = typeof OtelApi;
 type LogsApi = typeof OtelLogs;
 
 const SCOPE = '@lsndr/bus';
+
+const BusOtelConfigToken = Symbol('BusOtelConfig');
 
 export interface BusOtelOptions {
   /** Defaults to the global tracer provider. */
@@ -67,14 +70,28 @@ interface Operation {
 /** Spans, metrics and exception events of the bus, as OpenTelemetry. */
 export class BusOtel implements BusTelemetry, OnBusInit {
   private readonly namespace: string;
+  private readonly options: BusOtelOptions;
   private readonly logger = new Logger(BusOtel.name);
   private readonly custom = new Map<string, unknown>();
   private readonly pendingGauges: (() => void)[] = [];
   private state: State | undefined;
   private loading: Promise<void> | undefined;
 
-  public constructor(private readonly options: BusOtelOptions = {}) {
-    this.namespace = options.namespace ?? 'bus';
+  public constructor(
+    @Optional()
+    @Inject(BusOtelConfigToken)
+    options?: BusOtelOptions,
+  ) {
+    // Nest passes undefined when the config is not provided
+    this.options = options ?? {};
+    this.namespace = this.options.namespace ?? 'bus';
+  }
+
+  public static withConfig(options: BusOtelOptions = {}): BusProvider<BusOtel> {
+    return {
+      useClass: BusOtel,
+      providers: [{ provide: BusOtelConfigToken, useValue: options }],
+    };
   }
 
   /**

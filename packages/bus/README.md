@@ -302,11 +302,11 @@ import { BusModule, BusOtel } from '@lsndr/bus';
 
 BusModule.forRoot({
   transport: {/* ... */},
-  telemetry: new BusOtel(),
+  telemetry: BusOtel.withConfig(),
 });
 ```
 
-Nothing is reported without the `telemetry` option. `BusOtel` takes the global tracer, meter and logger providers and propagator, so set up the OpenTelemetry SDK as usual. Pass `tracerProvider`, `meterProvider`, `loggerProvider` or `propagator` to use others. If the types of those options are not wanted, enable `skipLibCheck`.
+`telemetry` takes a Nest provider without its token, like `transport` does (see [Providing the transport](#providing-the-transport)), so `telemetry: BusOtel` works too. Nothing is reported without it. `BusOtel` takes the global tracer, meter and logger providers and propagator, so set up the OpenTelemetry SDK as usual. Pass `tracerProvider`, `meterProvider`, `loggerProvider` or `propagator` to `BusOtel.withConfig()` to use others. If the types of those options are not wanted, enable `skipLibCheck`.
 
 ### What is reported
 
@@ -376,6 +376,8 @@ class StatsdTelemetry implements BusTelemetry, OnBusInit {
   }
 }
 ```
+
+Register it like a transport: `telemetry: StatsdTelemetry`, or `telemetry: { useFactory: (cfg: Config) => new StatsdTelemetry(cfg), inject: [Config] }`.
 
 ### Telemetry of a custom transport
 
@@ -494,7 +496,7 @@ BusModule.forRoot({
 - `transport` — required. A transport provider, see [Providing the transport](#providing-the-transport). The options below go in the config of `withConfig`.
 - `serializer` — a provider of the [serializer](#serialization). Defaults to `JsonSerializer`.
 - `middlewares` — global middleware classes. They must be provided in a module of the application.
-- `telemetry` — see [Telemetry](#telemetry). Nothing is reported by default.
+- `telemetry` — a provider of the [telemetry](#telemetry). Nothing is reported by default.
 - `imports`, `providers` — additional Nest imports and providers for the module.
 
 Every built-in transport takes these in its config:

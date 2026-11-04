@@ -1,5 +1,12 @@
 import { Logger } from '@nestjs/common';
-import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import { Test, type TestingModule } from '@nestjs/testing';
+import {
+  context,
+  metrics,
+  SpanKind,
+  SpanStatusCode,
+  trace,
+} from '@opentelemetry/api';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type PublishEvent,
@@ -19,6 +26,8 @@ import {
   type TelemetryDescribed,
   type TelemetryDescriptor,
 } from '../telemetry.js';
+import { BusModule } from '../../bus.module.js';
+import { Telemetry } from '../telemetry.js';
 import { BusOtel } from './bus-otel.js';
 import { createOtelFixture } from './otel.fixture.js';
 
@@ -627,6 +636,63 @@ describe('BusOtel', () => {
 
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining('@opentelemetry/api-logs'),
+      );
+    });
+  });
+
+  describe('registration', () => {
+    let module: TestingModule | undefined;
+
+    afterEach(async () => {
+      await module?.close();
+      module = undefined;
+      vi.restoreAllMocks();
+    });
+
+    it('is provided by the class with the default options', async () => {
+      // arrange
+      module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({ transport: FakeTransport, telemetry: BusOtel }),
+        ],
+      }).compile();
+
+      // act
+      await module.init();
+
+      // assert
+      expect(module.get(Telemetry)).toBeInstanceOf(BusOtel);
+    });
+
+    it('is configured through withConfig', async () => {
+      // arrange
+      const meter = metrics.getMeter('test');
+      const createGauge = vi.spyOn(meter, 'createObservableGauge');
+
+      module = await Test.createTestingModule({
+        imports: [
+          BusModule.forRoot({
+            transport: FakeTransport,
+            telemetry: BusOtel.withConfig({
+              meterProvider: { getMeter: () => meter },
+              namespace: 'custom',
+            }),
+          }),
+        ],
+      }).compile();
+
+      await module.init();
+
+      // act
+      module
+        .get<BusOtel>(Telemetry)
+        .transport(descriptor)
+        .gauge('inflight', {}, () => []);
+
+      // assert
+      expect(createGauge).toHaveBeenCalledExactlyOnceWith(
+        'custom.inflight',
+        {},
       );
     });
   });
