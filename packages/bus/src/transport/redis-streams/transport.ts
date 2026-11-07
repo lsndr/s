@@ -11,6 +11,7 @@ import { type BusProvider } from '../../provider.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
 import { Serializer } from '../../serialization/serializer.js';
+import { Telemetry } from '../../telemetry/telemetry.js';
 import { Clients } from './clients.js';
 import { Handler } from './handler.js';
 import { Loops } from './loops/loops.js';
@@ -209,6 +210,8 @@ export class RedisStreamsTransport
     config: RedisStreamsTransportConfig,
     @Inject(Serializer)
     private readonly serializer: Serializer,
+    @Inject(Telemetry)
+    private readonly telemetry: Telemetry,
   ) {
     this.settings = resolveSettings(config);
     this.clients = new Clients(this.settings.url);
@@ -225,7 +228,7 @@ export class RedisStreamsTransport
     } = this.settings;
     const { clients, streams } = this;
     const { max: maxRetries, delay: retriesDelay } = this.settings.retries;
-    const processor = new Processor(clients, serializer, {
+    const processor = new Processor(clients, serializer, telemetry, {
       group,
       keyPrefix,
       maxRetries,
@@ -362,25 +365,31 @@ export class RedisStreamsTransport
     options?: PublishOptions,
   ): Promise<void> {
     const message = this.serializer.serialize(event, options);
-    const { data } = message;
+    const { data, headers } = message;
 
     this.logger.log(`Publishing event ${message.name}`);
     this.logger.verbose(`Event ${message.name} payload:`, event);
 
     const client = await this.clients.get('command');
+    const stream = this.getStream(message.name);
 
-    await client.xAdd(
-      this.getStream(message.name),
-      '*',
-      { id: message.id, payload: data },
-      {
-        TRIM: {
-          strategy: 'MAXLEN',
-          strategyModifier: '~',
-          threshold: this.settings.trim.maxLength,
-          policy: this.settings.trim.onlyAcked ? 'ACKED' : 'KEEPREF',
-        },
-      },
+    await this.telemetry.send(
+      { system: 'redis', name: stream },
+      [{ id: message.id, name: message.name, headers }],
+      () =>
+        client.xAdd(
+          stream,
+          '*',
+          { id: message.id, payload: data, headers: JSON.stringify(headers) },
+          {
+            TRIM: {
+              strategy: 'MAXLEN',
+              strategyModifier: '~',
+              threshold: this.settings.trim.maxLength,
+              policy: this.settings.trim.onlyAcked ? 'ACKED' : 'KEEPREF',
+            },
+          },
+        ),
     );
 
     this.logger.debug(`Event ${message.name} added to the stream`);

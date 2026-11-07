@@ -57,6 +57,31 @@ describe('JsonSerializer', () => {
       });
     });
 
+    it('returns a copy of the headers outside of the data', async () => {
+      // arrange
+      const serializer = await setup();
+      const headers = { traceparent: 'tp' };
+
+      // act
+      const message = serializer.serialize(new TestEvent(), { headers });
+
+      // assert
+      expect(message.headers).toEqual(headers);
+      expect(message.headers).not.toBe(headers);
+      expect(message.data).not.toContain('traceparent');
+    });
+
+    it('has no headers by default', async () => {
+      // arrange
+      const serializer = await setup();
+
+      // act
+      const message = serializer.serialize(new TestEvent());
+
+      // assert
+      expect(message.headers).toEqual({});
+    });
+
     it('produces a string', async () => {
       // arrange
       const serializer = await setup();

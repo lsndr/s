@@ -39,3 +39,13 @@ export {
 } from './lifecycle.js';
 export { type EventPayload } from './types.js';
 export { type EventHandlerMiddleware } from './middleware/middleware.js';
+export {
+  Telemetry,
+  type TelemetryDestination,
+  type TelemetryMessage,
+} from './telemetry/telemetry.js';
+export { NoopTelemetry } from './telemetry/noop.telemetry.js';
+export {
+  BusOtel,
+  type BusOtelConfig,
+} from './telemetry/otel/otel.telemetry.js';

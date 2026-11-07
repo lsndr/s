@@ -204,7 +204,7 @@ A middleware can be request-scoped or transient (`@Injectable({ scope: Scope.REQ
 
 ### Serialization
 
-A `Serializer` turns an event and its envelope (id, name, meta, `publishedAt`) into the bytes a transport sends, and back. `serialize` receives the event and the publish options, fills in what they leave out (a UUID v7 `id`, the class name as `name`, empty `meta`, the current time) and returns the `id`, `name` and `publishedAt` it used along with the `data`. The default, `JsonSerializer`, writes JSON text and converts the event with `class-transformer`. To use another format, provide your own with the `serializer` option, in any of the forms accepted by `transport`:
+A `Serializer` turns an event and its envelope (id, name, meta, `publishedAt`) into the bytes a transport sends, and back. `serialize` receives the event and the publish options, fills in what they leave out (a UUID v7 `id`, the class name as `name`, empty `meta`, the current time) and returns the `id`, `name`, `publishedAt` and `headers` it used along with the `data`. `headers` are message headers that travel next to `data`, not inside it (telemetry puts the trace context there), and come from `options.headers`, empty by default. The default, `JsonSerializer`, writes JSON text and converts the event with `class-transformer`. To use another format, provide your own with the `serializer` option, in any of the forms accepted by `transport`:
 
 ```typescript
 import { Injectable } from '@nestjs/common';
@@ -229,6 +229,7 @@ class MsgpackSerializer implements Serializer {
       id,
       name,
       publishedAt,
+      headers: { ...options?.headers },
       data: pack({ id, name, event, meta: options?.meta ?? {}, publishedAt }),
     };
   }
@@ -287,7 +288,7 @@ class MyTransport
 
 They are called one provider after another, in the order the providers are registered (the transport and its own `providers` first, then yours), and the bus waits for each. `onBusShutdown` goes in reverse, and a provider that fails to shut down is logged without keeping the others from it. Providers with a request or transient scope have no single instance, so they are skipped. Providers of other modules are skipped too, unless the bus module aliases them (like a transport given as `{ useExisting }`). An instance is called once, however many aliases point to it.
 
-The built-in transports are plain classes created with `new RedisStreamsTransport(config, serializer)`, and do their work in these hooks: they connect in `onBusInit`, the Redis Streams transport starts consuming in `onBusBootstrap`, and both clean up in `onBusShutdown`. Using one without the bus needs these calls yourself, e.g. `onBusInit()` before and `onBusBootstrap()` after `subscribe`.
+The built-in transports are plain classes created with `new RedisStreamsTransport(config, serializer, telemetry)`, and do their work in these hooks: they connect in `onBusInit`, the Redis Streams transport starts consuming in `onBusBootstrap`, and both clean up in `onBusShutdown`. Using one without the bus needs these calls yourself, e.g. `onBusInit()` before and `onBusBootstrap()` after `subscribe`.
 
 ## Outbox
 
@@ -335,11 +336,33 @@ BusModule.forRoot({
 });
 ```
 
-- `publish` calls `save` once per call with a list of `OutboxRecord`s (`id`, `name`, `publishedAt` and `data`, the message as the [serializer](#serialization) produced it, a `string` or a `Buffer`, to store as it is, e.g. in a `text` column with the default serializer), so a batch is stored together.
+- `publish` calls `save` once per call with a list of `OutboxRecord`s (`id`, `name`, `publishedAt`, `headers` and `data`, the message as the [serializer](#serialization) produced it, a `string` or a `Buffer`, to store as it is, e.g. in a `text` column with the default serializer), so a batch is stored together. Store `headers` (a string map) too and return it as it was: it carries the trace context, and `dispatch` passes it on.
 - `relay` is called in a loop. It locks pending records, calls `this.dispatch(records)`, and marks them dispatched only if that resolves. It returns the number of records dispatched: if above zero it runs again right away, otherwise it waits `interval`. Batching and limits are up to your implementation.
 - `dispatch` publishes the records as one batch, in order, to the real transport with their original `id`, `name`, `meta` and `publishedAt`. It deserializes each record without an event class, since the outbox only knows the name, so the transport receives a plain object and serializes it again. A serializer used with an outbox therefore has to accept `Object` as the event class. It rejects on the first failure, so roll back and retry. Delivery is at-least-once.
 - Locking with `SKIP LOCKED` lets several instances relay together, at the cost of strict ordering between batches.
 - If you override `onBusBootstrap` or `onBusShutdown`, call `super`: they run the relay loop.
+
+## Telemetry
+
+Tracing is pluggable through the `telemetry` option. The default does nothing. `BusOtel` traces with [OpenTelemetry](https://opentelemetry.io) and follows the [messaging semantic conventions](https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/). It needs `@opentelemetry/api`, and spans are exported by whatever SDK you have set up.
+
+```typescript
+import { BusModule, BusOtel } from '@lsndr/bus';
+
+BusModule.forRoot({
+  transport: RabbitmqTransport.withConfig({
+    url: 'amqp://localhost',
+    group: 'billing',
+  }),
+  telemetry: BusOtel.withConfig(), // optional: { tracerProvider, propagator }
+});
+```
+
+- Publishing creates a `send <destination>` producer span and injects the trace context (`traceparent`, `tracestate`) into the message headers: AMQP headers on RabbitMQ, a `headers` field of the entry on Redis Streams.
+- Every handler that processes a message gets a `process <destination>` consumer span, a child of the sending span, and runs inside it, so your own spans nest under it. A failing handler marks its span as an error.
+- With an [outbox](#outbox), storing an event creates a `create <event>` span and its context is kept with the record. The `send` span made when the record is relayed is its child, so the relay and the consumers stay in the trace of the request.
+
+Provide your own `Telemetry` (`create`, `send` and `process`, each wrapping a function) to plug in something else.
 
 ## Configuration
 

@@ -16,6 +16,7 @@ import { Transport } from '../transport.js';
 import { type BusProvider } from '../../provider.js';
 import { Serializer } from '../../serialization/serializer.js';
 import { type JsonSerializer } from '../../serialization/json.serializer.js';
+import { NoopTelemetry } from '../../telemetry/noop.telemetry.js';
 import { Outbox, type OutboxConfig, type OutboxRecord } from './outbox.js';
 
 class TestEvent {
@@ -192,6 +193,7 @@ describe('Outbox', () => {
     }
 
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     InnerTransport.publish.mockReset();
     MemoryOutbox.pending = [];
   });
@@ -213,6 +215,7 @@ describe('Outbox', () => {
         id: 'id-1',
         name: 'TestEvent',
         publishedAt: expect.any(Date),
+        headers: {},
         data: JSON.stringify({
           id: 'id-1',
           name: 'TestEvent',
@@ -312,6 +315,43 @@ describe('Outbox', () => {
     ).toEqual(['id-1', 'id-2']);
   });
 
+  it('stores the headers with the record and relays them', async () => {
+    // arrange
+    const module = await createModule();
+    const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+    await dispatcher.publish(new TestEvent({ value: 'a' }), {
+      id: 'id-1',
+      headers: { traceparent: 'tp' },
+    });
+
+    // act
+    await module.init();
+    await vi.waitFor(() => expect(MemoryOutbox.pending).toHaveLength(0));
+
+    // assert
+    expect(
+      InnerTransport.publish.mock.calls[0]![0][0]!.options?.headers,
+    ).toEqual({ traceparent: 'tp' });
+  });
+
+  it('wraps storing the records in a telemetry create', async () => {
+    // arrange
+    const create = vi.spyOn(NoopTelemetry.prototype, 'create');
+    const module = await createModule();
+    const dispatcher = module.get<Dispatcher>(Dispatcher);
+
+    // act
+    await dispatcher.publish(new TestEvent({ value: 'a' }), { id: 'id-1' });
+
+    // assert
+    expect(create).toHaveBeenCalledWith(
+      { name: 'outbox' },
+      [{ id: 'id-1', name: 'TestEvent', headers: {} }],
+      expect.any(Function),
+    );
+  });
+
   it('relays stored events to the transport as they were stored', async () => {
     // arrange
     const module = await createModule(1);
@@ -336,6 +376,7 @@ describe('Outbox', () => {
               name: 'TestEvent',
               meta: {},
               publishedAt: first!.publishedAt,
+              headers: {},
             },
           },
         ],
@@ -349,6 +390,7 @@ describe('Outbox', () => {
               name: 'TestEvent',
               meta: {},
               publishedAt: second!.publishedAt,
+              headers: {},
             },
           },
         ],

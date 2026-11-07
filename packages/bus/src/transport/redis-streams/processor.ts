@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { type Serializer } from '../../serialization/serializer.js';
+import { type Telemetry } from '../../telemetry/telemetry.js';
 import { type Clients } from './clients.js';
 import { type Stream } from './streams.js';
 
@@ -24,6 +25,7 @@ export class Processor {
   public constructor(
     private readonly clients: Clients<'command'>,
     private readonly serializer: Serializer,
+    private readonly telemetry: Telemetry,
     private readonly options: ProcessorOptions,
   ) {}
 
@@ -64,10 +66,20 @@ export class Processor {
 
       this.logger.verbose(`Event ${eventName} (${id}) payload:`, eventPayload);
 
+      const headers = this.parseHeaders(message['headers']);
       const results = await Promise.all(
         pending.map(async ({ name, callback }) => {
           try {
-            await callback(eventPayload);
+            await this.telemetry.process(
+              {
+                system: 'redis',
+                name: stream.name,
+                consumerGroup: group,
+                subscription: name,
+              },
+              { id: eventPayload.id, name: eventName, headers },
+              async () => callback(eventPayload),
+            );
           } catch (err) {
             return { name, error: err };
           }
@@ -119,6 +131,23 @@ export class Processor {
         `Failed to process entry ${id} of ${stream.name}: ${String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
+    }
+  }
+
+  /** Entries published before headers existed have none. */
+  private parseHeaders(raw: Buffer | undefined): Record<string, string> {
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(raw.toString());
+
+      return typeof parsed === 'object' && parsed !== null
+        ? (parsed as Record<string, string>)
+        : {};
+    } catch {
+      return {};
     }
   }
 }

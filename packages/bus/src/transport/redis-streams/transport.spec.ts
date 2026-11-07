@@ -1,3 +1,4 @@
+import { NoopTelemetry } from '../../telemetry/noop.telemetry.js';
 import { hostname } from 'node:os';
 import { Logger } from '@nestjs/common';
 import { createClient, type RedisClientType } from 'redis';
@@ -60,6 +61,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
         keyPrefix,
       } satisfies RedisStreamsTransportConfig,
       serializer,
+      new NoopTelemetry(),
     );
 
     transports.push(transport);
@@ -244,6 +246,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
           new RedisStreamsTransport(
             { url, group: 'group', ...config },
             serializer,
+            new NoopTelemetry(),
           );
 
         // assert

@@ -1,3 +1,4 @@
+import { NoopTelemetry } from '../telemetry/noop.telemetry.js';
 import {
   afterAll,
   afterEach,
@@ -112,6 +113,7 @@ describe('Transport', { timeout: 60_000 }, () => {
               ...busConfig,
             } satisfies RabbitmqTransportConfig,
             custom,
+            new NoopTelemetry(),
           );
 
           await init(transport);
@@ -158,6 +160,7 @@ describe('Transport', { timeout: 60_000 }, () => {
               concurrency: 1,
             } satisfies RedisStreamsTransportConfig,
             custom,
+            new NoopTelemetry(),
           );
 
           await init(transport);
@@ -458,6 +461,7 @@ describe('Transport', { timeout: 60_000 }, () => {
             retries: { max: 0, delay: 100 },
           } satisfies RabbitmqTransportConfig,
           serializer,
+          new NoopTelemetry(),
         );
 
         // act

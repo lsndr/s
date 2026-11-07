@@ -27,6 +27,7 @@ export class JsonSerializer implements Serializer, OnBusInit {
       id,
       name,
       publishedAt,
+      headers: { ...options?.headers },
       data: JSON.stringify({
         id,
         name,
