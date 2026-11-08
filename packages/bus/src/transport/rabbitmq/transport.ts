@@ -14,7 +14,8 @@ import {
   type SerializedMessage,
   Serializer,
 } from '../../serialization/serializer.js';
-import { Telemetry } from '../../telemetry/telemetry.js';
+import { Telemetry, type TelemetryServer } from '../../telemetry/telemetry.js';
+import { parseServer } from '../../telemetry/server.js';
 
 export interface RabbitmqTransportConfig {
   url: string;
@@ -43,8 +44,9 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
   private readonly exchange = 'events';
 
   private connection?: ChannelModel;
-  private channel: ConfirmChannel | undefined;
+  private channel?: ConfirmChannel;
   private readonly logger = new Logger(RabbitmqTransport.name);
+  private readonly server?: TelemetryServer;
 
   public constructor(
     @Inject(RabbitmqTransportConfigToken)
@@ -53,7 +55,9 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     private readonly serializer: Serializer,
     @Inject(Telemetry)
     private readonly telemetry: Telemetry,
-  ) {}
+  ) {
+    this.server = parseServer(config.url, { 'amqp:': 5672, 'amqps:': 5671 });
+  }
 
   public static withConfig(
     config: RabbitmqTransportConfig,
@@ -160,17 +164,28 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
 
           this.logger.verbose(`Event ${event.name} (${payload.id}):`, payload);
 
+          const { routingKey, deliveryTag, consumerTag } = message.fields;
+
           return this.telemetry.process(
             {
               system: 'rabbitmq',
               name: queue,
               consumerGroup: this.config.group,
               subscription: handlerName,
+              clientId: consumerTag,
+              server: this.server,
             },
             {
               id: payload.id,
               name: event.name,
               headers: this.toStringHeaders(message),
+              bodySize: message.content.length,
+              attributes: {
+                ...(routingKey && {
+                  'rabbitmq.destination.routing_key': routingKey,
+                }),
+                'rabbitmq.message.delivery_tag': deliveryTag,
+              },
             },
             async () => callback(payload),
           );
@@ -215,12 +230,10 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
       {
         system: 'rabbitmq',
         name: `${this.exchange}:${eventName}`,
-        attributes: {
-          'rabbitmq.exchange.name': this.exchange,
-          'rabbitmq.routing_key': eventName,
-        },
+        server: this.server,
+        attributes: { 'rabbitmq.destination.routing_key': eventName },
       },
-      [{ id, name: eventName, headers }],
+      [{ id, name: eventName, headers, bodySize: Buffer.byteLength(data) }],
       () => this.sendToBroker(id, eventName, data, headers),
     );
   }

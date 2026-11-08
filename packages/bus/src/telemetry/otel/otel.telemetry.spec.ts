@@ -16,7 +16,9 @@ const destination: TelemetryDestination = {
   name: 'events',
   consumerGroup: 'group',
   subscription: 'Handler',
-  attributes: { 'messaging.rabbitmq.destination.routing_key': 'TestEvent' },
+  clientId: 'client-1',
+  server: { address: 'localhost', port: 5672 },
+  attributes: { 'rabbitmq.destination.routing_key': 'TestEvent' },
 };
 
 describe('BusOtel', () => {
@@ -64,15 +66,51 @@ describe('BusOtel', () => {
       name: 'send events',
       kind: SpanKind.PRODUCER,
       attributes: {
-        'messaging.system': 'rabbitmq',
+        'messaging.system.name': 'rabbitmq',
         'messaging.operation.name': 'send',
         'messaging.operation.type': 'send',
         'messaging.destination.name': 'events',
         'messaging.message.id': 'id-1',
-        'messaging.rabbitmq.destination.routing_key': 'TestEvent',
+        'messaging.client.id': 'client-1',
+        'server.address': 'localhost',
+        'server.port': 5672,
+        'rabbitmq.destination.routing_key': 'TestEvent',
       },
     });
     expect(headers['traceparent']).toContain(span!.spanContext().spanId);
+  });
+
+  it('adds the attributes of the message', async () => {
+    // arrange
+    const message = {
+      id: 'id-1',
+      name: 'TestEvent',
+      headers: {},
+      attributes: { 'rabbitmq.message.delivery_tag': 7 },
+    };
+
+    // act
+    await telemetry.process(destination, message, () => Promise.resolve());
+
+    // assert
+    const [span] = exporter.getFinishedSpans();
+
+    expect(span!.attributes).toMatchObject({
+      'rabbitmq.message.delivery_tag': 7,
+    });
+  });
+
+  it('records the body size of the message', async () => {
+    // arrange
+    const message = { id: 'id-1', name: 'TestEvent', headers: {}, bodySize: 5 };
+
+    // act
+    await telemetry.send(destination, [message], () => Promise.resolve());
+
+    // assert
+    const [span] = exporter.getFinishedSpans();
+
+    expect(span!.attributes['messaging.message.body.size']).toBe(5);
   });
 
   it('continues the trace of a stored message', async () => {

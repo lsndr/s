@@ -52,6 +52,7 @@ describe('Processor', { timeout: 60_000 }, () => {
     const group = `group:${crypto.randomUUID()}`;
     const processorOptions: ProcessorOptions = {
       group,
+      consumer: 'consumer',
       keyPrefix: 'test:',
       maxRetries: 3,
       retriesDelay: 100,
@@ -177,6 +178,46 @@ describe('Processor', { timeout: 60_000 }, () => {
         ['A', { traceparent: 'tp' }],
         ['B', { traceparent: 'tp' }],
       ]);
+    });
+
+    it('reports the consumer and the server of the destination', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const process = vi.spyOn(telemetry, 'process');
+      const { stream, entry, options } = await setup({
+        handlers: { A: vi.fn() },
+        options: { server: { address: 'localhost', port: 6379 } },
+      });
+      const processor = new Processor(clients, serializer, telemetry, options);
+
+      // act
+      await processor.process(stream, entry, 1);
+
+      // assert
+      expect(process.mock.calls[0]![0]).toMatchObject({
+        clientId: 'consumer',
+        server: { address: 'localhost', port: 6379 },
+      });
+    });
+
+    it('reports the size of the payload', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const process = vi.spyOn(telemetry, 'process');
+      const payload = Buffer.from(
+        serializer.serialize(new TestEvent('x')).data,
+      );
+      const { stream, entry, options } = await setup({
+        handlers: { A: vi.fn() },
+        message: { payload },
+      });
+      const processor = new Processor(clients, serializer, telemetry, options);
+
+      // act
+      await processor.process(stream, entry, 1);
+
+      // assert
+      expect(process.mock.calls[0]![1].bodySize).toBe(payload.length);
     });
 
     it('uses the name of the handler as the destination', async () => {

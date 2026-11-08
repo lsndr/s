@@ -347,7 +347,14 @@ describe('Outbox', () => {
     // assert
     expect(create).toHaveBeenCalledWith(
       { system: 'outbox' },
-      [{ id: 'id-1', name: 'TestEvent', headers: {} }],
+      [
+        {
+          id: 'id-1',
+          name: 'TestEvent',
+          headers: {},
+          bodySize: expect.any(Number),
+        },
+      ],
       expect.any(Function),
     );
   });

@@ -1,6 +1,9 @@
 import { Logger } from '@nestjs/common';
 import { type Serializer } from '../../serialization/serializer.js';
-import { type Telemetry } from '../../telemetry/telemetry.js';
+import {
+  type Telemetry,
+  type TelemetryServer,
+} from '../../telemetry/telemetry.js';
 import { type Clients } from './clients.js';
 import { type Stream } from './streams.js';
 
@@ -11,12 +14,16 @@ export interface StreamEntry {
 
 export interface ProcessorOptions {
   group: string;
+  /** Name of this consumer in the group. */
+  consumer: string;
   keyPrefix: string;
   /** Maximum retries before an entry is dropped. */
   maxRetries: number;
   /** How long an entry has to be pending before it is claimed again. */
   retriesDelay: number;
   reclaimInterval: number;
+  /** Redis server, which telemetry reports. */
+  server?: TelemetryServer;
 }
 
 export class Processor {
@@ -42,8 +49,15 @@ export class Processor {
     attempt: number,
   ): Promise<void> {
     const { clients } = this;
-    const { group, keyPrefix, maxRetries, retriesDelay, reclaimInterval } =
-      this.options;
+    const {
+      group,
+      consumer,
+      keyPrefix,
+      maxRetries,
+      retriesDelay,
+      reclaimInterval,
+      server,
+    } = this.options;
     const { event, handlers } = stream;
     const { id, message } = entry;
     const retryCount = attempt - 1;
@@ -76,8 +90,15 @@ export class Processor {
                 name,
                 consumerGroup: group,
                 subscription: name,
+                clientId: consumer,
+                server,
               },
-              { id: eventPayload.id, name: eventName, headers },
+              {
+                id: eventPayload.id,
+                name: eventName,
+                headers,
+                bodySize: rawPayload.length,
+              },
               async () => callback(eventPayload),
             );
           } catch (err) {

@@ -11,7 +11,8 @@ import { type BusProvider } from '../../provider.js';
 import { type EventCallback, type Subscription } from '../subscriber.js';
 import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
 import { Serializer } from '../../serialization/serializer.js';
-import { Telemetry } from '../../telemetry/telemetry.js';
+import { Telemetry, type TelemetryServer } from '../../telemetry/telemetry.js';
+import { parseServer } from '../../telemetry/server.js';
 import { Clients } from './clients.js';
 import { Handler } from './handler.js';
 import { Loops } from './loops/loops.js';
@@ -203,6 +204,7 @@ export class RedisStreamsTransport
   private readonly streams: Streams;
   private readonly loops: Loops;
   private readonly settings: Settings;
+  private readonly server?: TelemetryServer;
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
   public constructor(
@@ -214,6 +216,10 @@ export class RedisStreamsTransport
     private readonly telemetry: Telemetry,
   ) {
     this.settings = resolveSettings(config);
+    this.server = parseServer(this.settings.url, {
+      'redis:': 6379,
+      'rediss:': 6379,
+    });
     this.clients = new Clients(this.settings.url);
     this.streams = new Streams(this.settings.concurrency);
 
@@ -230,10 +236,12 @@ export class RedisStreamsTransport
     const { max: maxRetries, delay: retriesDelay } = this.settings.retries;
     const processor = new Processor(clients, serializer, telemetry, {
       group,
+      consumer,
       keyPrefix,
       maxRetries,
       retriesDelay,
       reclaimInterval,
+      server: this.server,
     });
 
     this.loops = new Loops([
@@ -374,8 +382,15 @@ export class RedisStreamsTransport
     const stream = this.getStream(message.name);
 
     await this.telemetry.send(
-      { system: 'redis', name: stream },
-      [{ id: message.id, name: message.name, headers }],
+      { system: 'redis', name: stream, server: this.server },
+      [
+        {
+          id: message.id,
+          name: message.name,
+          headers,
+          bodySize: Buffer.byteLength(data),
+        },
+      ],
       () =>
         client.xAdd(
           stream,

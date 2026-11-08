@@ -7,6 +7,15 @@ export interface TelemetryMessage {
    * `process` extracts it.
    */
   headers: Record<string, string>;
+  /** Size of the serialized event in bytes. */
+  bodySize?: number;
+  /** Attributes specific to the transport that differ per message. */
+  attributes?: Record<string, string | number>;
+}
+
+export interface TelemetryServer {
+  address: string;
+  port?: number;
 }
 
 export interface TelemetryDestination {
@@ -20,6 +29,10 @@ export interface TelemetryDestination {
   consumerGroup?: string;
   /** Name of the handler that consumes the message. */
   subscription?: string;
+  /** Identifies the client that sends or consumes the message. */
+  clientId?: string;
+  /** Broker the message goes through. */
+  server?: TelemetryServer;
   /** Attributes specific to the transport. */
   attributes?: Record<string, string | number>;
 }

@@ -151,6 +151,7 @@ export class BusOtel implements Telemetry, OnBusInit {
       'messaging.operation.type': operation,
       'messaging.message.id': message.id,
       ...destination.attributes,
+      ...message.attributes,
     };
 
     if (destination.name) {
@@ -158,7 +159,23 @@ export class BusOtel implements Telemetry, OnBusInit {
     }
 
     if (destination.system) {
-      attributes['messaging.system'] = destination.system;
+      attributes['messaging.system.name'] = destination.system;
+    }
+
+    if (destination.clientId) {
+      attributes['messaging.client.id'] = destination.clientId;
+    }
+
+    if (destination.server) {
+      attributes['server.address'] = destination.server.address;
+
+      if (destination.server.port !== undefined) {
+        attributes['server.port'] = destination.server.port;
+      }
+    }
+
+    if (message.bodySize !== undefined) {
+      attributes['messaging.message.body.size'] = message.bodySize;
     }
 
     if (destination.consumerGroup) {
