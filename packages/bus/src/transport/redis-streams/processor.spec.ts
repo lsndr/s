@@ -12,6 +12,7 @@ import { GenericContainer, Wait } from 'testcontainers';
 import { Logger } from '@nestjs/common';
 import { createClient, RESP_TYPES, type RedisClientType } from 'redis';
 import { JsonSerializer } from '../../serialization/json.serializer.js';
+import { NoopTelemetry } from '../../telemetry/noop.telemetry.js';
 import { Clients } from './clients.js';
 import { Processor, type ProcessorOptions } from './processor.js';
 import { type Callback, Handler } from './handler.js';
@@ -51,6 +52,7 @@ describe('Processor', { timeout: 60_000 }, () => {
     const group = `group:${crypto.randomUUID()}`;
     const processorOptions: ProcessorOptions = {
       group,
+      consumer: 'consumer',
       keyPrefix: 'test:',
       maxRetries: 3,
       retriesDelay: 100,
@@ -90,7 +92,12 @@ describe('Processor', { timeout: 60_000 }, () => {
       stream,
       entry,
       options: processorOptions,
-      processor: new Processor(clients, serializer, processorOptions),
+      processor: new Processor(
+        clients,
+        serializer,
+        new NoopTelemetry(),
+        processorOptions,
+      ),
       doneKey: `test:done:${group}:TestEvent:${entry.id}`,
       pending: async () => (await redis.xPending(name, group)).pending,
     };
@@ -145,6 +152,121 @@ describe('Processor', { timeout: 60_000 }, () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  describe('telemetry', () => {
+    it('processes every handler with the headers of the entry', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const process = vi.spyOn(telemetry, 'process');
+      const { stream, entry, options } = await setup({
+        handlers: { A: vi.fn(), B: vi.fn() },
+        message: {
+          payload: Buffer.from(serializer.serialize(new TestEvent('x')).data),
+          headers: Buffer.from(JSON.stringify({ traceparent: 'tp' })),
+        },
+      });
+      const processor = new Processor(clients, serializer, telemetry, options);
+
+      // act
+      await processor.process(stream, entry, 1);
+
+      // assert
+      expect(
+        process.mock.calls.map(([d, m]) => [d.subscription, m.headers]),
+      ).toEqual([
+        ['A', { traceparent: 'tp' }],
+        ['B', { traceparent: 'tp' }],
+      ]);
+    });
+
+    it('reports the consumer and the server of the destination', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const process = vi.spyOn(telemetry, 'process');
+      const { stream, entry, options } = await setup({
+        handlers: { A: vi.fn() },
+        options: { server: { address: 'localhost', port: 6379 } },
+      });
+      const processor = new Processor(clients, serializer, telemetry, options);
+
+      // act
+      await processor.process(stream, entry, 1);
+
+      // assert
+      expect(process.mock.calls[0]![0]).toMatchObject({
+        clientId: 'consumer',
+        server: { address: 'localhost', port: 6379 },
+      });
+    });
+
+    it('reports the attempt of the entry', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const process = vi.spyOn(telemetry, 'process');
+      const { stream, entry, options } = await setup({
+        handlers: { A: vi.fn() },
+      });
+      const processor = new Processor(clients, serializer, telemetry, options);
+
+      // act
+      await processor.process(stream, entry, 3);
+
+      // assert
+      expect(process.mock.calls[0]![1].attempt).toBe(3);
+    });
+
+    it('reports the size of the payload', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const process = vi.spyOn(telemetry, 'process');
+      const payload = Buffer.from(
+        serializer.serialize(new TestEvent('x')).data,
+      );
+      const { stream, entry, options } = await setup({
+        handlers: { A: vi.fn() },
+        message: { payload },
+      });
+      const processor = new Processor(clients, serializer, telemetry, options);
+
+      // act
+      await processor.process(stream, entry, 1);
+
+      // assert
+      expect(process.mock.calls[0]![1].bodySize).toBe(payload.length);
+    });
+
+    it('uses the name of the handler as the destination', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const process = vi.spyOn(telemetry, 'process');
+      const { stream, entry, options } = await setup({
+        handlers: { A: vi.fn(), B: vi.fn() },
+      });
+      const processor = new Processor(clients, serializer, telemetry, options);
+
+      // act
+      await processor.process(stream, entry, 1);
+
+      // assert
+      expect(process.mock.calls.map(([d]) => d.name)).toEqual(['A', 'B']);
+    });
+
+    it('falls back to no headers for entries without them', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const process = vi.spyOn(telemetry, 'process');
+      const { stream, entry, options } = await setup({
+        handlers: { A: vi.fn() },
+      });
+      const processor = new Processor(clients, serializer, telemetry, options);
+
+      // act
+      await processor.process(stream, entry, 1);
+
+      // assert
+      expect(process.mock.calls[0]![1].headers).toEqual({});
+    });
   });
 
   describe('when every handler succeeds', () => {

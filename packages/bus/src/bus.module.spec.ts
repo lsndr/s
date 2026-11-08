@@ -29,6 +29,8 @@ import {
   type SerializedMessage,
   Serializer,
 } from './serialization/serializer.js';
+import { Telemetry } from './telemetry/telemetry.js';
+import { NoopTelemetry } from './telemetry/noop.telemetry.js';
 import { JsonSerializer } from './serialization/json.serializer.js';
 import { type EventHandlerMiddleware } from './middleware/middleware.js';
 import {
@@ -412,6 +414,40 @@ describe('BusModule', () => {
     });
   });
 
+  describe('telemetry', () => {
+    it('uses NoopTelemetry by default', async () => {
+      // arrange
+      const module = await compile({
+        imports: [BusModule.forRoot({ transport: MockTransport })],
+      });
+
+      // act
+      await module.init();
+
+      // assert
+      expect(module.get(Telemetry)).toBeInstanceOf(NoopTelemetry);
+    });
+
+    it('provides the given telemetry', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const module = await compile({
+        imports: [
+          BusModule.forRoot({
+            transport: MockTransport,
+            telemetry: { useValue: telemetry },
+          }),
+        ],
+      });
+
+      // act
+      await module.init();
+
+      // assert
+      expect(module.get(Telemetry)).toBe(telemetry);
+    });
+  });
+
   describe('serializer', () => {
     afterEach(() => {
       vi.clearAllMocks();
@@ -429,6 +465,7 @@ describe('BusModule', () => {
           id: '1',
           name: 'TestEvent',
           publishedAt: new Date(),
+          headers: {},
           data: '',
         };
       }

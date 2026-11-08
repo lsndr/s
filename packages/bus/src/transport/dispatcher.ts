@@ -5,6 +5,7 @@ export interface PublishOptions {
   meta?: Record<string, string | number | undefined | null>;
   /** Defaults to the current time. */
   publishedAt?: Date;
+  headers?: Record<string, string>;
 }
 
 export interface PublishEvent<O extends PublishOptions = PublishOptions> {

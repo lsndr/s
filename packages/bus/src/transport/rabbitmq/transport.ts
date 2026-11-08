@@ -14,6 +14,8 @@ import {
   type SerializedMessage,
   Serializer,
 } from '../../serialization/serializer.js';
+import { Telemetry, type TelemetryServer } from '../../telemetry/telemetry.js';
+import { parseServer } from '../../telemetry/server.js';
 
 export interface RabbitmqTransportConfig {
   url: string;
@@ -42,15 +44,20 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
   private readonly exchange = 'events';
 
   private connection?: ChannelModel;
-  private channel: ConfirmChannel | undefined;
+  private channel?: ConfirmChannel;
   private readonly logger = new Logger(RabbitmqTransport.name);
+  private readonly server?: TelemetryServer;
 
   public constructor(
     @Inject(RabbitmqTransportConfigToken)
     private readonly config: RabbitmqTransportConfig,
     @Inject(Serializer)
     private readonly serializer: Serializer,
-  ) {}
+    @Inject(Telemetry)
+    private readonly telemetry: Telemetry,
+  ) {
+    this.server = parseServer(config.url, { 'amqp:': 5672, 'amqps:': 5671 });
+  }
 
   public static withConfig(
     config: RabbitmqTransportConfig,
@@ -157,7 +164,32 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
 
           this.logger.verbose(`Event ${event.name} (${payload.id}):`, payload);
 
-          return callback(payload);
+          const { routingKey, deliveryTag, consumerTag } = message.fields;
+
+          return this.telemetry.process(
+            {
+              system: 'rabbitmq',
+              name: queue,
+              consumerGroup: this.config.group,
+              subscription: handlerName,
+              clientId: consumerTag,
+              server: this.server,
+            },
+            {
+              id: payload.id,
+              name: event.name,
+              headers: this.toStringHeaders(message),
+              bodySize: message.content.length,
+              attempt: this.getRetryCount(message) + 1,
+              attributes: {
+                ...(routingKey && {
+                  'rabbitmq.destination.routing_key': routingKey,
+                }),
+                'rabbitmq.message.delivery_tag': deliveryTag,
+              },
+            },
+            async () => callback(payload),
+          );
         })
         .then(() => {
           channel.ack(message);
@@ -193,7 +225,26 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     id,
     name: eventName,
     data,
+    headers,
   }: SerializedMessage): Promise<void> {
+    return this.telemetry.send(
+      {
+        system: 'rabbitmq',
+        name: `${this.exchange}:${eventName}`,
+        server: this.server,
+        attributes: { 'rabbitmq.destination.routing_key': eventName },
+      },
+      [{ id, name: eventName, headers, bodySize: Buffer.byteLength(data) }],
+      () => this.sendToBroker(id, eventName, data, headers),
+    );
+  }
+
+  private sendToBroker(
+    id: string,
+    eventName: string,
+    data: SerializedMessage['data'],
+    headers: Record<string, string>,
+  ): Promise<void> {
     const channel = this.getChannel();
 
     this.logger.log(`Publishing event ${eventName} (${id})`);
@@ -204,7 +255,7 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
         this.exchange,
         eventName,
         Buffer.from(data),
-        { messageId: id, persistent: true },
+        { messageId: id, persistent: true, headers },
         (err) => {
           if (err) {
             const error = err instanceof Error ? err : new Error(String(err));
@@ -275,6 +326,20 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
       max: this.config.retries?.max ?? 5,
       delay: this.config.retries?.delay ?? 5_000,
     };
+  }
+
+  private toStringHeaders(message: ConsumeMessage): Record<string, string> {
+    const headers: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(
+      message.properties.headers ?? {},
+    )) {
+      if (typeof value === 'string') {
+        headers[key] = value;
+      }
+    }
+
+    return headers;
   }
 
   private getRetryCount(message: ConsumeMessage): number {

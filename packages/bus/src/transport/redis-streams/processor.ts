@@ -1,5 +1,9 @@
 import { Logger } from '@nestjs/common';
 import { type Serializer } from '../../serialization/serializer.js';
+import {
+  type Telemetry,
+  type TelemetryServer,
+} from '../../telemetry/telemetry.js';
 import { type Clients } from './clients.js';
 import { type Stream } from './streams.js';
 
@@ -10,12 +14,16 @@ export interface StreamEntry {
 
 export interface ProcessorOptions {
   group: string;
+  /** Name of this consumer in the group. */
+  consumer: string;
   keyPrefix: string;
   /** Maximum retries before an entry is dropped. */
   maxRetries: number;
   /** How long an entry has to be pending before it is claimed again. */
   retriesDelay: number;
   reclaimInterval: number;
+  /** Redis server, which telemetry reports. */
+  server?: TelemetryServer;
 }
 
 export class Processor {
@@ -24,6 +32,7 @@ export class Processor {
   public constructor(
     private readonly clients: Clients<'command'>,
     private readonly serializer: Serializer,
+    private readonly telemetry: Telemetry,
     private readonly options: ProcessorOptions,
   ) {}
 
@@ -40,8 +49,15 @@ export class Processor {
     attempt: number,
   ): Promise<void> {
     const { clients } = this;
-    const { group, keyPrefix, maxRetries, retriesDelay, reclaimInterval } =
-      this.options;
+    const {
+      group,
+      consumer,
+      keyPrefix,
+      maxRetries,
+      retriesDelay,
+      reclaimInterval,
+      server,
+    } = this.options;
     const { event, handlers } = stream;
     const { id, message } = entry;
     const retryCount = attempt - 1;
@@ -64,10 +80,28 @@ export class Processor {
 
       this.logger.verbose(`Event ${eventName} (${id}) payload:`, eventPayload);
 
+      const headers = this.parseHeaders(message['headers']);
       const results = await Promise.all(
         pending.map(async ({ name, callback }) => {
           try {
-            await callback(eventPayload);
+            await this.telemetry.process(
+              {
+                system: 'redis',
+                name,
+                consumerGroup: group,
+                subscription: name,
+                clientId: consumer,
+                server,
+              },
+              {
+                id: eventPayload.id,
+                name: eventName,
+                headers,
+                bodySize: rawPayload.length,
+                attempt,
+              },
+              async () => callback(eventPayload),
+            );
           } catch (err) {
             return { name, error: err };
           }
@@ -119,6 +153,25 @@ export class Processor {
         `Failed to process entry ${id} of ${stream.name}: ${String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
+    }
+  }
+
+  private parseHeaders(raw: Buffer | undefined): Record<string, string> {
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      const parsed = JSON.parse(raw.toString());
+
+      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    } catch (err) {
+      this.logger.error(
+        `Failed to parse headers: ${String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+
+      return {};
     }
   }
 }

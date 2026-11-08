@@ -22,11 +22,14 @@ import {
   hasOnBusShutdown,
 } from './lifecycle.js';
 import { GlobalEventHandlerMiddlewares } from './middleware/middleware.js';
+import { Telemetry } from './telemetry/telemetry.js';
+import { NoopTelemetry } from './telemetry/noop.telemetry.js';
 
 export interface BusModuleOptions {
   middlewares?: GlobalEventHandlerMiddlewares;
   transport: BusProvider<Transport>;
   serializer?: BusProvider<Serializer>;
+  telemetry?: BusProvider<Telemetry>;
   imports?: any[];
   providers?: Provider[];
 }
@@ -54,6 +57,7 @@ export class BusModule
           provide: GlobalEventHandlerMiddlewares,
           useValue: middlewares,
         },
+        ...toProviders(Telemetry, options.telemetry ?? NoopTelemetry),
         ...toProviders(Serializer, options.serializer ?? JsonSerializer),
         ...toProviders(Transport, options.transport),
         { provide: Dispatcher, useExisting: Transport },

@@ -8,6 +8,7 @@ export interface SerializedMessage {
   /** Event name, which transports route by. */
   name: string;
   publishedAt: Date;
+  headers: Record<string, string>;
   data: SerializedData;
 }
 
@@ -19,10 +20,11 @@ export interface Serializer {
   /**
    * Encodes an event together with its envelope. What `options` leaves out is
    * filled in: a UUID v7 `id`, the class name of the event as `name`, empty
-   * `meta` and the current time as `publishedAt`. A string `data` is sent as
+   * `meta`, empty `headers` and the current time as `publishedAt`. A string `data` is sent as
    * its UTF-8 bytes, so both kinds come out the same on the wire.
    *
-   * @returns The `data`, and the `id`, `name` and `publishedAt` it carries.
+   * @returns The `data`, and the `id`, `name`, `publishedAt` and `headers` it
+   * carries. `headers` is a copy, which telemetry is free to change.
    */
   serialize(event: object, options?: PublishOptions): SerializedMessage;
 

@@ -10,6 +10,7 @@ import { type EventConstructor } from '../../types.js';
 import { type OnBusBootstrap, type OnBusShutdown } from '../../lifecycle.js';
 import { type Transport } from '../transport.js';
 import { type BusProvider, toProviders } from '../../provider.js';
+import { Telemetry } from '../../telemetry/telemetry.js';
 
 export type OutboxRecord = SerializedMessage;
 
@@ -56,6 +57,9 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
 
   @Inject(Serializer)
   protected serializer!: Serializer;
+
+  @Inject(Telemetry)
+  protected telemetry!: Telemetry;
 
   private readonly logger = new Logger(Outbox.name);
   private abortController?: AbortController;
@@ -128,10 +132,19 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
       return;
     }
 
-    await this.save(
-      events.map(({ event, options }) =>
-        this.serializer.serialize(event, options),
-      ),
+    const records = events.map(({ event, options }) =>
+      this.serializer.serialize(event, options),
+    );
+
+    await this.telemetry.create(
+      { system: 'outbox' },
+      records.map(({ id, name, headers, data }) => ({
+        id,
+        name,
+        headers,
+        bodySize: Buffer.byteLength(data),
+      })),
+      () => this.save(records),
     );
   }
 
@@ -168,7 +181,13 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
 
         return {
           event,
-          options: { id: record.id, name: record.name, meta, publishedAt },
+          options: {
+            id: record.id,
+            name: record.name,
+            meta,
+            publishedAt,
+            headers: record.headers,
+          },
         };
       }),
     );
