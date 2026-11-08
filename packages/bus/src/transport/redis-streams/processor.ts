@@ -73,7 +73,7 @@ export class Processor {
             await this.telemetry.process(
               {
                 system: 'redis',
-                name: stream.name,
+                name,
                 consumerGroup: group,
                 subscription: name,
               },

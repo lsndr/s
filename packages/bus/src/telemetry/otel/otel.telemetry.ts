@@ -193,10 +193,6 @@ export class BusOtel implements Telemetry, OnBusInit {
       name += ` ${destination.name}`;
     }
 
-    if (operation === 'process' && destination.subscription) {
-      name += ` (${destination.subscription})`;
-    }
-
     return name;
   }
 

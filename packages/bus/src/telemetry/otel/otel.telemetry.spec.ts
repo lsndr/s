@@ -110,7 +110,7 @@ describe('BusOtel', () => {
     // assert
     const spans = exporter.getFinishedSpans();
     const send = spans.find((s) => s.name === 'send events')!;
-    const processed = spans.find((s) => s.name === 'process events (Handler)')!;
+    const processed = spans.find((s) => s.name === 'process events')!;
 
     expect(processed.kind).toBe(SpanKind.CONSUMER);
     expect(processed.parentSpanContext?.spanId).toBe(send.spanContext().spanId);
