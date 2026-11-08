@@ -134,19 +134,21 @@ export class Processor {
     }
   }
 
-  /** Entries published before headers existed have none. */
   private parseHeaders(raw: Buffer | undefined): Record<string, string> {
     if (!raw) {
       return {};
     }
 
     try {
-      const parsed: unknown = JSON.parse(raw.toString());
+      const parsed = JSON.parse(raw.toString());
 
-      return typeof parsed === 'object' && parsed !== null
-        ? (parsed as Record<string, string>)
-        : {};
-    } catch {
+      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    } catch (err) {
+      this.logger.error(
+        `Failed to parse headers: ${String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+
       return {};
     }
   }

@@ -5,10 +5,6 @@ export interface PublishOptions {
   meta?: Record<string, string | number | undefined | null>;
   /** Defaults to the current time. */
   publishedAt?: Date;
-  /**
-   * Message headers, which travel next to the serialized message. Telemetry
-   * uses them to carry the trace context.
-   */
   headers?: Record<string, string>;
 }
 

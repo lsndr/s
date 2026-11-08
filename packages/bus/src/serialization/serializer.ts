@@ -8,10 +8,6 @@ export interface SerializedMessage {
   /** Event name, which transports route by. */
   name: string;
   publishedAt: Date;
-  /**
-   * Travels next to `data`, not inside it, so brokers can carry it as native
-   * message headers. Telemetry writes the trace context into it.
-   */
   headers: Record<string, string>;
   data: SerializedData;
 }

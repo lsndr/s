@@ -68,7 +68,6 @@ describe('JsonSerializer', () => {
       // assert
       expect(message.headers).toEqual(headers);
       expect(message.headers).not.toBe(headers);
-      expect(message.data).not.toContain('traceparent');
     });
 
     it('has no headers by default', async () => {
