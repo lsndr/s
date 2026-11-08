@@ -214,10 +214,10 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     return this.telemetry.send(
       {
         system: 'rabbitmq',
-        name: `${this.exchange}.${eventName}`,
+        name: `${this.exchange}:${eventName}`,
         attributes: {
-          'messaging.rabbitmq.exchange.name': this.exchange,
-          'messaging.rabbitmq.destination.routing_key': eventName,
+          'rabbitmq.exchange.name': this.exchange,
+          'rabbitmq.routing_key': eventName,
         },
       },
       [{ id, name: eventName, headers }],
