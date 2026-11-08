@@ -145,15 +145,17 @@ export class BusOtel implements Telemetry, OnBusInit {
     parent: OtelApi.Context,
   ): OtelApi.Span {
     const { SpanKind } = this.getApi();
-    const target = operation === 'create' ? message.name : destination.name;
     // https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/
     const attributes: OtelApi.Attributes = {
       'messaging.operation.name': operation,
       'messaging.operation.type': operation,
-      'messaging.destination.name': destination.name,
       'messaging.message.id': message.id,
       ...destination.attributes,
     };
+
+    if (destination.name) {
+      attributes['messaging.destination.name'] = destination.name;
+    }
 
     if (destination.system) {
       attributes['messaging.system'] = destination.system;
@@ -169,13 +171,33 @@ export class BusOtel implements Telemetry, OnBusInit {
     }
 
     return this.getTracer().startSpan(
-      `${operation} ${target}`,
+      this.getSpanName(operation, destination, message),
       {
         kind: operation === 'process' ? SpanKind.CONSUMER : SpanKind.PRODUCER,
         attributes,
       },
       parent,
     );
+  }
+
+  private getSpanName(
+    operation: Operation,
+    destination: TelemetryDestination,
+    message: TelemetryMessage,
+  ): string {
+    let name = operation;
+
+    if (operation == 'create') {
+      name += ` ${message.name}`;
+    } else if (destination.name) {
+      name += ` ${destination.name}`;
+    }
+
+    if (operation === 'process' && destination.subscription) {
+      name += ` (${destination.subscription})`;
+    }
+
+    return name;
   }
 
   private recordError(span: OtelApi.Span, error: unknown): void {

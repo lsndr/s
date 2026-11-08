@@ -359,8 +359,8 @@ BusModule.forRoot({
 ```
 
 - Publishing creates a `send <destination>` producer span and injects the trace context (`traceparent`, `tracestate`) into the message headers: AMQP headers on RabbitMQ, a `headers` field of the entry on Redis Streams.
-- Every handler that processes a message gets a `process <destination>` consumer span, a child of the sending span, and runs inside it, so your own spans nest under it. A failing handler marks its span as an error.
-- With an [outbox](#outbox), storing an event creates a `create <event>` span and its context is kept with the record. The `send` span made when the record is relayed is its child, so the relay and the consumers stay in the trace of the request.
+- Every handler that processes a message gets a `process <destination> (<handler>)` consumer span, a child of the sending span, and runs inside it, so your own spans nest under it. A failing handler marks its span as an error.
+- With an [outbox](#outbox), storing an event creates a `create <event>` span (with `messaging.system` set to `outbox` and no destination) and its context is kept with the record. The `send` span made when the record is relayed is its child, so the relay and the consumers stay in the trace of the request.
 
 Provide your own `Telemetry` (`create`, `send` and `process`, each wrapping a function) to plug in something else.
 

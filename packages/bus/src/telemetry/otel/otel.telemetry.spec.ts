@@ -80,7 +80,7 @@ describe('BusOtel', () => {
     const headers: Record<string, string> = {};
     const message = { id: 'id-1', name: 'TestEvent', headers };
 
-    await telemetry.create({ name: 'outbox' }, [message], () =>
+    await telemetry.create({ system: 'outbox' }, [message], () =>
       Promise.resolve(),
     );
 
@@ -110,7 +110,7 @@ describe('BusOtel', () => {
     // assert
     const spans = exporter.getFinishedSpans();
     const send = spans.find((s) => s.name === 'send events')!;
-    const processed = spans.find((s) => s.name === 'process events')!;
+    const processed = spans.find((s) => s.name === 'process events (Handler)')!;
 
     expect(processed.kind).toBe(SpanKind.CONSUMER);
     expect(processed.parentSpanContext?.spanId).toBe(send.spanContext().spanId);
@@ -120,6 +120,22 @@ describe('BusOtel', () => {
       'messaging.consumer.group.name': 'group',
       'messaging.destination.subscription.name': 'Handler',
     });
+  });
+
+  it('names spans without a destination after the operation', async () => {
+    // arrange
+    const message = { id: 'id-1', name: 'TestEvent', headers: {} };
+
+    // act
+    await telemetry.send({ system: 'outbox' }, [message], () =>
+      Promise.resolve(),
+    );
+
+    // assert
+    const [span] = exporter.getFinishedSpans();
+
+    expect(span!.name).toBe('send');
+    expect(span!.attributes).not.toHaveProperty('messaging.destination.name');
   });
 
   it('runs the processed function inside the process span', async () => {

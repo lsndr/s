@@ -12,8 +12,11 @@ export interface TelemetryMessage {
 export interface TelemetryDestination {
   /** Messaging system, e.g. `rabbitmq` or `redis`. */
   system?: string;
-  /** Exchange, queue or stream the message goes to or comes from. */
-  name: string;
+  /**
+   * Exchange, queue or stream the message goes to or comes from. Left out
+   * when there is none, e.g. while an outbox stores the message.
+   */
+  name?: string;
   consumerGroup?: string;
   /** Name of the handler that consumes the message. */
   subscription?: string;

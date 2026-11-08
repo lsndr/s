@@ -137,7 +137,7 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
     );
 
     await this.telemetry.create(
-      { name: 'outbox' },
+      { system: 'outbox' },
       records.map(({ id, name, headers }) => ({ id, name, headers })),
       () => this.save(records),
     );
