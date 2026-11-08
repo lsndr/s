@@ -362,7 +362,7 @@ BusModule.forRoot({
 - Every handler that processes a message gets a `process <destination>` consumer span, a child of the sending span, and runs inside it, so your own spans nest under it. A failing handler marks its span as an error.
 - With an [outbox](#outbox), storing an event creates a `create <event>` span (with `messaging.system.name` set to `outbox` and no destination) and its context is kept with the record. The `send` span made when the record is relayed is its child, so the relay and the consumers stay in the trace of the request.
 
-Spans carry the attributes the conventions require or recommend, including the broker as `server.address` and `server.port`. On RabbitMQ the destination is `<exchange>:<routing key>` when sending and `<exchange>:<routing key>:<queue>` when processing.
+Spans carry the attributes the conventions require or recommend, including the broker as `server.address` and `server.port`. `process` spans also have `bus.delivery.attempt`, which is 1 for the first try and grows with every retry, so a retried message can be told from its first delivery. On RabbitMQ the destination is `<exchange>:<routing key>` when sending and the queue when processing.
 
 Provide your own `Telemetry` (`create`, `send` and `process`, each wrapping a function) to plug in something else.
 

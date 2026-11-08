@@ -174,6 +174,10 @@ export class BusOtel implements Telemetry, OnBusInit {
       }
     }
 
+    if (message.attempt !== undefined) {
+      attributes['bus.delivery.attempt'] = message.attempt;
+    }
+
     if (message.bodySize !== undefined) {
       attributes['messaging.message.body.size'] = message.bodySize;
     }

@@ -180,6 +180,7 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
               name: event.name,
               headers: this.toStringHeaders(message),
               bodySize: message.content.length,
+              attempt: this.getRetryCount(message) + 1,
               attributes: {
                 ...(routingKey && {
                   'rabbitmq.destination.routing_key': routingKey,

@@ -98,6 +98,7 @@ export class Processor {
                 name: eventName,
                 headers,
                 bodySize: rawPayload.length,
+                attempt,
               },
               async () => callback(eventPayload),
             );

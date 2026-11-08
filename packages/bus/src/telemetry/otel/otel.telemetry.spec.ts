@@ -100,6 +100,19 @@ describe('BusOtel', () => {
     });
   });
 
+  it('records the delivery attempt of the message', async () => {
+    // arrange
+    const message = { id: 'id-1', name: 'TestEvent', headers: {}, attempt: 2 };
+
+    // act
+    await telemetry.process(destination, message, () => Promise.resolve());
+
+    // assert
+    const [span] = exporter.getFinishedSpans();
+
+    expect(span!.attributes['bus.delivery.attempt']).toBe(2);
+  });
+
   it('records the body size of the message', async () => {
     // arrange
     const message = { id: 'id-1', name: 'TestEvent', headers: {}, bodySize: 5 };

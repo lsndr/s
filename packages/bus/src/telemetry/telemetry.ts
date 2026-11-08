@@ -9,6 +9,8 @@ export interface TelemetryMessage {
   headers: Record<string, string>;
   /** Size of the serialized event in bytes. */
   bodySize?: number;
+  /** Number of the delivery, 1 for the first try and 2 for the first retry. */
+  attempt?: number;
   /** Attributes specific to the transport that differ per message. */
   attributes?: Record<string, string | number>;
 }
