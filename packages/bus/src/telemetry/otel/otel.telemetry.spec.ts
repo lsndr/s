@@ -208,6 +208,44 @@ describe('BusOtel', () => {
     expect(active).toBe(exporter.getFinishedSpans()[0]!.spanContext().spanId);
   });
 
+  it('runs the sent function inside the send span', async () => {
+    // arrange
+    let active: string | undefined;
+
+    // act
+    await telemetry.send(
+      destination,
+      { id: 'id-1', name: 'TestEvent', headers: {} },
+      () => {
+        active = trace.getSpan(context.active())?.spanContext().spanId;
+
+        return Promise.resolve();
+      },
+    );
+
+    // assert
+    expect(active).toBe(exporter.getFinishedSpans()[0]!.spanContext().spanId);
+  });
+
+  it('runs the created function inside the create span', async () => {
+    // arrange
+    let active: string | undefined;
+
+    // act
+    await telemetry.create(
+      destination,
+      { id: 'id-1', name: 'TestEvent', headers: {} },
+      () => {
+        active = trace.getSpan(context.active())?.spanContext().spanId;
+
+        return Promise.resolve();
+      },
+    );
+
+    // assert
+    expect(active).toBe(exporter.getFinishedSpans()[0]!.spanContext().spanId);
+  });
+
   it('records a failure of the processed function and rethrows it', async () => {
     // arrange
     const failure = new TypeError('boom');
