@@ -44,10 +44,6 @@ class TestEvent {
   }
 }
 
-class OtherEvent {
-  public readonly kind = 'other';
-}
-
 interface CommonConfig {
   group: string;
   retries: { max: number; delay: number };
@@ -229,41 +225,6 @@ describe('Transport', { timeout: 60_000 }, () => {
       });
     });
 
-    it('subscribes and publishes in batches', async () => {
-      // arrange
-      const transport = await createTransport({
-        group: crypto.randomUUID(),
-        retries: { max: 0, delay: 100 },
-      });
-      const testHandler = vi.fn();
-      const otherHandler = vi.fn();
-
-      await transport.subscribe([
-        { event: TestEvent, handler: 'TestHandler', callback: testHandler },
-        { event: OtherEvent, handler: 'OtherHandler', callback: otherHandler },
-      ]);
-
-      await bootstrap(transport);
-
-      // act
-      await transport.publish([
-        { event: new TestEvent({ value: 'first' }), options: { id: 'id-1' } },
-        { event: new OtherEvent(), options: { id: 'id-2' } },
-        { event: new TestEvent({ value: 'second' }), options: { id: 'id-3' } },
-      ]);
-
-      // assert
-      await vi.waitFor(() => {
-        expect(testHandler.mock.calls.map(([payload]) => payload.id)).toEqual(
-          expect.arrayContaining(['id-1', 'id-3']),
-        );
-        expect(testHandler).toHaveBeenCalledTimes(2);
-        expect(otherHandler).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ id: 'id-2' }),
-        );
-      });
-    });
-
     it('delivers message to multiple groups', async () => {
       // arrange
       const subscribe = async () => {
@@ -388,10 +349,8 @@ describe('Transport', { timeout: 60_000 }, () => {
       const handler1 = vi.fn();
       const handler2 = vi.fn();
       const transport = await createTransport(config);
-      await transport.subscribe([
-        { event: TestEvent, handler: 'HandlerA', callback: handler1 },
-        { event: TestEvent, handler: 'HandlerB', callback: handler2 },
-      ]);
+      await transport.subscribe(TestEvent, 'HandlerA', handler1);
+      await transport.subscribe(TestEvent, 'HandlerB', handler2);
       await bootstrap(transport);
 
       const publisher = await createTransport(config);

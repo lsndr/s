@@ -58,14 +58,14 @@ export interface Telemetry {
   /** Wraps storing a message for a later send, e.g. in an outbox. */
   create<T>(
     destination: TelemetryDestination,
-    messages: TelemetryMessage[],
+    message: TelemetryMessage,
     fn: () => Promise<T>,
   ): Promise<T>;
 
-  /** Wraps handing messages over to the broker. */
+  /** Wraps handing a message over to the broker. */
   send<T>(
     destination: TelemetryDestination,
-    messages: TelemetryMessage[],
+    message: TelemetryMessage,
     fn: () => Promise<T>,
   ): Promise<T>;
 

@@ -4,8 +4,8 @@ import {
   type SerializedMessage,
   Serializer,
 } from '../../serialization/serializer.js';
-import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
-import { type EventCallback, type Subscription } from '../subscriber.js';
+import { type PublishOptions } from '../dispatcher.js';
+import { type EventCallback } from '../subscriber.js';
 import { type EventConstructor } from '../../types.js';
 import { type OnBusBootstrap, type OnBusShutdown } from '../../lifecycle.js';
 import { type Transport } from '../transport.js';
@@ -84,12 +84,10 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   }
 
   /**
-   * Stores the records of one `publish` call, in order. Store them together,
-   * so that a batch is either saved entirely or not at all. To make the events
-   * part of the caller's transaction, join it here, e.g. through
-   * `AsyncLocalStorage`.
+   * Stores the record of one `publish` call. To make the event part of the
+   * caller's transaction, join it here, e.g. through `AsyncLocalStorage`.
    */
-  protected abstract save(records: OutboxRecord[]): Promise<void>;
+  protected abstract save(record: OutboxRecord): Promise<void>;
 
   /**
    * Relays pending records. Implementations lock the pending records they
@@ -118,77 +116,43 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
     return this.transport.assertHealthy();
   }
 
-  public publish(events: PublishEvent[]): Promise<void>;
-  public publish(event: object, options?: PublishOptions): Promise<void>;
-  public async publish(
-    eventOrEvents: object | PublishEvent[],
-    options?: PublishOptions,
-  ): Promise<void> {
-    const events = Array.isArray(eventOrEvents)
-      ? eventOrEvents
-      : [{ event: eventOrEvents, options }];
-
-    if (events.length === 0) {
-      return;
-    }
-
-    const records = events.map(({ event, options }) =>
-      this.serializer.serialize(event, options),
-    );
+  public async publish(event: object, options?: PublishOptions): Promise<void> {
+    const record = this.serializer.serialize(event, options);
 
     await this.telemetry.create(
       { system: 'outbox' },
-      records.map(({ id, name, headers, data }) => ({
-        id,
-        name,
-        headers,
-        bodySize: Buffer.byteLength(data),
-      })),
-      () => this.save(records),
+      {
+        id: record.id,
+        name: record.name,
+        headers: record.headers,
+        bodySize: Buffer.byteLength(record.data),
+      },
+      () => this.save(record),
     );
   }
 
-  public subscribe(subscriptions: Subscription[]): Promise<void>;
   public subscribe<
     C extends EventConstructor<any>,
     E extends InstanceType<C> = InstanceType<C>,
-  >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
-  public subscribe(
-    eventOrSubscriptions: EventConstructor<any> | Subscription[],
-    handler?: string,
-    callback?: EventCallback<any>,
-  ): Promise<void> {
-    const subscriptions = Array.isArray(eventOrSubscriptions)
-      ? eventOrSubscriptions
-      : [
-          {
-            event: eventOrSubscriptions,
-            handler: handler!,
-            callback: callback!,
-          },
-        ];
-
-    return this.transport.subscribe(subscriptions);
+  >(event: C, handler: string, callback: EventCallback<E>): Promise<void> {
+    return this.transport.subscribe(event, handler, callback);
   }
 
   protected async dispatch(records: OutboxRecord[]): Promise<void> {
-    await this.transport.publish(
+    await Promise.all(
       records.map((record) => {
         const { event, meta, publishedAt } = this.serializer.deserialize(
           Object,
           record.data,
         );
 
-        return {
-          event,
-          options: {
-            id: record.id,
-            name: record.name,
-            meta,
-            publishedAt,
-            headers: record.headers,
-          },
-        };
+        return this.transport.publish(event, {
+          id: record.id,
+          name: record.name,
+          meta,
+          publishedAt,
+          headers: record.headers,
+        });
       }),
     );
   }

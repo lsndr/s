@@ -25,11 +25,7 @@ export {
   type SerializedMessage,
 } from './serialization/serializer.js';
 export { JsonSerializer } from './serialization/json.serializer.js';
-export {
-  Dispatcher,
-  type PublishEvent,
-  type PublishOptions,
-} from './transport/dispatcher.js';
+export { Dispatcher, type PublishOptions } from './transport/dispatcher.js';
 export { type Subscription } from './transport/subscriber.js';
 export { Health } from './transport/health.js';
 export {

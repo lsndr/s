@@ -8,8 +8,8 @@ import {
 } from '../../lifecycle.js';
 import { type Transport } from '../transport.js';
 import { type BusProvider } from '../../provider.js';
-import { type EventCallback, type Subscription } from '../subscriber.js';
-import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
+import { type EventCallback } from '../subscriber.js';
+import { type PublishOptions } from '../dispatcher.js';
 import { Serializer } from '../../serialization/serializer.js';
 import { Telemetry, type TelemetryServer } from '../../telemetry/telemetry.js';
 import { parseServer } from '../../telemetry/server.js';
@@ -320,60 +320,24 @@ export class RedisStreamsTransport
     await (await this.clients.get('command')).ping();
   }
 
-  public publish(events: PublishEvent[]): Promise<void>;
-  public publish(event: object, options?: PublishOptions): Promise<void>;
-  public async publish(
-    eventOrEvents: object | PublishEvent[],
-    options?: PublishOptions,
-  ): Promise<void> {
-    const events = Array.isArray(eventOrEvents)
-      ? eventOrEvents
-      : [{ event: eventOrEvents, options }];
-
-    for (const { event, options: eventOptions } of events) {
-      await this.publishEvent(event, eventOptions);
-    }
-  }
-
-  public subscribe(subscriptions: Subscription[]): Promise<void>;
-  public subscribe<
+  public async subscribe<
     C extends EventConstructor<any>,
     E extends InstanceType<C> = InstanceType<C>,
-  >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
-  public async subscribe(
-    eventOrSubscriptions: EventConstructor<any> | Subscription[],
-    handler?: string,
-    callback?: EventCallback<any>,
-  ): Promise<void> {
-    const subscriptions = Array.isArray(eventOrSubscriptions)
-      ? eventOrSubscriptions
-      : [
-          {
-            event: eventOrSubscriptions,
-            handler: handler!,
-            callback: callback!,
-          },
-        ];
+  >(event: C, handlerName: string, callback: EventCallback<E>): Promise<void> {
+    const stream = this.getStream(event.name);
 
-    for (const { event, handler: handlerName, callback: cb } of subscriptions) {
-      const stream = this.getStream(event.name);
-
-      if (!this.streams.has(stream)) {
-        await this.createGroup(stream);
-      }
-
-      this.streams.register(stream, event, new Handler(handlerName, cb));
-
-      this.logger.log(
-        `Subscribed to event ${event.name} (handler: ${handlerName})`,
-      );
+    if (!this.streams.has(stream)) {
+      await this.createGroup(stream);
     }
+
+    this.streams.register(stream, event, new Handler(handlerName, callback));
+
+    this.logger.log(
+      `Subscribed to event ${event.name} (handler: ${handlerName})`,
+    );
   }
 
-  private async publishEvent(
-    event: object,
-    options?: PublishOptions,
-  ): Promise<void> {
+  public async publish(event: object, options?: PublishOptions): Promise<void> {
     const message = this.serializer.serialize(event, options);
     const { data, headers } = message;
 
@@ -385,14 +349,12 @@ export class RedisStreamsTransport
 
     await this.telemetry.send(
       { system: 'redis', name: stream, server: this.server },
-      [
-        {
-          id: message.id,
-          name: message.name,
-          headers,
-          bodySize: Buffer.byteLength(data),
-        },
-      ],
+      {
+        id: message.id,
+        name: message.name,
+        headers,
+        bodySize: Buffer.byteLength(data),
+      },
       () =>
         client.xAdd(
           stream,

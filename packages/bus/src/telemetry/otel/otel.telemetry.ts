@@ -54,18 +54,18 @@ export class BusOtel implements Telemetry, OnBusInit {
 
   public create<T>(
     destination: TelemetryDestination,
-    messages: TelemetryMessage[],
+    message: TelemetryMessage,
     fn: () => Promise<T>,
   ): Promise<T> {
-    return this.produce('create', destination, messages, fn);
+    return this.produce('create', destination, message, fn);
   }
 
   public send<T>(
     destination: TelemetryDestination,
-    messages: TelemetryMessage[],
+    message: TelemetryMessage,
     fn: () => Promise<T>,
   ): Promise<T> {
-    return this.produce('send', destination, messages, fn);
+    return this.produce('send', destination, message, fn);
   }
 
   public receive<T>(
@@ -110,7 +110,7 @@ export class BusOtel implements Telemetry, OnBusInit {
   private async produce<T>(
     operation: 'create' | 'send',
     destination: TelemetryDestination,
-    messages: TelemetryMessage[],
+    message: TelemetryMessage,
     fn: () => Promise<T>,
   ): Promise<T> {
     const {
@@ -121,37 +121,27 @@ export class BusOtel implements Telemetry, OnBusInit {
       defaultTextMapSetter,
     } = this.getApi();
     const propagator = this.getPropagator(propagation);
-    const spans: OtelApi.Span[] = [];
+    const parent = propagator.extract(
+      context.active(),
+      message.headers,
+      defaultTextMapGetter,
+    );
+    const span = this.startSpan(operation, destination, message, parent);
 
-    for (const message of messages) {
-      const parent = propagator.extract(
-        context.active(),
-        message.headers,
-        defaultTextMapGetter,
-      );
-      const span = this.startSpan(operation, destination, message, parent);
-
-      propagator.inject(
-        trace.setSpan(parent, span),
-        message.headers,
-        defaultTextMapSetter,
-      );
-
-      spans.push(span);
-    }
+    propagator.inject(
+      trace.setSpan(parent, span),
+      message.headers,
+      defaultTextMapSetter,
+    );
 
     try {
       return await fn();
     } catch (error) {
-      for (const span of spans) {
-        this.recordError(span, error);
-      }
+      this.recordError(span, error);
 
       throw error;
     } finally {
-      for (const span of spans) {
-        span.end();
-      }
+      span.end();
     }
   }
 

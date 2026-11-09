@@ -9,7 +9,7 @@ import {
 export class NoopTelemetry implements Telemetry {
   public create<T>(
     _destination: TelemetryDestination,
-    _messages: TelemetryMessage[],
+    _message: TelemetryMessage,
     fn: () => Promise<T>,
   ): Promise<T> {
     return fn();
@@ -17,7 +17,7 @@ export class NoopTelemetry implements Telemetry {
 
   public send<T>(
     _destination: TelemetryDestination,
-    _messages: TelemetryMessage[],
+    _message: TelemetryMessage,
     fn: () => Promise<T>,
   ): Promise<T> {
     return fn();
