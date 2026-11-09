@@ -26,6 +26,15 @@ class FirstEvent {
   public constructor(public readonly value: string) {}
 }
 
+async function publishMany(
+  transport: RedisStreamsTransport,
+  count: number,
+): Promise<void> {
+  for (let i = 0; i < count; i++) {
+    await transport.publish(new FirstEvent(String(i)));
+  }
+}
+
 describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
   let container: Awaited<ReturnType<GenericContainer['start']>>;
   let url: string;
@@ -167,11 +176,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       const count = 500;
 
       await redis.xGroupCreate(key, group, '0', { MKSTREAM: true });
-      await transport.publish(
-        Array.from({ length: count }, (_, i) => ({
-          event: new FirstEvent(String(i)),
-        })),
-      );
+      await publishMany(transport, count);
       const entries = await entriesOf(key);
       await redis.xReadGroup(group, 'consumer', { key, id: '>' });
       await redis.xAck(
@@ -198,11 +203,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       await redis.xGroupCreate(key, group, '0', { MKSTREAM: true });
 
       // act
-      await transport.publish(
-        Array.from({ length: count }, (_, i) => ({
-          event: new FirstEvent(String(i)),
-        })),
-      );
+      await publishMany(transport, count);
 
       // assert
       expect(await redis.xLen(key)).toBe(count);
@@ -219,11 +220,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       await redis.xGroupCreate(key, group, '0', { MKSTREAM: true });
 
       // act
-      await transport.publish(
-        Array.from({ length: count }, (_, i) => ({
-          event: new FirstEvent(String(i)),
-        })),
-      );
+      await publishMany(transport, count);
 
       // assert
       expect(await redis.xLen(key)).toBeLessThan(count);

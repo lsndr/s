@@ -103,17 +103,6 @@ export class OrderService {
 }
 ```
 
-To publish several events in one call, pass a list. Each item has its own options:
-
-```typescript
-await this.dispatcher.publish([
-  { event: new OrderPlaced(orderId), options: { id: 'custom-id' } },
-  { event: new InvoiceIssued(orderId) },
-]);
-```
-
-With an `Outbox`, the whole list is stored by a single `save` call.
-
 ### Handling events
 
 ```typescript
@@ -310,8 +299,8 @@ class PostgresOutbox extends Outbox<PostgresOutboxConfig> {
   }
 
   // Runs inside the caller's transaction: join it here (e.g. via AsyncLocalStorage)
-  protected async save(records: OutboxRecord[]) {
-    // INSERT INTO outbox (...) VALUES (...), (...)
+  protected async save(record: OutboxRecord) {
+    // INSERT INTO outbox (...) VALUES (...)
   }
 
   protected async relay() {
@@ -336,9 +325,9 @@ BusModule.forRoot({
 });
 ```
 
-- `publish` calls `save` once per call with a list of `OutboxRecord`s (`id`, `name`, `publishedAt`, `headers` and `data`, the message as the [serializer](#serialization) produced it, a `string` or a `Buffer`, to store as it is, e.g. in a `text` column with the default serializer), so a batch is stored together. Store `headers` (a string map) too and return it as it was: it carries the trace context, and `dispatch` passes it on.
+- `publish` calls `save` once per call with an `OutboxRecord` (`id`, `name`, `publishedAt`, `headers` and `data`, the message as the [serializer](#serialization) produced it, a `string` or a `Buffer`, to store as it is, e.g. in a `text` column with the default serializer). Join the caller's transaction in `save` to store the event together with your data. Store `headers` (a string map) too and return it as it was: it carries the trace context, and `dispatch` passes it on.
 - `relay` is called in a loop. It locks pending records, calls `this.dispatch(records)`, and marks them dispatched only if that resolves. It returns the number of records dispatched: if above zero it runs again right away, otherwise it waits `interval`. Batching and limits are up to your implementation.
-- `dispatch` publishes the records as one batch, in order, to the real transport with their original `id`, `name`, `meta` and `publishedAt`. It deserializes each record without an event class, since the outbox only knows the name, so the transport receives a plain object and serializes it again. A serializer used with an outbox therefore has to accept `Object` as the event class. It rejects on the first failure, so roll back and retry. Delivery is at-least-once.
+- `dispatch` publishes the records concurrently to the real transport, so the order they arrive in is not guaranteed with their original `id`, `name`, `meta` and `publishedAt`. It deserializes each record without an event class, since the outbox only knows the name, so the transport receives a plain object and serializes it again. A serializer used with an outbox therefore has to accept `Object` as the event class. It rejects if any publish fails (the others may already have gone out), so roll back and retry. Delivery is at-least-once.
 - Locking with `SKIP LOCKED` lets several instances relay together, at the cost of strict ordering between batches.
 - If you override `onBusBootstrap` or `onBusShutdown`, call `super`: they run the relay loop.
 

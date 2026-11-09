@@ -55,7 +55,7 @@ describe('BusOtel', () => {
     // act
     await telemetry.send(
       destination,
-      [{ id: 'id-1', name: 'TestEvent', headers }],
+      { id: 'id-1', name: 'TestEvent', headers },
       () => Promise.resolve(),
     );
 
@@ -118,7 +118,7 @@ describe('BusOtel', () => {
     const message = { id: 'id-1', name: 'TestEvent', headers: {}, bodySize: 5 };
 
     // act
-    await telemetry.send(destination, [message], () => Promise.resolve());
+    await telemetry.send(destination, message, () => Promise.resolve());
 
     // assert
     const [span] = exporter.getFinishedSpans();
@@ -131,12 +131,12 @@ describe('BusOtel', () => {
     const headers: Record<string, string> = {};
     const message = { id: 'id-1', name: 'TestEvent', headers };
 
-    await telemetry.create({ system: 'outbox' }, [message], () =>
+    await telemetry.create({ system: 'outbox' }, message, () =>
       Promise.resolve(),
     );
 
     // act
-    await telemetry.send(destination, [message], () => Promise.resolve());
+    await telemetry.send(destination, message, () => Promise.resolve());
 
     // assert
     const spans = exporter.getFinishedSpans();
@@ -153,7 +153,7 @@ describe('BusOtel', () => {
     const headers: Record<string, string> = {};
     const message = { id: 'id-1', name: 'TestEvent', headers };
 
-    await telemetry.send(destination, [message], () => Promise.resolve());
+    await telemetry.send(destination, message, () => Promise.resolve());
 
     // act
     await telemetry.process(destination, message, () => Promise.resolve());
@@ -178,7 +178,7 @@ describe('BusOtel', () => {
     const message = { id: 'id-1', name: 'TestEvent', headers: {} };
 
     // act
-    await telemetry.send({ system: 'outbox' }, [message], () =>
+    await telemetry.send({ system: 'outbox' }, message, () =>
       Promise.resolve(),
     );
 
@@ -239,7 +239,7 @@ describe('BusOtel', () => {
     // act
     const result = telemetry.send(
       destination,
-      [{ id: 'id-1', name: 'TestEvent', headers: {} }],
+      { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.reject(failure),
     );
 
@@ -254,7 +254,7 @@ describe('BusOtel', () => {
     // act
     await telemetry.send(
       destination,
-      [{ id: 'id-1', name: 'TestEvent', headers: {} }],
+      { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.resolve(),
     );
 
@@ -307,7 +307,7 @@ describe('BusOtel', () => {
     // act
     await telemetry.send(
       { ...destination, operation: 'publish' },
-      [{ id: 'id-1', name: 'TestEvent', headers: {} }],
+      { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.resolve(),
     );
 
@@ -343,7 +343,7 @@ describe('BusOtel', () => {
     // act
     await telemetry.create(
       { operation: 'store' },
-      [{ id: 'id-1', name: 'TestEvent', headers: {} }],
+      { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.resolve(),
     );
 
@@ -409,7 +409,7 @@ describe('BusOtel', () => {
 
     await telemetry.send(
       destination,
-      [{ id: 'id-1', name: 'TestEvent', headers }],
+      { id: 'id-1', name: 'TestEvent', headers },
       () => Promise.resolve(),
     );
 

@@ -8,8 +8,8 @@ import {
   type ConfirmChannel,
   type ConsumeMessage,
 } from 'amqplib';
-import { type EventCallback, type Subscription } from '../subscriber.js';
-import { type PublishEvent, type PublishOptions } from '../dispatcher.js';
+import { type EventCallback } from '../subscriber.js';
+import { type PublishOptions } from '../dispatcher.js';
 import {
   type SerializedMessage,
   Serializer,
@@ -96,51 +96,27 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     await this.getChannel().checkExchange(this.exchange);
   }
 
-  public publish(events: PublishEvent[]): Promise<void>;
-  public publish(event: object, options?: PublishOptions): Promise<void>;
-  public async publish(
-    eventOrEvents: object | PublishEvent[],
-    options?: PublishOptions,
-  ): Promise<void> {
-    const events = Array.isArray(eventOrEvents)
-      ? eventOrEvents
-      : [{ event: eventOrEvents, options }];
+  public publish(event: object, options?: PublishOptions): Promise<void> {
+    const {
+      id,
+      name: eventName,
+      data,
+      headers,
+    } = this.serializer.serialize(event, options);
 
-    for (const { event, options: eventOptions } of events) {
-      await this.publishEvent(this.serializer.serialize(event, eventOptions));
-    }
+    return this.telemetry.send(
+      {
+        system: 'rabbitmq',
+        name: `${this.exchange}:${eventName}`,
+        server: this.server,
+        attributes: { 'rabbitmq.destination.routing_key': eventName },
+      },
+      { id, name: eventName, headers, bodySize: Buffer.byteLength(data) },
+      () => this.sendToBroker(id, eventName, data, headers),
+    );
   }
 
-  public subscribe(subscriptions: Subscription[]): Promise<void>;
-  public subscribe<
-    C extends EventConstructor<any>,
-    E extends InstanceType<C> = InstanceType<C>,
-  >(event: C, handler: string, callback: EventCallback<E>): Promise<void>;
-  public async subscribe(
-    eventOrSubscriptions: EventConstructor<any> | Subscription[],
-    handler?: string,
-    callback?: EventCallback<any>,
-  ): Promise<void> {
-    const subscriptions = Array.isArray(eventOrSubscriptions)
-      ? eventOrSubscriptions
-      : [
-          {
-            event: eventOrSubscriptions,
-            handler: handler!,
-            callback: callback!,
-          },
-        ];
-
-    for (const subscription of subscriptions) {
-      await this.subscribeEvent(
-        subscription.event,
-        subscription.handler,
-        subscription.callback,
-      );
-    }
-  }
-
-  private async subscribeEvent<
+  public async subscribe<
     C extends EventConstructor<any>,
     E extends InstanceType<C> = InstanceType<C>,
   >(event: C, handlerName: string, callback: EventCallback<E>): Promise<void> {
@@ -219,24 +195,6 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     await channel.consume(queue, (message) => handler(message), {
       noAck: false,
     });
-  }
-
-  private publishEvent({
-    id,
-    name: eventName,
-    data,
-    headers,
-  }: SerializedMessage): Promise<void> {
-    return this.telemetry.send(
-      {
-        system: 'rabbitmq',
-        name: `${this.exchange}:${eventName}`,
-        server: this.server,
-        attributes: { 'rabbitmq.destination.routing_key': eventName },
-      },
-      [{ id, name: eventName, headers, bodySize: Buffer.byteLength(data) }],
-      () => this.sendToBroker(id, eventName, data, headers),
-    );
   }
 
   private sendToBroker(

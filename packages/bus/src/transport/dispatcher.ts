@@ -8,13 +8,7 @@ export interface PublishOptions {
   headers?: Record<string, string>;
 }
 
-export interface PublishEvent<O extends PublishOptions = PublishOptions> {
-  event: object;
-  options?: O;
-}
-
 export interface Dispatcher {
-  publish(events: PublishEvent[]): Promise<void>;
   publish(event: object, options?: PublishOptions): Promise<void>;
 }
 

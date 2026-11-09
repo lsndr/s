@@ -13,7 +13,6 @@ export interface Subscription<
 }
 
 export interface Subscriber {
-  subscribe(subscriptions: Subscription[]): Promise<void>;
   subscribe<
     C extends EventConstructor<any>,
     E extends InstanceType<C> = InstanceType<C>,
