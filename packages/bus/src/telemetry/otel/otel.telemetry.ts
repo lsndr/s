@@ -107,7 +107,7 @@ export class BusOtel implements Telemetry, OnBusInit {
     return this.run(span, fn, this.getApi().trace.setSpan(parent, span));
   }
 
-  private async produce<T>(
+  private produce<T>(
     operation: 'create' | 'send',
     destination: TelemetryDestination,
     message: TelemetryMessage,
@@ -128,21 +128,11 @@ export class BusOtel implements Telemetry, OnBusInit {
     );
     const span = this.startSpan(operation, destination, message, parent);
 
-    propagator.inject(
-      trace.setSpan(parent, span),
-      message.headers,
-      defaultTextMapSetter,
-    );
+    const ctx = trace.setSpan(parent, span);
 
-    try {
-      return await fn();
-    } catch (error) {
-      this.recordError(span, error);
+    propagator.inject(ctx, message.headers, defaultTextMapSetter);
 
-      throw error;
-    } finally {
-      span.end();
-    }
+    return this.run(span, fn, ctx);
   }
 
   private async run<T>(
