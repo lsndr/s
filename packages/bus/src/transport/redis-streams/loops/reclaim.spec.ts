@@ -11,6 +11,7 @@ import {
 } from 'vitest';
 import { GenericContainer, Wait } from 'testcontainers';
 import { createClient, type RedisClientType } from 'redis';
+import { NoopTelemetry } from '../../../telemetry/noop.telemetry.js';
 import { Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { Handler } from '../handler.js';
@@ -56,15 +57,18 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
       (..._args: Parameters<Processor['process']>): Promise<void> =>
         Promise.resolve(),
     );
+    const telemetry = new NoopTelemetry();
     const loop = new ReclaimLoop(
       clients,
       streams,
       { process } as unknown as Processor,
+      telemetry,
       { group, consumer, batchSize, retriesDelay, reclaimInterval },
     );
 
     return {
       loop,
+      telemetry,
       streams,
       process,
       group,
@@ -142,6 +146,65 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
     releases.splice(0).forEach((release) => release());
   });
 
+  describe('telemetry', () => {
+    it('claims inside a receive of the stream', async () => {
+      // arrange
+      const { next, abandon, stale, telemetry, names, group, consumer } =
+        await setup();
+      const [name] = names as [string];
+      const receive = vi.spyOn(telemetry, 'receive');
+
+      await abandon(name);
+      await stale();
+
+      // act
+      await next();
+
+      // assert
+      expect(receive.mock.calls[0]![0]).toMatchObject({
+        system: 'redis',
+        operation: 'reclaim',
+        name,
+        consumerGroup: group,
+        clientId: consumer,
+      });
+    });
+
+    it('records how many entries were claimed', async () => {
+      // arrange
+      const { next, abandon, stale, telemetry, names } = await setup();
+      const [name] = names as [string];
+      const batch = { setSize: vi.fn() };
+
+      vi.spyOn(telemetry, 'receive').mockImplementation((_d, fn) => fn(batch));
+      await abandon(name, 2);
+      await stale();
+
+      // act
+      await next();
+
+      // assert
+      expect(batch.setSize).toHaveBeenCalledWith(2);
+    });
+
+    it('hands the batch on to the processed entries', async () => {
+      // arrange
+      const { next, abandon, stale, telemetry, process, names } = await setup();
+      const [name] = names as [string];
+      const batch = { setSize: vi.fn() };
+
+      vi.spyOn(telemetry, 'receive').mockImplementation((_d, fn) => fn(batch));
+      await abandon(name);
+      await stale();
+
+      // act
+      await next();
+
+      // assert
+      expect(process.mock.calls[0]![3]).toBe(batch);
+    });
+  });
+
   describe('reclaiming', () => {
     it('runs abandoned entries with the next attempt', async () => {
       // arrange
@@ -160,11 +223,13 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
         streamOf(name),
         { id: ids[0], message: { payload: Buffer.from('0') } },
         2,
+        expect.anything(),
       );
       expect(process).toHaveBeenCalledWith(
         streamOf(name),
         { id: ids[1], message: { payload: Buffer.from('1') } },
         2,
+        expect.anything(),
       );
     });
 
@@ -262,11 +327,13 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
         streamOf(a),
         expect.objectContaining({ id: idA }),
         2,
+        expect.anything(),
       );
       expect(process).toHaveBeenCalledWith(
         streamOf(b),
         expect.objectContaining({ id: idB }),
         2,
+        expect.anything(),
       );
     });
   });
@@ -397,6 +464,7 @@ describe('ReclaimLoop', { timeout: 60_000 }, () => {
         streamOf(working),
         expect.objectContaining({ id }),
         2,
+        expect.anything(),
       );
     });
   });

@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { type Serializer } from '../../serialization/serializer.js';
 import {
   type Telemetry,
+  type TelemetryBatch,
   type TelemetryServer,
 } from '../../telemetry/telemetry.js';
 import { type Clients } from './clients.js';
@@ -47,6 +48,7 @@ export class Processor {
     stream: Stream,
     entry: StreamEntry,
     attempt: number,
+    batch?: TelemetryBatch,
   ): Promise<void> {
     const { clients } = this;
     const {
@@ -99,6 +101,7 @@ export class Processor {
                 headers,
                 bodySize: rawPayload.length,
                 attempt,
+                batch,
               },
               async () => callback(eventPayload),
             );

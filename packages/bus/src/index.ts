@@ -41,6 +41,7 @@ export { type EventPayload } from './types.js';
 export { type EventHandlerMiddleware } from './middleware/middleware.js';
 export {
   Telemetry,
+  type TelemetryBatch,
   type TelemetryDestination,
   type TelemetryMessage,
 } from './telemetry/telemetry.js';

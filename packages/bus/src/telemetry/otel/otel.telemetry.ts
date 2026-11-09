@@ -5,6 +5,7 @@ import { type BusProvider } from '../../provider.js';
 import { type OnBusInit } from '../../lifecycle.js';
 import {
   type Telemetry,
+  type TelemetryBatch,
   type TelemetryDestination,
   type TelemetryMessage,
 } from '../telemetry.js';
@@ -18,7 +19,16 @@ export interface BusOtelConfig {
 
 const BusOtelConfigToken = Symbol('BusOtelConfig');
 
-type Operation = 'create' | 'send' | 'process';
+type Operation = 'create' | 'send' | 'receive' | 'process';
+
+/** Keeps the span of a batch, so that process spans can link to it. */
+class OtelBatch implements TelemetryBatch {
+  public constructor(public readonly span: OtelApi.Span) {}
+
+  public setSize(size: number): void {
+    this.span.setAttribute('messaging.batch.message_count', size);
+  }
+}
 
 /**
  * Telemetry that traces the bus with OpenTelemetry, following the messaging
@@ -58,6 +68,23 @@ export class BusOtel implements Telemetry, OnBusInit {
     return this.produce('send', destination, messages, fn);
   }
 
+  public receive<T>(
+    destination: TelemetryDestination,
+    fn: (batch: TelemetryBatch) => Promise<T>,
+  ): Promise<T> {
+    const { context, trace } = this.getApi();
+    const parent = context.active();
+    const batch = new OtelBatch(
+      this.startSpan('receive', destination, undefined, parent),
+    );
+
+    return this.run(
+      batch.span,
+      () => fn(batch),
+      trace.setSpan(parent, batch.span),
+    );
+  }
+
   public process<T>(
     destination: TelemetryDestination,
     message: TelemetryMessage,
@@ -69,7 +96,13 @@ export class BusOtel implements Telemetry, OnBusInit {
       message.headers,
       defaultTextMapGetter,
     );
-    const span = this.startSpan('process', destination, message, parent);
+    // a link, not a parent: the producer is what the trace follows, the
+    // batch only says which pull delivered the message
+    const links =
+      message.batch instanceof OtelBatch
+        ? [{ context: message.batch.span.spanContext() }]
+        : undefined;
+    const span = this.startSpan('process', destination, message, parent, links);
 
     return this.run(span, fn, this.getApi().trace.setSpan(parent, span));
   }
@@ -141,18 +174,23 @@ export class BusOtel implements Telemetry, OnBusInit {
   private startSpan(
     operation: Operation,
     destination: TelemetryDestination,
-    message: TelemetryMessage,
+    message: TelemetryMessage | undefined,
     parent: OtelApi.Context,
+    links?: OtelApi.Link[],
   ): OtelApi.Span {
-    const { SpanKind } = this.getApi();
+    // the type stays the generic one when the operation has a custom name
+    const operationName = destination.operation ?? operation;
     // https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/
     const attributes: OtelApi.Attributes = {
-      'messaging.operation.name': operation,
+      'messaging.operation.name': operationName,
       'messaging.operation.type': operation,
-      'messaging.message.id': message.id,
       ...destination.attributes,
-      ...message.attributes,
     };
+
+    if (message) {
+      attributes['messaging.message.id'] = message.id;
+      Object.assign(attributes, message.attributes);
+    }
 
     if (destination.name) {
       attributes['messaging.destination.name'] = destination.name;
@@ -174,11 +212,11 @@ export class BusOtel implements Telemetry, OnBusInit {
       }
     }
 
-    if (message.attempt !== undefined) {
+    if (message?.attempt !== undefined) {
       attributes['bus.delivery.attempt'] = message.attempt;
     }
 
-    if (message.bodySize !== undefined) {
+    if (message?.bodySize !== undefined) {
       attributes['messaging.message.body.size'] = message.bodySize;
     }
 
@@ -192,23 +230,38 @@ export class BusOtel implements Telemetry, OnBusInit {
     }
 
     return this.getTracer().startSpan(
-      this.getSpanName(operation, destination, message),
+      this.getSpanName(operationName, operation, destination, message),
       {
-        kind: operation === 'process' ? SpanKind.CONSUMER : SpanKind.PRODUCER,
+        kind: this.getSpanKind(operation),
         attributes,
+        links,
       },
       parent,
     );
   }
 
+  private getSpanKind(operation: Operation): OtelApi.SpanKind {
+    const { SpanKind } = this.getApi();
+
+    switch (operation) {
+      case 'process':
+        return SpanKind.CONSUMER;
+      case 'receive':
+        return SpanKind.CLIENT;
+      default:
+        return SpanKind.PRODUCER;
+    }
+  }
+
   private getSpanName(
+    operationName: string,
     operation: Operation,
     destination: TelemetryDestination,
-    message: TelemetryMessage,
+    message: TelemetryMessage | undefined,
   ): string {
-    let name = operation;
+    let name = operationName;
 
-    if (operation == 'create') {
+    if (operation == 'create' && message) {
       name += ` ${message.name}`;
     } else if (destination.name) {
       name += ` ${destination.name}`;

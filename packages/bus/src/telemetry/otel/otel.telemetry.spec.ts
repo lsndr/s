@@ -265,6 +265,182 @@ describe('BusOtel', () => {
     });
   });
 
+  it('receives in a client span with the size of the batch', async () => {
+    // act
+    await telemetry.receive(destination, (batch) => {
+      batch.setSize(3);
+
+      return Promise.resolve();
+    });
+
+    // assert
+    const [span] = exporter.getFinishedSpans();
+
+    expect(span).toMatchObject({
+      name: 'receive events',
+      kind: SpanKind.CLIENT,
+      attributes: {
+        'messaging.operation.type': 'receive',
+        'messaging.destination.name': 'events',
+        'messaging.batch.message_count': 3,
+      },
+    });
+  });
+
+  it('names a receive after the custom operation of the destination', async () => {
+    // act
+    await telemetry.receive({ ...destination, operation: 'reclaim' }, () =>
+      Promise.resolve(),
+    );
+
+    // assert
+    expect(exporter.getFinishedSpans()[0]).toMatchObject({
+      name: 'reclaim events',
+      attributes: {
+        'messaging.operation.name': 'reclaim',
+        'messaging.operation.type': 'receive',
+      },
+    });
+  });
+
+  it('names a send after the custom operation of the destination', async () => {
+    // act
+    await telemetry.send(
+      { ...destination, operation: 'publish' },
+      [{ id: 'id-1', name: 'TestEvent', headers: {} }],
+      () => Promise.resolve(),
+    );
+
+    // assert
+    expect(exporter.getFinishedSpans()[0]).toMatchObject({
+      name: 'publish events',
+      attributes: {
+        'messaging.operation.name': 'publish',
+        'messaging.operation.type': 'send',
+      },
+    });
+  });
+
+  it('names a process after the custom operation of the destination', async () => {
+    // act
+    await telemetry.process(
+      { ...destination, operation: 'handle' },
+      { id: 'id-1', name: 'TestEvent', headers: {} },
+      () => Promise.resolve(),
+    );
+
+    // assert
+    expect(exporter.getFinishedSpans()[0]).toMatchObject({
+      name: 'handle events',
+      attributes: {
+        'messaging.operation.name': 'handle',
+        'messaging.operation.type': 'process',
+      },
+    });
+  });
+
+  it('names a create after the custom operation of the destination', async () => {
+    // act
+    await telemetry.create(
+      { operation: 'store' },
+      [{ id: 'id-1', name: 'TestEvent', headers: {} }],
+      () => Promise.resolve(),
+    );
+
+    // assert
+    expect(exporter.getFinishedSpans()[0]).toMatchObject({
+      name: 'store TestEvent',
+      attributes: {
+        'messaging.operation.name': 'store',
+        'messaging.operation.type': 'create',
+      },
+    });
+  });
+
+  it('names a receive without a destination after the operation', async () => {
+    // act
+    await telemetry.receive({ ...destination, name: undefined }, () =>
+      Promise.resolve(),
+    );
+
+    // assert
+    expect(exporter.getFinishedSpans()[0]!.name).toBe('receive');
+  });
+
+  it('records the error of a failing receive', async () => {
+    // arrange
+    const error = new Error('boom');
+
+    // act
+    const result = telemetry.receive(destination, () => Promise.reject(error));
+
+    // assert
+    await expect(result).rejects.toBe(error);
+    expect(exporter.getFinishedSpans()[0]!.status).toMatchObject({
+      code: SpanStatusCode.ERROR,
+      message: 'boom',
+    });
+  });
+
+  it('links the process span to the batch it was received in', async () => {
+    // arrange
+    const message = { id: 'id-1', name: 'TestEvent', headers: {} };
+
+    // act
+    await telemetry.receive(destination, (batch) =>
+      telemetry.process(destination, { ...message, batch }, () =>
+        Promise.resolve(),
+      ),
+    );
+
+    // assert
+    const spans = exporter.getFinishedSpans();
+    const receive = spans.find((s) => s.name === 'receive events')!;
+    const process = spans.find((s) => s.name === 'process events')!;
+
+    expect(process.links.map((l) => l.context.spanId)).toEqual([
+      receive.spanContext().spanId,
+    ]);
+  });
+
+  it('keeps the sending span as the parent of a linked process span', async () => {
+    // arrange
+    const headers: Record<string, string> = {};
+
+    await telemetry.send(
+      destination,
+      [{ id: 'id-1', name: 'TestEvent', headers }],
+      () => Promise.resolve(),
+    );
+
+    // act
+    await telemetry.receive(destination, (batch) =>
+      telemetry.process(
+        destination,
+        { id: 'id-1', name: 'TestEvent', headers, batch },
+        () => Promise.resolve(),
+      ),
+    );
+
+    // assert
+    const spans = exporter.getFinishedSpans();
+    const send = spans.find((s) => s.name === 'send events')!;
+    const process = spans.find((s) => s.name === 'process events')!;
+
+    expect(process.parentSpanContext?.spanId).toBe(send.spanContext().spanId);
+  });
+
+  it('does not link a process span without a batch', async () => {
+    // arrange
+    const message = { id: 'id-1', name: 'TestEvent', headers: {} };
+
+    // act
+    await telemetry.process(destination, message, () => Promise.resolve());
+
+    // assert
+    expect(exporter.getFinishedSpans()[0]!.links).toEqual([]);
+  });
+
   it('throws when it is not initialized', () => {
     // arrange
     const uninitialized = new BusOtel({});

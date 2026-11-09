@@ -1,3 +1,9 @@
+/** A batch of messages pulled from the broker, which process spans link to. */
+export interface TelemetryBatch {
+  /** Records how many messages the broker returned. */
+  setSize(size: number): void;
+}
+
 export interface TelemetryMessage {
   id: string;
   /** Event name. */
@@ -13,6 +19,8 @@ export interface TelemetryMessage {
   attempt?: number;
   /** Attributes specific to the transport that differ per message. */
   attributes?: Record<string, string | number>;
+  /** Batch the message was received in. */
+  batch?: TelemetryBatch;
 }
 
 export interface TelemetryServer {
@@ -23,6 +31,12 @@ export interface TelemetryServer {
 export interface TelemetryDestination {
   /** Messaging system, e.g. `rabbitmq` or `redis`. */
   system?: string;
+  /**
+   * What the operation is called, when it isn't the plain `create`, `send`,
+   * `receive` or `process`, e.g. `reclaim` for a receive that takes over the
+   * messages of other consumers. Its type stays the generic one.
+   */
+  operation?: string;
   /**
    * Exchange, queue or stream the message goes to or comes from. Left out
    * when there is none, e.g. while an outbox stores the message.
@@ -53,6 +67,16 @@ export interface Telemetry {
     destination: TelemetryDestination,
     messages: TelemetryMessage[],
     fn: () => Promise<T>,
+  ): Promise<T>;
+
+  /**
+   * Wraps pulling a batch of messages from the broker. `fn` gets the batch
+   * before the pull, so it can record the size and hand the batch on to the
+   * messages it received.
+   */
+  receive<T>(
+    destination: TelemetryDestination,
+    fn: (batch: TelemetryBatch) => Promise<T>,
   ): Promise<T>;
 
   /** Wraps one handler processing a message. */
