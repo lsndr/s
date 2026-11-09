@@ -1,5 +1,6 @@
 import {
   type Telemetry,
+  type TelemetryBatch,
   type TelemetryDestination,
   type TelemetryMessage,
 } from './telemetry.js';
@@ -20,6 +21,13 @@ export class NoopTelemetry implements Telemetry {
     fn: () => Promise<T>,
   ): Promise<T> {
     return fn();
+  }
+
+  public receive<T>(
+    _destination: TelemetryDestination,
+    fn: (batch: TelemetryBatch) => Promise<T>,
+  ): Promise<T> {
+    return fn({ setSize: () => undefined });
   }
 
   public process<T>(

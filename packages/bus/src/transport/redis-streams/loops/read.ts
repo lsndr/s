@@ -1,5 +1,9 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Logger } from '@nestjs/common';
+import {
+  type Telemetry,
+  type TelemetryServer,
+} from '../../../telemetry/telemetry.js';
 import { type Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { type Streams } from '../streams.js';
@@ -15,6 +19,8 @@ export interface ReadLoopOptions {
   batchSize: number;
   /** How long a read blocks waiting for new entries, in milliseconds. */
   blockTimeout: number;
+  /** Redis server, which telemetry reports. */
+  server?: TelemetryServer;
 }
 
 /**
@@ -33,20 +39,37 @@ export class ReadLoop implements Loop, OnTransportShutdown {
     private readonly clients: Clients<'read' | 'command'>,
     private readonly streams: Streams,
     private readonly processor: Processor,
+    private readonly telemetry: Telemetry,
     private readonly options: ReadLoopOptions,
   ) {}
 
   public async next(signal: AbortSignal): Promise<void> {
-    const { streams, processor } = this;
-    const reply = await this.read(signal);
+    const { streams, processor, telemetry } = this;
+    const { group, consumer, server } = this.options;
 
-    for (const { name, messages } of reply) {
-      for (const entry of messages) {
-        streams.run(String(name), String(entry.id), (stream) =>
-          processor.process(stream, { ...entry, id: String(entry.id) }, 1),
+    await telemetry.receive(
+      { system: 'redis', consumerGroup: group, clientId: consumer, server },
+      async (batch) => {
+        const reply = await this.read(signal);
+
+        batch.setSize(
+          reply.reduce((total, { messages }) => total + messages.length, 0),
         );
-      }
-    }
+
+        for (const { name, messages } of reply) {
+          for (const entry of messages) {
+            streams.run(String(name), String(entry.id), (stream) =>
+              processor.process(
+                stream,
+                { ...entry, id: String(entry.id) },
+                1,
+                batch,
+              ),
+            );
+          }
+        }
+      },
+    );
   }
 
   public async onTransportShutdown(): Promise<void> {

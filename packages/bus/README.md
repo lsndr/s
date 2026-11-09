@@ -359,12 +359,13 @@ BusModule.forRoot({
 ```
 
 - Publishing creates a `send <destination>` producer span and injects the trace context (`traceparent`, `tracestate`) into the message headers: AMQP headers on RabbitMQ, a `headers` field of the entry on Redis Streams.
-- Every handler that processes a message gets a `process <destination>` consumer span, a child of the sending span, and runs inside it, so your own spans nest under it. A failing handler marks its span as an error.
+- On Redis Streams, every batch of entries pulled from Redis gets a `receive` client span, with the number of entries as `messaging.batch.message_count`: the read of new entries and the claim of entries to retry each get one per round, and reads that return nothing get one too. The read span has no destination name, because it also covers the wait for a free slot, which is when the streams to read are chosen. The claim span is named `reclaim <stream>` (its `messaging.operation.type` is still `receive`), and every stream gets one per round.
+- Every handler that processes a message gets a `process <destination>` consumer span, a child of the sending span, and runs inside it, so your own spans nest under it. On Redis Streams it also links to the `receive` span of the batch that delivered the message, which says which pull it came from without moving it out of the trace of the request. A failing handler marks its span as an error.
 - With an [outbox](#outbox), storing an event creates a `create <event>` span (with `messaging.system.name` set to `outbox` and no destination) and its context is kept with the record. The `send` span made when the record is relayed is its child, so the relay and the consumers stay in the trace of the request.
 
 Spans carry the attributes the conventions require or recommend, including the broker as `server.address` and `server.port`. `process` spans also have `bus.delivery.attempt`, which is 1 for the first try and grows with every retry, so a retried message can be told from its first delivery. On RabbitMQ the destination is `<exchange>:<routing key>` when sending and the queue when processing.
 
-Provide your own `Telemetry` (`create`, `send` and `process`, each wrapping a function) to plug in something else.
+Every operation can be renamed with `operation` in the destination (`reclaim` is one, `messaging.operation.type` keeps the generic value). Provide your own `Telemetry` (`create`, `send`, `receive` and `process`, each wrapping a function) to plug in something else.
 
 ## Configuration
 

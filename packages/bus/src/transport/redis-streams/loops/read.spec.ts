@@ -10,6 +10,7 @@ import {
 import { GenericContainer, Wait } from 'testcontainers';
 import { createClient, type RedisClientType } from 'redis';
 import { Logger } from '@nestjs/common';
+import { NoopTelemetry } from '../../../telemetry/noop.telemetry.js';
 import { Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { Handler } from '../handler.js';
@@ -56,15 +57,18 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
       (..._args: Parameters<Processor['process']>): Promise<void> =>
         Promise.resolve(),
     );
+    const telemetry = new NoopTelemetry();
     const loop = new ReadLoop(
       clients,
       streams,
       { process } as unknown as Processor,
+      telemetry,
       { group, consumer, batchSize, blockTimeout },
     );
 
     return {
       loop,
+      telemetry,
       streams,
       process,
       group,
@@ -136,6 +140,56 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
     }
   });
 
+  describe('telemetry', () => {
+    it('reads inside a receive of the consumer group', async () => {
+      // arrange
+      const { next, telemetry, group, consumer } = await setup();
+      const receive = vi.spyOn(telemetry, 'receive');
+
+      // act
+      await next();
+
+      // assert
+      expect(receive.mock.calls[0]![0]).toMatchObject({
+        system: 'redis',
+        consumerGroup: group,
+        clientId: consumer,
+      });
+    });
+
+    it('records how many entries were received', async () => {
+      // arrange
+      const { next, add, telemetry, names } = await setup();
+      const [name] = names as [string];
+      const batch = { setSize: vi.fn() };
+
+      vi.spyOn(telemetry, 'receive').mockImplementation((_d, fn) => fn(batch));
+      await add(name, 3);
+
+      // act
+      await next();
+
+      // assert
+      expect(batch.setSize).toHaveBeenCalledWith(3);
+    });
+
+    it('hands the batch on to the processed entries', async () => {
+      // arrange
+      const { next, add, telemetry, process, names } = await setup();
+      const [name] = names as [string];
+      const batch = { setSize: vi.fn() };
+
+      vi.spyOn(telemetry, 'receive').mockImplementation((_d, fn) => fn(batch));
+      await add(name);
+
+      // act
+      await next();
+
+      // assert
+      expect(process.mock.calls[0]![3]).toBe(batch);
+    });
+  });
+
   describe('reading', () => {
     it('runs every new entry with the first attempt', async () => {
       // arrange
@@ -152,11 +206,13 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
         streamOf(name),
         { id: ids[0], message: { payload: Buffer.from('0') } },
         1,
+        expect.anything(),
       );
       expect(process).toHaveBeenCalledWith(
         streamOf(name),
         { id: ids[1], message: { payload: Buffer.from('1') } },
         1,
+        expect.anything(),
       );
     });
 
@@ -178,11 +234,13 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
         streamOf(a),
         expect.objectContaining({ id: idA }),
         1,
+        expect.anything(),
       );
       expect(process).toHaveBeenCalledWith(
         streamOf(b),
         expect.objectContaining({ id: idB }),
         1,
+        expect.anything(),
       );
     });
 
@@ -244,6 +302,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
         streamOf(free),
         expect.objectContaining({ id: idFree }),
         1,
+        expect.anything(),
       );
       expect(await pending(full)).toHaveLength(1);
       expect(await pending(full)).not.toContainEqual(
@@ -277,6 +336,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
         streamOf(name),
         expect.objectContaining({ id }),
         1,
+        expect.anything(),
       );
     });
   });

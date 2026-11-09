@@ -245,18 +245,20 @@ export class RedisStreamsTransport
     });
 
     this.loops = new Loops([
-      new ReadLoop(clients, streams, processor, {
+      new ReadLoop(clients, streams, processor, telemetry, {
         group,
         consumer,
         batchSize: concurrency,
         blockTimeout,
+        server: this.server,
       }),
-      new ReclaimLoop(clients, streams, processor, {
+      new ReclaimLoop(clients, streams, processor, telemetry, {
         group,
         consumer,
         batchSize: concurrency,
         retriesDelay,
         reclaimInterval,
+        server: this.server,
       }),
       new RefreshLoop(clients, streams, { group, consumer, retriesDelay }),
       new StaleConsumersLoop(clients, streams, {

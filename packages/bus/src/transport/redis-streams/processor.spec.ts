@@ -216,6 +216,23 @@ describe('Processor', { timeout: 60_000 }, () => {
       expect(process.mock.calls[0]![1].attempt).toBe(3);
     });
 
+    it('reports the batch the entry was received in', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const process = vi.spyOn(telemetry, 'process');
+      const batch = { setSize: vi.fn() };
+      const { stream, entry, options } = await setup({
+        handlers: { A: vi.fn() },
+      });
+      const processor = new Processor(clients, serializer, telemetry, options);
+
+      // act
+      await processor.process(stream, entry, 1, batch);
+
+      // assert
+      expect(process.mock.calls[0]![1].batch).toBe(batch);
+    });
+
     it('reports the size of the payload', async () => {
       // arrange
       const telemetry = new NoopTelemetry();

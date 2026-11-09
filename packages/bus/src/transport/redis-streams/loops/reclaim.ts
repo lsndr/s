@@ -1,4 +1,9 @@
 import { Logger } from '@nestjs/common';
+import {
+  type Telemetry,
+  type TelemetryBatch,
+  type TelemetryServer,
+} from '../../../telemetry/telemetry.js';
 import { type Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { type Streams } from '../streams.js';
@@ -12,6 +17,8 @@ export interface ReclaimLoopOptions {
   retriesDelay: number;
   /** How often pending entries are checked, in milliseconds. */
   reclaimInterval: number;
+  /** Redis server, which telemetry reports. */
+  server?: TelemetryServer;
 }
 
 export class ReclaimLoop implements Loop {
@@ -21,6 +28,7 @@ export class ReclaimLoop implements Loop {
     private readonly clients: Clients<'command'>,
     private readonly streams: Streams,
     private readonly processor: Processor,
+    private readonly telemetry: Telemetry,
     private readonly options: ReclaimLoopOptions,
   ) {}
 
@@ -30,58 +38,28 @@ export class ReclaimLoop implements Loop {
   }
 
   public async next(signal: AbortSignal): Promise<void> {
-    const { clients, streams, processor } = this;
-    const { group, consumer, batchSize, retriesDelay } = this.options;
+    const { telemetry } = this;
+    const { group, consumer, server } = this.options;
 
-    for (const { name: stream } of streams.all()) {
+    for (const { name: stream } of this.streams.all()) {
       if (signal.aborted) {
         return;
       }
 
       try {
-        const client = await clients.get('command');
-        const pending = await client.xPendingRange(
-          stream,
-          group,
-          '-',
-          '+',
-          batchSize,
-          { IDLE: retriesDelay },
+        await telemetry.receive(
+          {
+            system: 'redis',
+            operation: 'reclaim',
+            name: stream,
+            consumerGroup: group,
+            clientId: consumer,
+            server,
+          },
+          async (batch) => {
+            batch.setSize(await this.reclaim(stream, signal, batch));
+          },
         );
-        const deliveries = new Map(
-          pending
-            .filter(({ id }) => !streams.isInflight(stream, id))
-            .map((entry) => [entry.id, entry.deliveriesCounter]),
-        );
-
-        if (deliveries.size === 0) {
-          continue;
-        }
-
-        // claiming counts as a delivery, so don't claim what will not run
-        if (signal.aborted) {
-          return;
-        }
-
-        const binaryClient = await clients.getBinary('command');
-        const claimed = await binaryClient.xClaim(
-          stream,
-          group,
-          consumer,
-          retriesDelay,
-          [...deliveries.keys()],
-        );
-
-        for (const entry of claimed) {
-          if (entry && !signal.aborted) {
-            const id = String(entry.id);
-            const attempt = (deliveries.get(id) ?? 0) + 1;
-
-            streams.run(stream, id, (current) =>
-              processor.process(current, { ...entry, id }, attempt),
-            );
-          }
-        }
       } catch (err) {
         if (signal.aborted) {
           return;
@@ -93,5 +71,53 @@ export class ReclaimLoop implements Loop {
         );
       }
     }
+  }
+
+  private async reclaim(
+    stream: string,
+    signal: AbortSignal,
+    batch: TelemetryBatch,
+  ): Promise<number> {
+    const { clients, streams, processor } = this;
+    const { group, consumer, batchSize, retriesDelay } = this.options;
+    const client = await clients.get('command');
+    const pending = await client.xPendingRange(
+      stream,
+      group,
+      '-',
+      '+',
+      batchSize,
+      { IDLE: retriesDelay },
+    );
+    const deliveries = new Map(
+      pending
+        .filter(({ id }) => !streams.isInflight(stream, id))
+        .map((entry) => [entry.id, entry.deliveriesCounter]),
+    );
+
+    // claiming counts as a delivery, so don't claim what will not run
+    if (deliveries.size === 0 || signal.aborted) {
+      return 0;
+    }
+
+    const binaryClient = await clients.getBinary('command');
+    const claimed = (
+      await binaryClient.xClaim(stream, group, consumer, retriesDelay, [
+        ...deliveries.keys(),
+      ])
+    ).filter((entry) => entry !== null);
+
+    for (const entry of claimed) {
+      if (!signal.aborted) {
+        const id = String(entry.id);
+        const attempt = (deliveries.get(id) ?? 0) + 1;
+
+        streams.run(stream, id, (current) =>
+          processor.process(current, { ...entry, id }, attempt, batch),
+        );
+      }
+    }
+
+    return claimed.length;
   }
 }
