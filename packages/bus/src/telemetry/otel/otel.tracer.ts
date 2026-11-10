@@ -6,7 +6,7 @@ import {
   type TelemetryMessage,
   type TelemetryTracer,
 } from '../telemetry.js';
-import { getErrorType } from './error-type.js';
+import { getErrorType } from '../error-type.js';
 
 export interface OtelTracerConfig {
   tracerProvider?: OtelApi.TracerProvider;

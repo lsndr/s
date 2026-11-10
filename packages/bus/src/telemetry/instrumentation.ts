@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { toMetricAttributes } from './attributes.js';
+import { getErrorType } from './error-type.js';
 import {
   type Telemetry,
   type TelemetryBatch,
@@ -15,6 +16,10 @@ import {
 
 /** How a delivery ended: handled, left for a retry, or given up on. */
 export type Settlement = 'acked' | 'retried' | 'dropped';
+
+const DURATION_BOUNDARIES = [
+  0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10,
+];
 
 /** Wider than the ones for durations: a backlog delays messages for long. */
 const LATENCY_BOUNDARIES = [
@@ -39,7 +44,12 @@ interface Instruments {
   meter: TelemetryMeter;
   settled: TelemetryCounter;
   latency: TelemetryHistogram;
+  relayDuration: TelemetryHistogram;
+  relayed: TelemetryCounter;
+  relayLatency: TelemetryHistogram;
 }
+
+const OUTBOX = { 'messaging.system.name': 'outbox' };
 
 /**
  * Drives the tracer and the meter of a telemetry together, so a transport
@@ -131,6 +141,59 @@ export class Instrumentation {
     );
   }
 
+  /** Wraps one round of an outbox relay, whether it found records or not. */
+  public async relay<T>(fn: () => Promise<T>): Promise<T> {
+    const start = performance.now();
+    let failure: { 'error.type': string } | undefined;
+
+    try {
+      return await fn();
+    } catch (error) {
+      failure = { 'error.type': getErrorType(error) };
+
+      throw error;
+    } finally {
+      const duration = (performance.now() - start) / 1000;
+
+      this.record(({ relayDuration }) =>
+        relayDuration.record(duration, { ...OUTBOX, ...failure }),
+      );
+    }
+  }
+
+  /**
+   * Wraps an outbox handing records over to its transport. `publishedAt` is
+   * when each record was stored.
+   */
+  public async dispatch<T>(
+    publishedAt: Date[],
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    let failure: { 'error.type': string } | undefined;
+
+    try {
+      const result = await fn();
+      const now = Date.now();
+
+      this.record(({ relayLatency }) => {
+        for (const date of publishedAt) {
+          // the clock that stored the record can be ahead of this one
+          relayLatency.record(Math.max(0, now - date.getTime()) / 1000, OUTBOX);
+        }
+      });
+
+      return result;
+    } catch (error) {
+      failure = { 'error.type': getErrorType(error) };
+
+      throw error;
+    } finally {
+      this.record(({ relayed }) =>
+        relayed.add(publishedAt.length, { ...OUTBOX, ...failure }),
+      );
+    }
+  }
+
   public gauge(
     name: string,
     options: TelemetryInstrumentOptions,
@@ -164,6 +227,22 @@ export class Instrumentation {
         latency: meter.histogram('bus.delivery.latency', {
           description:
             'Time from publishing a message to the start of its processing.',
+          unit: 's',
+          boundaries: LATENCY_BOUNDARIES,
+        }),
+        relayDuration: meter.histogram('bus.outbox.relay.duration', {
+          description: 'Duration of one round of an outbox relay.',
+          unit: 's',
+          boundaries: DURATION_BOUNDARIES,
+        }),
+        relayed: meter.counter('bus.outbox.relayed.messages', {
+          description:
+            'Number of records an outbox tried to hand to its transport.',
+          unit: '{message}',
+        }),
+        relayLatency: meter.histogram('bus.outbox.relay.latency', {
+          description:
+            'Time a record waited in an outbox before it was relayed.',
           unit: 's',
           boundaries: LATENCY_BOUNDARIES,
         }),

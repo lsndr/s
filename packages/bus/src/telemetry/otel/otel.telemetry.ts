@@ -1,6 +1,5 @@
 import type * as OtelApi from '@opentelemetry/api';
 import { Inject } from '@nestjs/common';
-import packageJson from '../../../package.json' with { type: 'json' };
 import { type BusProvider } from '../../provider.js';
 import { type OnBusInit } from '../../lifecycle.js';
 import {
@@ -46,17 +45,12 @@ export class BusOtel implements Telemetry, OnBusInit {
     const { tracerProvider, meterProvider, propagator } = this.config;
 
     this.tracer = new OtelTracer(api, { tracerProvider, propagator });
-    this.meter = new OtelMeter(
-      (meterProvider ?? api.metrics).getMeter(
-        packageJson.name,
-        packageJson.version,
-      ),
-    );
+    this.meter = new OtelMeter(api, { meterProvider });
   }
 
   public getTracer(): TelemetryTracer {
     if (!this.tracer) {
-      throw new Error('BusOtel is not initialized, call onBusInit first');
+      throw new Error('BusOtel is not initialized');
     }
 
     return this.tracer;
@@ -64,7 +58,7 @@ export class BusOtel implements Telemetry, OnBusInit {
 
   public getMeter(): TelemetryMeter {
     if (!this.meter) {
-      throw new Error('BusOtel is not initialized, call onBusInit first');
+      throw new Error('BusOtel is not initialized');
     }
 
     return this.meter;

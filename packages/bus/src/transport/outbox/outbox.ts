@@ -141,21 +141,25 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   }
 
   protected async dispatch(records: OutboxRecord[]): Promise<void> {
-    await Promise.all(
-      records.map((record) => {
-        const { event, meta, publishedAt } = this.serializer.deserialize(
-          Object,
-          record.data,
-        );
+    await this.getInstrumentation().dispatch(
+      records.map(({ publishedAt }) => publishedAt),
+      () =>
+        Promise.all(
+          records.map((record) => {
+            const { event, meta, publishedAt } = this.serializer.deserialize(
+              Object,
+              record.data,
+            );
 
-        return this.transport.publish(event, {
-          id: record.id,
-          name: record.name,
-          meta,
-          publishedAt,
-          headers: record.headers,
-        });
-      }),
+            return this.transport.publish(event, {
+              id: record.id,
+              name: record.name,
+              meta,
+              publishedAt,
+              headers: record.headers,
+            });
+          }),
+        ),
     );
   }
 
@@ -166,7 +170,7 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
       let relayed = 0;
 
       try {
-        relayed = await this.relay();
+        relayed = await this.getInstrumentation().relay(() => this.relay());
       } catch (err) {
         this.logger.error(
           `Failed to relay outbox records: ${String(err)}`,

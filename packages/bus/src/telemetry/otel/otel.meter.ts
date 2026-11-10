@@ -1,4 +1,5 @@
 import type * as OtelApi from '@opentelemetry/api';
+import packageJson from '../../../package.json' with { type: 'json' };
 import { toMetricAttributes } from '../attributes.js';
 import {
   type TelemetryAttributes,
@@ -13,7 +14,11 @@ import {
   type TelemetryMeter,
   type TelemetryObservation,
 } from '../telemetry.js';
-import { getErrorType } from './error-type.js';
+import { getErrorType } from '../error-type.js';
+
+export interface OtelMeterConfig {
+  meterProvider?: OtelApi.MeterProvider;
+}
 
 type Operation = 'create' | 'send' | 'receive' | 'process';
 
@@ -32,12 +37,19 @@ class OtelBatch implements TelemetryBatch {
 
 // https://opentelemetry.io/docs/specs/semconv/messaging/messaging-metrics/
 export class OtelMeter implements TelemetryMeter {
+  private readonly meter: OtelApi.Meter;
   private readonly operationDuration: OtelApi.Histogram;
   private readonly processDuration: OtelApi.Histogram;
   private readonly sentMessages: OtelApi.Counter;
   private readonly consumedMessages: OtelApi.Counter;
 
-  public constructor(private readonly meter: OtelApi.Meter) {
+  public constructor(api: typeof OtelApi, config: OtelMeterConfig) {
+    const meter = (config.meterProvider ?? api.metrics).getMeter(
+      packageJson.name,
+      packageJson.version,
+    );
+
+    this.meter = meter;
     this.operationDuration = meter.createHistogram(
       'messaging.client.operation.duration',
       {
