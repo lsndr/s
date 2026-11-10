@@ -377,11 +377,20 @@ The metrics of the bus:
 | ----------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bus.client.settled.messages` | counter      | How a delivery ended, as `bus.settlement.outcome`: `acked` (handled), `retried` (failed, will be delivered again) or `dropped` (failed with no retries left). On Redis Streams one entry is settled for all its handlers. |
 | `bus.delivery.latency`        | histogram, s | Time from `publishedAt` to the start of the first processing, so it includes the wait in an outbox. Retries are not recorded. It compares the clocks of the publisher and the consumer.                                   |
+| `bus.outbox.relay.latency`    | histogram, s | Time a record waited in an [outbox](#outbox), from `publishedAt` to its relay. Only relayed records are recorded.                                                                                                         |
+| `bus.outbox.relayed.messages` | counter      | Records an outbox handed to `dispatch`, with `error.type` when the dispatch failed. Records of a failed dispatch are counted again when they are retried.                                                                 |
+| `bus.outbox.relay.duration`   | histogram, s | Duration of one `relay` round, the ones that find nothing included, with `error.type` when it failed.                                                                                                                     |
 | `bus.redis.stream.inflight`   | gauge        | Entries of a stream this instance is processing, which `concurrency` limits.                                                                                                                                              |
 | `bus.redis.stream.pending`    | gauge        | Entries of a stream delivered to the group and not acknowledged: in flight on any instance or waiting for a retry.                                                                                                        |
 | `bus.redis.stream.lag`        | gauge        | Entries of a stream not delivered to the group yet. Left out while Redis can't tell.                                                                                                                                      |
 
 `pending` and `lag` describe the whole group, so every instance reports the same value: aggregate them with a maximum, not a sum. They cost one `XINFO GROUPS` per stream on every collection.
+
+### Dashboard
+
+[`dashboards/bus.json`](dashboards/bus.json) is a Grafana dashboard of these metrics: throughput, durations, failures, the Redis Streams backlog and the outbox. Import it in Grafana and pick a Prometheus data source. It is not part of the published package.
+
+It expects the names Prometheus gives OpenTelemetry metrics, with the unit as a suffix: `messaging.process.duration` is `messaging_process_duration_seconds`, counters end in `_total`, and the service is the `job` label.
 
 ### Custom telemetry
 
