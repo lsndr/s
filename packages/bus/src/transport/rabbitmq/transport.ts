@@ -192,11 +192,10 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
             }
           },
         )
-        // ack and nack throw on a closed channel, e.g. when the handler
-        // outlives a shutdown. The broker then delivers the message again
         .catch((err) => {
           this.logger.warn(
             `Failed to settle event ${event.name}, the broker delivers it again: ${String(err)}`,
+            err instanceof Error ? err.stack : undefined,
           );
         });
     };

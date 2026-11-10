@@ -85,7 +85,9 @@ describe('RabbitmqTransport', { timeout: 60_000 }, () => {
     finish();
 
     // assert
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(settleWarning));
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(settleWarning, expect.any(String)),
+    );
   });
 
   it('warns when a failed message cannot be retried after a shutdown', async () => {
@@ -98,7 +100,9 @@ describe('RabbitmqTransport', { timeout: 60_000 }, () => {
     finish(new Error('boom'));
 
     // assert
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(settleWarning));
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(settleWarning, expect.any(String)),
+    );
   });
 
   it('warns when a dropped message cannot be acked after a shutdown', async () => {
@@ -111,6 +115,8 @@ describe('RabbitmqTransport', { timeout: 60_000 }, () => {
     finish(new Error('boom'));
 
     // assert
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(settleWarning));
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(settleWarning, expect.any(String)),
+    );
   });
 });
