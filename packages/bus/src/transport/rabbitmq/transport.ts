@@ -167,28 +167,37 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
             async () => callback(payload),
           );
         })
-        .then(() => {
-          channel.ack(message);
+        .then(
+          () => {
+            channel.ack(message);
 
-          this.logger.log(`Event ${event.name} handled successfully`);
-        })
-        .catch((err) => {
-          const retryCount = this.getRetryCount(message);
+            this.logger.log(`Event ${event.name} handled successfully`);
+          },
+          (err) => {
+            const retryCount = this.getRetryCount(message);
 
-          this.logger.error(
-            `Error handling event ${event.name} (retryCount: ${retryCount}): ${String(err)}`,
-            err instanceof Error ? err.stack : undefined,
-          );
-
-          if (retryCount >= this.getRetries().max) {
             this.logger.error(
-              `Event ${event.name} failed permanently after ${retryCount} retries: ${String(err)}`,
+              `Error handling event ${event.name} (retryCount: ${retryCount}): ${String(err)}`,
               err instanceof Error ? err.stack : undefined,
             );
-            channel.ack(message);
-          } else {
-            channel.nack(message, false, false);
-          }
+
+            if (retryCount >= this.getRetries().max) {
+              this.logger.error(
+                `Event ${event.name} failed permanently after ${retryCount} retries: ${String(err)}`,
+                err instanceof Error ? err.stack : undefined,
+              );
+              channel.ack(message);
+            } else {
+              channel.nack(message, false, false);
+            }
+          },
+        )
+        // ack and nack throw on a closed channel, e.g. when the handler
+        // outlives a shutdown. The broker then delivers the message again
+        .catch((err) => {
+          this.logger.warn(
+            `Failed to settle event ${event.name}, the broker delivers it again: ${String(err)}`,
+          );
         });
     };
 
