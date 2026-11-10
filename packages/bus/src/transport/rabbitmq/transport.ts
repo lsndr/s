@@ -181,29 +181,37 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
             async () => callback(payload),
           );
         })
-        .then(() => {
-          channel.ack(message);
-          this.instrumentation.settle(destination, 'acked');
+        .then(
+          () => {
+            channel.ack(message);
+            this.instrumentation.settle(destination, 'acked');
 
-          this.logger.log(`Event ${event.name} handled successfully`);
-        })
-        .catch((err) => {
-          this.logger.error(
-            `Error handling event ${event.name} (retryCount: ${retryCount}): ${String(err)}`,
-            err instanceof Error ? err.stack : undefined,
-          );
-
-          if (retryCount >= this.getRetries().max) {
+            this.logger.log(`Event ${event.name} handled successfully`);
+          },
+          (err) => {
             this.logger.error(
-              `Event ${event.name} failed permanently after ${retryCount} retries: ${String(err)}`,
+              `Error handling event ${event.name} (retryCount: ${retryCount}): ${String(err)}`,
               err instanceof Error ? err.stack : undefined,
             );
-            channel.ack(message);
-            this.instrumentation.settle(destination, 'dropped');
-          } else {
-            channel.nack(message, false, false);
-            this.instrumentation.settle(destination, 'retried');
-          }
+
+            if (retryCount >= this.getRetries().max) {
+              this.logger.error(
+                `Event ${event.name} failed permanently after ${retryCount} retries: ${String(err)}`,
+                err instanceof Error ? err.stack : undefined,
+              );
+              channel.ack(message);
+              this.instrumentation.settle(destination, 'dropped');
+            } else {
+              channel.nack(message, false, false);
+              this.instrumentation.settle(destination, 'retried');
+            }
+          },
+        )
+        .catch((err) => {
+          this.logger.warn(
+            `Failed to settle event ${event.name}, the broker delivers it again: ${String(err)}`,
+            err instanceof Error ? err.stack : undefined,
+          );
         });
     };
 

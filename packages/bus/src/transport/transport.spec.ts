@@ -377,10 +377,8 @@ describe('Transport', { timeout: 60_000 }, () => {
 
     describe('telemetry', () => {
       /**
-       * Every queue also gets what later tests publish, and a message that is
-       * still retrying at teardown is settled on a closed channel. So the
-       * handler only fails the event of its own test, and these tests run
-       * before the retry tests, whose handlers fail every event.
+       * Every queue also gets what later tests publish, so the handler only
+       * fails the event of its own test.
        */
       async function setupSettlement(
         retries: CommonConfig['retries'],
