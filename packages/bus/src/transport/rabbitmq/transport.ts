@@ -14,8 +14,13 @@ import {
   type SerializedMessage,
   Serializer,
 } from '../../serialization/serializer.js';
-import { Telemetry, type TelemetryServer } from '../../telemetry/telemetry.js';
+import {
+  Telemetry,
+  type TelemetryDestination,
+  type TelemetryServer,
+} from '../../telemetry/telemetry.js';
 import { parseServer } from '../../telemetry/server.js';
+import { Instrumentation } from '../../telemetry/instrumentation.js';
 
 export interface RabbitmqTransportConfig {
   url: string;
@@ -47,6 +52,7 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
   private channel?: ConfirmChannel;
   private readonly logger = new Logger(RabbitmqTransport.name);
   private readonly server?: TelemetryServer;
+  private readonly instrumentation: Instrumentation;
 
   public constructor(
     @Inject(RabbitmqTransportConfigToken)
@@ -54,8 +60,9 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     @Inject(Serializer)
     private readonly serializer: Serializer,
     @Inject(Telemetry)
-    private readonly telemetry: Telemetry,
+    telemetry: Telemetry,
   ) {
+    this.instrumentation = new Instrumentation(telemetry);
     this.server = parseServer(config.url, { 'amqp:': 5672, 'amqps:': 5671 });
   }
 
@@ -104,7 +111,7 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
       headers,
     } = this.serializer.serialize(event, options);
 
-    return this.telemetry.send(
+    return this.instrumentation.send(
       {
         system: 'rabbitmq',
         name: `${this.exchange}:${eventName}`,
@@ -134,29 +141,36 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
 
       this.logger.log(`Received message for event ${event.name}`);
 
+      const { routingKey, deliveryTag, consumerTag } = message.fields;
+      const retryCount = this.getRetryCount(message);
+      const destination: TelemetryDestination = {
+        system: 'rabbitmq',
+        name: queue,
+        consumerGroup: this.config.group,
+        subscription: handlerName,
+        clientId: consumerTag,
+        server: this.server,
+      };
+
       Promise.resolve()
         .then(() => {
           const payload = this.serializer.deserialize(event, message.content);
 
           this.logger.verbose(`Event ${event.name} (${payload.id}):`, payload);
 
-          const { routingKey, deliveryTag, consumerTag } = message.fields;
+          // a retry would only measure the delay between the retries
+          if (retryCount === 0) {
+            this.instrumentation.deliver(destination, payload.publishedAt);
+          }
 
-          return this.telemetry.process(
-            {
-              system: 'rabbitmq',
-              name: queue,
-              consumerGroup: this.config.group,
-              subscription: handlerName,
-              clientId: consumerTag,
-              server: this.server,
-            },
+          return this.instrumentation.process(
+            destination,
             {
               id: payload.id,
               name: event.name,
               headers: this.toStringHeaders(message),
               bodySize: message.content.length,
-              attempt: this.getRetryCount(message) + 1,
+              attempt: retryCount + 1,
               attributes: {
                 ...(routingKey && {
                   'rabbitmq.destination.routing_key': routingKey,
@@ -169,12 +183,11 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
         })
         .then(() => {
           channel.ack(message);
+          this.instrumentation.settle(destination, 'acked');
 
           this.logger.log(`Event ${event.name} handled successfully`);
         })
         .catch((err) => {
-          const retryCount = this.getRetryCount(message);
-
           this.logger.error(
             `Error handling event ${event.name} (retryCount: ${retryCount}): ${String(err)}`,
             err instanceof Error ? err.stack : undefined,
@@ -186,8 +199,10 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
               err instanceof Error ? err.stack : undefined,
             );
             channel.ack(message);
+            this.instrumentation.settle(destination, 'dropped');
           } else {
             channel.nack(message, false, false);
+            this.instrumentation.settle(destination, 'retried');
           }
         });
     };

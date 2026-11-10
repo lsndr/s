@@ -37,9 +37,19 @@ export { type EventPayload } from './types.js';
 export { type EventHandlerMiddleware } from './middleware/middleware.js';
 export {
   Telemetry,
+  type TelemetryAttributes,
   type TelemetryBatch,
+  type TelemetryCounter,
   type TelemetryDestination,
+  type TelemetryGauge,
+  type TelemetryHistogram,
+  type TelemetryHistogramOptions,
+  type TelemetryInstrumentOptions,
   type TelemetryMessage,
+  type TelemetryMeter,
+  type TelemetryObservation,
+  type TelemetryServer,
+  type TelemetryTracer,
 } from './telemetry/telemetry.js';
 export { NoopTelemetry } from './telemetry/noop.telemetry.js';
 export {

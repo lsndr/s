@@ -1,4 +1,5 @@
 import { NoopTelemetry } from '../../telemetry/noop.telemetry.js';
+import { type Telemetry } from '../../telemetry/telemetry.js';
 import { hostname } from 'node:os';
 import { Logger } from '@nestjs/common';
 import { createClient, type RedisClientType } from 'redis';
@@ -57,6 +58,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
    */
   async function createTransport(
     config: Partial<RedisStreamsTransportConfig> = {},
+    telemetry: Telemetry = new NoopTelemetry(),
   ) {
     const group = config.group ?? `group:${crypto.randomUUID()}`;
     const keyPrefix = config.keyPrefix ?? `${crypto.randomUUID()}:`;
@@ -70,7 +72,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
         keyPrefix,
       } satisfies RedisStreamsTransportConfig,
       serializer,
-      new NoopTelemetry(),
+      telemetry,
     );
 
     transports.push(transport);
@@ -118,6 +120,68 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
     for (const transport of transports.splice(0)) {
       await shutdown(transport);
     }
+  });
+
+  describe('gauges', () => {
+    it('observes the backlog of a subscribed stream', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const gauge = vi.spyOn(telemetry.getMeter(), 'gauge');
+      const { transport, stream, group } = await createTransport({}, telemetry);
+
+      await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+      await transport.publish(new FirstEvent('x'));
+
+      const observe = gauge.mock.calls.find(
+        ([name]) => name === 'bus.redis.stream.lag',
+      )![2];
+
+      // act
+      const observations = await observe();
+
+      // assert
+      expect(observations).toEqual([
+        {
+          value: 1,
+          attributes: expect.objectContaining({
+            'messaging.destination.name': stream(FirstEvent),
+            'messaging.consumer.group.name': group,
+          }),
+        },
+      ]);
+    });
+
+    it('registers a gauge for the entries in flight, pending and lagging', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const gauge = vi.spyOn(telemetry.getMeter(), 'gauge');
+
+      // act
+      await createTransport({}, telemetry);
+
+      // assert
+      expect(gauge.mock.calls.map(([name]) => name)).toEqual([
+        'bus.redis.stream.inflight',
+        'bus.redis.stream.pending',
+        'bus.redis.stream.lag',
+      ]);
+    });
+
+    it('closes the gauges on shutdown', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const close = vi.fn();
+
+      vi.spyOn(telemetry.getMeter(), 'gauge').mockReturnValue({ close });
+
+      const { transport } = await createTransport({}, telemetry);
+
+      // act
+      await shutdown(transport);
+
+      // assert
+      expect(close).toHaveBeenCalledTimes(3);
+    });
   });
 
   describe('subscribe', () => {

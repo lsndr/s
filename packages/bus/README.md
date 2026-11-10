@@ -333,7 +333,7 @@ BusModule.forRoot({
 
 ## Telemetry
 
-Tracing is pluggable through the `telemetry` option. The default does nothing. `BusOtel` traces with [OpenTelemetry](https://opentelemetry.io) and follows the [messaging semantic conventions](https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/). It needs `@opentelemetry/api`, and spans are exported by whatever SDK you have set up.
+Tracing and metrics are pluggable through the `telemetry` option. The default does nothing. `BusOtel` traces and measures with [OpenTelemetry](https://opentelemetry.io) and follows the messaging semantic conventions for [spans](https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/) and [metrics](https://opentelemetry.io/docs/specs/semconv/messaging/messaging-metrics/). It needs `@opentelemetry/api`, and spans and metrics are exported by whatever SDK you have set up.
 
 ```typescript
 import { BusModule, BusOtel } from '@lsndr/bus';
@@ -343,9 +343,13 @@ BusModule.forRoot({
     url: 'amqp://localhost',
     group: 'billing',
   }),
-  telemetry: BusOtel.withConfig(), // optional: { tracerProvider, propagator }
+  telemetry: BusOtel.withConfig(), // optional: { tracerProvider, meterProvider, propagator }
 });
 ```
+
+The meter is taken from the provider when the bus initializes, so register a global meter provider before the application bootstraps, or pass `meterProvider`.
+
+### Traces
 
 - Publishing creates a `send <destination>` producer span and injects the trace context (`traceparent`, `tracestate`) into the message headers: AMQP headers on RabbitMQ, a `headers` field of the entry on Redis Streams.
 - On Redis Streams, every batch of entries pulled from Redis gets a `receive` client span, with the number of entries as `messaging.batch.message_count`: the read of new entries and the claim of entries to retry each get one per round, and reads that return nothing get one too. The read span has no destination name, because it also covers the wait for a free slot, which is when the streams to read are chosen. The claim span is named `reclaim <stream>` (its `messaging.operation.type` is still `receive`), and every stream gets one per round.
@@ -354,7 +358,43 @@ BusModule.forRoot({
 
 Spans carry the attributes the conventions require or recommend, including the broker as `server.address` and `server.port`. `process` spans also have `bus.delivery.attempt`, which is 1 for the first try and grows with every retry, so a retried message can be told from its first delivery. On RabbitMQ the destination is `<exchange>:<routing key>` when sending and the queue when processing.
 
-Every operation can be renamed with `operation` in the destination (`reclaim` is one, `messaging.operation.type` keeps the generic value). Provide your own `Telemetry` (`create`, `send`, `receive` and `process`, each wrapping a function) to plug in something else.
+### Metrics
+
+The metrics of the conventions:
+
+| Metric                                | Type         | Recorded for                                                                                               |
+| ------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------- |
+| `messaging.client.operation.duration` | histogram, s | Every `create`, `send` and `receive` (`reclaim` included).                                                 |
+| `messaging.client.sent.messages`      | counter      | Every `send`. Storing an event in an outbox doesn't count, relaying it does.                               |
+| `messaging.client.consumed.messages`  | counter      | Every delivery, once: the entries of a `receive` on Redis Streams, the message of a `process` on RabbitMQ. |
+| `messaging.process.duration`          | histogram, s | Every handler that processes a message.                                                                    |
+
+They have `messaging.operation.name`, `messaging.system.name`, `messaging.destination.name`, `messaging.consumer.group.name`, `messaging.destination.subscription.name`, `server.address` and `server.port` where they apply, and `error.type` when the operation failed. The message id, the client id and the routing key are left out, since every value of an attribute makes a new series. On Redis Streams the read has no destination name, so the consumed entries of new reads are not split by stream; `messaging.process.duration` is.
+
+The metrics of the bus:
+
+| Metric                        | Type         | What it tells                                                                                                                                                                                                             |
+| ----------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bus.client.settled.messages` | counter      | How a delivery ended, as `bus.settlement.outcome`: `acked` (handled), `retried` (failed, will be delivered again) or `dropped` (failed with no retries left). On Redis Streams one entry is settled for all its handlers. |
+| `bus.delivery.latency`        | histogram, s | Time from `publishedAt` to the start of the first processing, so it includes the wait in an outbox. Retries are not recorded. It compares the clocks of the publisher and the consumer.                                   |
+| `bus.redis.stream.inflight`   | gauge        | Entries of a stream this instance is processing, which `concurrency` limits.                                                                                                                                              |
+| `bus.redis.stream.pending`    | gauge        | Entries of a stream delivered to the group and not acknowledged: in flight on any instance or waiting for a retry.                                                                                                        |
+| `bus.redis.stream.lag`        | gauge        | Entries of a stream not delivered to the group yet. Left out while Redis can't tell.                                                                                                                                      |
+
+`pending` and `lag` describe the whole group, so every instance reports the same value: aggregate them with a maximum, not a sum. They cost one `XINFO GROUPS` per stream on every collection.
+
+### Custom telemetry
+
+Every operation can be renamed with `operation` in the destination (`reclaim` is one, `messaging.operation.type` keeps the generic value). To plug in something else, provide your own `Telemetry`, which hands out a tracer and a meter:
+
+```typescript
+interface Telemetry {
+  getTracer(): TelemetryTracer;
+  getMeter(): TelemetryMeter;
+}
+```
+
+Both have `create`, `send`, `receive` and `process`, each wrapping the function that does the work, and a transport runs an operation inside both. The meter also makes the instruments (`counter`, `histogram`, `gauge`) that the metrics of the bus are recorded with.
 
 ## Configuration
 

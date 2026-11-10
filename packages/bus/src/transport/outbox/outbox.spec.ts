@@ -12,7 +12,7 @@ import { Transport } from '../transport.js';
 import { type BusProvider } from '../../provider.js';
 import { Serializer } from '../../serialization/serializer.js';
 import { type JsonSerializer } from '../../serialization/json.serializer.js';
-import { NoopTelemetry } from '../../telemetry/noop.telemetry.js';
+import { Telemetry } from '../../telemetry/telemetry.js';
 import { Outbox, type OutboxConfig, type OutboxRecord } from './outbox.js';
 
 class TestEvent {
@@ -290,8 +290,11 @@ describe('Outbox', () => {
 
   it('wraps storing the records in a telemetry create', async () => {
     // arrange
-    const create = vi.spyOn(NoopTelemetry.prototype, 'create');
     const module = await createModule();
+    const create = vi.spyOn(
+      module.get<Telemetry>(Telemetry).getTracer(),
+      'create',
+    );
     const dispatcher = module.get<Dispatcher>(Dispatcher);
 
     // act

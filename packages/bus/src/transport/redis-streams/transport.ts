@@ -11,8 +11,14 @@ import { type BusProvider } from '../../provider.js';
 import { type EventCallback } from '../subscriber.js';
 import { type PublishOptions } from '../dispatcher.js';
 import { Serializer } from '../../serialization/serializer.js';
-import { Telemetry, type TelemetryServer } from '../../telemetry/telemetry.js';
+import {
+  Telemetry,
+  type TelemetryGauge,
+  type TelemetryServer,
+} from '../../telemetry/telemetry.js';
 import { parseServer } from '../../telemetry/server.js';
+import { Instrumentation } from '../../telemetry/instrumentation.js';
+import { Backlog } from './backlog.js';
 import { Clients } from './clients.js';
 import { Handler } from './handler.js';
 import { Loops } from './loops/loops.js';
@@ -205,6 +211,9 @@ export class RedisStreamsTransport
   private readonly loops: Loops;
   private readonly settings: Settings;
   private readonly server?: TelemetryServer;
+  private readonly instrumentation: Instrumentation;
+  private readonly backlog: Backlog;
+  private gauges: TelemetryGauge[] = [];
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
   public constructor(
@@ -213,8 +222,9 @@ export class RedisStreamsTransport
     @Inject(Serializer)
     private readonly serializer: Serializer,
     @Inject(Telemetry)
-    private readonly telemetry: Telemetry,
+    telemetry: Telemetry,
   ) {
+    this.instrumentation = new Instrumentation(telemetry);
     this.settings = resolveSettings(config);
     this.server = parseServer(this.settings.url, {
       'redis:': 6379,
@@ -232,9 +242,9 @@ export class RedisStreamsTransport
       blockTimeout,
       consumerTtl,
     } = this.settings;
-    const { clients, streams } = this;
+    const { clients, streams, instrumentation } = this;
     const { max: maxRetries, delay: retriesDelay } = this.settings.retries;
-    const processor = new Processor(clients, serializer, telemetry, {
+    const processor = new Processor(clients, serializer, instrumentation, {
       group,
       consumer,
       keyPrefix,
@@ -244,15 +254,19 @@ export class RedisStreamsTransport
       server: this.server,
     });
 
+    this.backlog = new Backlog(clients, streams, {
+      group,
+      server: this.server,
+    });
     this.loops = new Loops([
-      new ReadLoop(clients, streams, processor, telemetry, {
+      new ReadLoop(clients, streams, processor, instrumentation, {
         group,
         consumer,
         batchSize: concurrency,
         blockTimeout,
         server: this.server,
       }),
-      new ReclaimLoop(clients, streams, processor, telemetry, {
+      new ReclaimLoop(clients, streams, processor, instrumentation, {
         group,
         consumer,
         batchSize: concurrency,
@@ -282,6 +296,7 @@ export class RedisStreamsTransport
 
   public async onBusInit(): Promise<void> {
     await this.clients.get('command');
+    this.observe();
   }
 
   public onBusBootstrap(): void {
@@ -311,6 +326,11 @@ export class RedisStreamsTransport
           `Failed to remove consumer from ${name}: ${String(err)}`,
         ),
       );
+    }
+
+    // before the connections close, so nothing is observed through them
+    for (const gauge of this.gauges.splice(0)) {
+      gauge.close();
     }
 
     await this.clients.destroy();
@@ -347,7 +367,7 @@ export class RedisStreamsTransport
     const client = await this.clients.get('command');
     const stream = this.getStream(message.name);
 
-    await this.telemetry.send(
+    await this.instrumentation.send(
       { system: 'redis', name: stream, server: this.server },
       {
         id: message.id,
@@ -372,6 +392,38 @@ export class RedisStreamsTransport
     );
 
     this.logger.debug(`Event ${message.name} added to the stream`);
+  }
+
+  private observe(): void {
+    const { instrumentation, backlog } = this;
+
+    this.gauges = [
+      instrumentation.gauge(
+        'bus.redis.stream.inflight',
+        {
+          description: 'Number of entries this consumer is processing.',
+          unit: '{entry}',
+        },
+        () => backlog.inflight(),
+      ),
+      instrumentation.gauge(
+        'bus.redis.stream.pending',
+        {
+          description:
+            'Number of entries delivered to the group and not acknowledged.',
+          unit: '{entry}',
+        },
+        () => backlog.pending(),
+      ),
+      instrumentation.gauge(
+        'bus.redis.stream.lag',
+        {
+          description: 'Number of entries not delivered to the group yet.',
+          unit: '{entry}',
+        },
+        () => backlog.lag(),
+      ),
+    ];
   }
 
   /**

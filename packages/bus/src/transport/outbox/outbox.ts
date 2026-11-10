@@ -11,6 +11,7 @@ import { type OnBusBootstrap, type OnBusShutdown } from '../../lifecycle.js';
 import { type Transport } from '../transport.js';
 import { type BusProvider, toProviders } from '../../provider.js';
 import { Telemetry } from '../../telemetry/telemetry.js';
+import { Instrumentation } from '../../telemetry/instrumentation.js';
 
 export type OutboxRecord = SerializedMessage;
 
@@ -62,6 +63,7 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   protected telemetry!: Telemetry;
 
   private readonly logger = new Logger(Outbox.name);
+  private instrumentation?: Instrumentation;
   private abortController?: AbortController;
   private loop?: Promise<void>;
 
@@ -119,7 +121,7 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   public async publish(event: object, options?: PublishOptions): Promise<void> {
     const record = this.serializer.serialize(event, options);
 
-    await this.telemetry.create(
+    await this.getInstrumentation().create(
       { system: 'outbox' },
       {
         id: record.id,
@@ -178,5 +180,12 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
         );
       }
     }
+  }
+
+  private getInstrumentation(): Instrumentation {
+    // not made in the constructor: the telemetry is injected as a property
+    this.instrumentation ??= new Instrumentation(this.telemetry);
+
+    return this.instrumentation;
   }
 }

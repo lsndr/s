@@ -53,8 +53,8 @@ export interface TelemetryDestination {
   attributes?: Record<string, string | number>;
 }
 
-/** Observes how messages are created, sent and processed. */
-export interface Telemetry {
+/** Wraps the operations of the bus, each around the function that does it. */
+interface TelemetryOperations {
   /** Wraps storing a message for a later send, e.g. in an outbox. */
   create<T>(
     destination: TelemetryDestination,
@@ -85,6 +85,66 @@ export interface Telemetry {
     message: TelemetryMessage,
     fn: () => Promise<T>,
   ): Promise<T>;
+}
+
+/** Traces how messages are created, sent, received and processed. */
+export type TelemetryTracer = TelemetryOperations;
+
+export type TelemetryAttributes = Record<string, string | number>;
+
+export interface TelemetryInstrumentOptions {
+  description?: string;
+  /** Unit of the values, e.g. `s` or `{message}`. */
+  unit?: string;
+}
+
+export interface TelemetryHistogramOptions extends TelemetryInstrumentOptions {
+  /** Upper bounds of the buckets the values are sorted into. */
+  boundaries?: number[];
+}
+
+export interface TelemetryCounter {
+  add(value: number, attributes?: TelemetryAttributes): void;
+}
+
+export interface TelemetryHistogram {
+  record(value: number, attributes?: TelemetryAttributes): void;
+}
+
+export interface TelemetryObservation {
+  value: number;
+  attributes?: TelemetryAttributes;
+}
+
+export interface TelemetryGauge {
+  /** Stops observing. */
+  close(): void;
+}
+
+/**
+ * Measures how messages are created, sent, received and processed, and hands
+ * out the instruments a transport measures everything else with.
+ */
+export interface TelemetryMeter extends TelemetryOperations {
+  counter(name: string, options?: TelemetryInstrumentOptions): TelemetryCounter;
+
+  histogram(
+    name: string,
+    options?: TelemetryHistogramOptions,
+  ): TelemetryHistogram;
+
+  /** Calls `observe` for the current values whenever metrics are collected. */
+  gauge(
+    name: string,
+    options: TelemetryInstrumentOptions,
+    observe: () => TelemetryObservation[] | Promise<TelemetryObservation[]>,
+  ): TelemetryGauge;
+}
+
+/** Observes the bus with traces and metrics. */
+export interface Telemetry {
+  getTracer(): TelemetryTracer;
+  getMeter(): TelemetryMeter;
 }
 
 export const Telemetry = Symbol('Telemetry');

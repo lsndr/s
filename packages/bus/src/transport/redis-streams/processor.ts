@@ -1,10 +1,11 @@
 import { Logger } from '@nestjs/common';
 import { type Serializer } from '../../serialization/serializer.js';
 import {
-  type Telemetry,
   type TelemetryBatch,
+  type TelemetryDestination,
   type TelemetryServer,
 } from '../../telemetry/telemetry.js';
+import { type Instrumentation } from '../../telemetry/instrumentation.js';
 import { type Clients } from './clients.js';
 import { type Stream } from './streams.js';
 
@@ -33,7 +34,7 @@ export class Processor {
   public constructor(
     private readonly clients: Clients<'command'>,
     private readonly serializer: Serializer,
-    private readonly telemetry: Telemetry,
+    private readonly instrumentation: Instrumentation,
     private readonly options: ProcessorOptions,
   ) {}
 
@@ -65,6 +66,12 @@ export class Processor {
     const retryCount = attempt - 1;
     const eventName = event.name;
     const doneKey = `${keyPrefix}done:${group}:${eventName}:${id}`;
+    const destination: TelemetryDestination = {
+      system: 'redis',
+      name: stream.name,
+      consumerGroup: group,
+      server,
+    };
     // long enough to outlive every retry of an entry
     const doneTtl = Math.max(
       2 * (maxRetries + 1) * (retriesDelay + reclaimInterval),
@@ -82,11 +89,16 @@ export class Processor {
 
       this.logger.verbose(`Event ${eventName} (${id}) payload:`, eventPayload);
 
+      // a retry would only measure the delay between the retries
+      if (attempt === 1) {
+        this.instrumentation.deliver(destination, eventPayload.publishedAt);
+      }
+
       const headers = this.parseHeaders(message['headers']);
       const results = await Promise.all(
         pending.map(async ({ name, callback }) => {
           try {
-            await this.telemetry.process(
+            await this.instrumentation.process(
               {
                 system: 'redis',
                 name,
@@ -135,6 +147,8 @@ export class Processor {
 
       if (failed.length > 0 && retryCount < maxRetries) {
         // stays pending and is retried by the reclaim loop
+        this.instrumentation.settle(destination, 'retried');
+
         return;
       }
 
@@ -146,6 +160,10 @@ export class Processor {
       }
 
       await client.multi().xAck(stream.name, group, id).del(doneKey).exec();
+      this.instrumentation.settle(
+        destination,
+        failed.length === 0 ? 'acked' : 'dropped',
+      );
 
       if (failed.length === 0) {
         this.logger.log(`Event ${eventName} (${id}) handled successfully`);
