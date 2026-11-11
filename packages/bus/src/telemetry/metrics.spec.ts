@@ -288,7 +288,7 @@ describe('Metrics', () => {
 
   it('counts a settlement by its outcome', async () => {
     // act
-    metrics.settle(destination, 'dropped');
+    await metrics.settle(destination, 'dropped', () => Promise.resolve());
 
     // assert
     const [point] = await pointsOf('bus.settled.messages');
@@ -302,6 +302,95 @@ describe('Metrics', () => {
         'bus.settlement.outcome': 'dropped',
       },
     });
+    expect(point!.attributes).not.toHaveProperty('messaging.operation.name');
+  });
+
+  it('records the duration of a settlement under its operation name', async () => {
+    // act
+    await metrics.settle({ ...destination, operation: 'nack' }, 'retried', () =>
+      Promise.resolve(),
+    );
+
+    // assert
+    const [point] = await pointsOf<Histogram>(
+      'messaging.client.operation.duration',
+    );
+
+    expect(point!.value.count).toBe(1);
+    expect(point!.attributes).toMatchObject({
+      'messaging.operation.name': 'nack',
+      'messaging.operation.type': 'settle',
+    });
+  });
+
+  it('names a settlement after the operation when it has no name', async () => {
+    // act
+    await metrics.settle(destination, 'acked', () => Promise.resolve());
+
+    // assert
+    const [point] = await pointsOf<Histogram>(
+      'messaging.client.operation.duration',
+    );
+
+    expect(point!.attributes).toMatchObject({
+      'messaging.operation.name': 'settle',
+      'messaging.operation.type': 'settle',
+    });
+  });
+
+  it('counts a settlement that failed with the type of the error', async () => {
+    // arrange
+    const failure = new TypeError('boom');
+
+    // act
+    const result = metrics.settle(destination, 'acked', () =>
+      Promise.reject(failure),
+    );
+
+    // assert
+    await expect(result).rejects.toBe(failure);
+
+    const [point] = await pointsOf('bus.settled.messages');
+
+    expect(point).toMatchObject({
+      value: 1,
+      attributes: {
+        'bus.settlement.outcome': 'acked',
+        'error.type': 'TypeError',
+      },
+    });
+  });
+
+  it('records the duration of a settlement that failed with the type of the error', async () => {
+    // act
+    const result = metrics.settle(destination, 'acked', () =>
+      Promise.reject(new TypeError('boom')),
+    );
+
+    // assert
+    await expect(result).rejects.toThrow('boom');
+
+    const [point] = await pointsOf<Histogram>(
+      'messaging.client.operation.duration',
+    );
+
+    expect(point!.attributes).toMatchObject({ 'error.type': 'TypeError' });
+  });
+
+  it('counts a retry without measuring a settlement', async () => {
+    // act
+    metrics.retry(destination);
+
+    // assert
+    const [point] = await pointsOf('bus.settled.messages');
+
+    expect(point).toMatchObject({
+      value: 1,
+      attributes: { 'bus.settlement.outcome': 'retried' },
+    });
+    expect(await pointsOf('messaging.client.operation.duration')).toHaveLength(
+      0,
+    );
   });
 
   it('records the time since the publish as the delivery latency', async () => {

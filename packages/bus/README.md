@@ -354,6 +354,7 @@ The meter is taken from the provider when the bus initializes, so register a glo
 - Publishing creates a `send <destination>` producer span and injects the trace context (`traceparent`, `tracestate`) into the message headers: AMQP headers on RabbitMQ, a `headers` field of the entry on Redis Streams.
 - On Redis Streams, every batch of entries pulled from Redis gets a `receive` client span, with the number of entries as `messaging.batch.message_count`: the read of new entries and the claim of entries to retry each get one per round, and reads that return nothing get one too. The read span has no destination name, because it also covers the wait for a free slot, which is when the streams to read are chosen. The claim span is named `reclaim <stream>` (its `messaging.operation.type` is still `receive`), and every stream gets one per round.
 - Every handler that processes a message gets a `process <destination>` consumer span, a child of the sending span, and runs inside it, so your own spans nest under it. On Redis Streams it also links to the `receive` span of the batch that delivered the message, which says which pull it came from without moving it out of the trace of the request. A failing handler marks its span as an error.
+- Telling the broker how a delivery ended gets an `ack <destination>` or `nack <destination>` client span, a child of the sending span like the `process` spans, so it sits next to them. `messaging.operation.type` is `settle`. On RabbitMQ a handled message and one that failed permanently are an `ack`, one left for a retry is a `nack`, and the span has `rabbitmq.message.delivery_tag`. On Redis Streams there is one `ack` per entry for all its handlers; an entry left for a retry stays pending and sends nothing to Redis, so it gets no span.
 - With an [outbox](#outbox), storing an event creates a `create <event>` span (with `messaging.system.name` set to `outbox` and no destination) and its context is kept with the record. The `send` span made when the record is relayed is its child, so the relay and the consumers stay in the trace of the request.
 
 Spans carry the attributes the conventions require or recommend, including the broker as `server.address` and `server.port`. `process` spans also have `bus.delivery.attempt`, which is 1 for the first try and grows with every retry, so a retried message can be told from its first delivery. On RabbitMQ the destination is `<exchange>:<routing key>` when sending and the queue when processing.
@@ -364,7 +365,7 @@ The metrics of the conventions:
 
 | Metric                                | Type         | Recorded for                                                                                               |
 | ------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------- |
-| `messaging.client.operation.duration` | histogram, s | Every `create`, `send` and `receive` (`reclaim` included).                                                 |
+| `messaging.client.operation.duration` | histogram, s | Every `create`, `send`, `receive` (`reclaim` included) and `settle` (`ack`, `nack`).                       |
 | `messaging.client.sent.messages`      | counter      | Every `send`. Storing an event in an outbox doesn't count, relaying it does.                               |
 | `messaging.client.consumed.messages`  | counter      | Every delivery, once: the entries of a `receive` on Redis Streams, the message of a `process` on RabbitMQ. |
 | `messaging.process.duration`          | histogram, s | Every handler that processes a message.                                                                    |
@@ -373,16 +374,18 @@ They have `messaging.operation.name`, `messaging.system.name`, `messaging.destin
 
 The metrics of the bus:
 
-| Metric                        | Type         | What it tells                                                                                                                                                                                                             |
-| ----------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bus.settled.messages`        | counter      | How a delivery ended, as `bus.settlement.outcome`: `acked` (handled), `retried` (failed, will be delivered again) or `dropped` (failed with no retries left). On Redis Streams one entry is settled for all its handlers. |
-| `bus.delivery.latency`        | histogram, s | Time from `publishedAt` to the start of the first processing, so it includes the wait in an outbox. Retries are not recorded. It compares the clocks of the publisher and the consumer.                                   |
-| `bus.outbox.relay.latency`    | histogram, s | Time a record waited in an [outbox](#outbox), from `publishedAt` to its relay. Only relayed records are recorded.                                                                                                         |
-| `bus.outbox.relayed.messages` | counter      | Records an outbox handed to `dispatch`, with `error.type` when the dispatch failed. Records of a failed dispatch are counted again when they are retried.                                                                 |
-| `bus.outbox.relay.duration`   | histogram, s | Duration of one `relay` round, the ones that find nothing included, with `error.type` when it failed.                                                                                                                     |
-| `redis.stream.inflight`       | gauge        | Entries of a stream this instance is processing, which `concurrency` limits.                                                                                                                                              |
-| `redis.stream.pending`        | gauge        | Entries of a stream delivered to the group and not acknowledged: in flight on any instance or waiting for a retry.                                                                                                        |
-| `redis.stream.lag`            | gauge        | Entries of a stream not delivered to the group yet. Left out while Redis can't tell.                                                                                                                                      |
+| Metric                        | Type         | What it tells                                                                                                                                                                                                                                                               |
+| ----------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bus.settled.messages`        | counter      | How a delivery ended, as `bus.settlement.outcome`: `acked` (handled), `retried` (failed, will be delivered again) or `dropped` (failed with no retries left), with `error.type` when telling the broker failed. On Redis Streams one entry is settled for all its handlers. |
+| `bus.delivery.latency`        | histogram, s | Time from `publishedAt` to the start of the first processing, so it includes the wait in an outbox. Retries are not recorded. It compares the clocks of the publisher and the consumer.                                                                                     |
+| `bus.outbox.relay.latency`    | histogram, s | Time a record waited in an [outbox](#outbox), from `publishedAt` to its relay. Only relayed records are recorded.                                                                                                                                                           |
+| `bus.outbox.relayed.messages` | counter      | Records an outbox handed to `dispatch`, with `error.type` when the dispatch failed. Records of a failed dispatch are counted again when they are retried.                                                                                                                   |
+| `bus.outbox.relay.duration`   | histogram, s | Duration of one `relay` round, the ones that find nothing included, with `error.type` when it failed.                                                                                                                                                                       |
+| `redis.stream.inflight`       | gauge        | Entries of a stream this instance is processing, which `concurrency` limits.                                                                                                                                                                                                |
+| `redis.stream.pending`        | gauge        | Entries of a stream delivered to the group and not acknowledged: in flight on any instance or waiting for a retry.                                                                                                                                                          |
+| `redis.stream.lag`            | gauge        | Entries of a stream not delivered to the group yet. Left out while Redis can't tell.                                                                                                                                                                                        |
+
+A settlement on RabbitMQ is measured as close to zero: `ack` and `nack` only write to the socket and don't wait for the broker. On Redis Streams it measures the round trip of the `XACK`. A retry on Redis Streams is only counted, since it sends nothing.
 
 `pending` and `lag` describe the whole group, so every instance reports the same value: aggregate them with a maximum, not a sum. They cost one `XINFO GROUPS` per stream on every collection.
 
@@ -394,7 +397,7 @@ It expects the names Prometheus gives OpenTelemetry metrics, with the unit as a 
 
 ### Custom telemetry
 
-Every operation can be renamed with `operation` in the destination (`reclaim` is one, `messaging.operation.type` keeps the generic value). To plug in something else, provide your own `Telemetry`, which hands out a tracer and a meter:
+Every operation can be renamed with `operation` in the destination (`reclaim` and `ack` are two, `messaging.operation.type` keeps the generic value). To plug in something else, provide your own `Telemetry`, which hands out a tracer and a meter:
 
 ```typescript
 interface Telemetry {
@@ -403,7 +406,7 @@ interface Telemetry {
 }
 ```
 
-The tracer has `create`, `send`, `receive` and `process`, each wrapping the function that does the work.
+The tracer has `create`, `send`, `receive`, `process` and `settle`, each wrapping the function that does the work.
 
 The meter only makes instruments: `counter`, `histogram` and `gauge`. Which metrics there are, and when they are recorded, is decided by the bus, so a custom meter gets all of them.
 

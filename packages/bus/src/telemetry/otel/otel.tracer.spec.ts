@@ -178,6 +178,122 @@ describe('BusOtel tracer', () => {
     });
   });
 
+  it('settles in a client span named after the operation', async () => {
+    // arrange
+    const message = { id: 'id-1', name: 'TestEvent', headers: {} };
+
+    // act
+    await tracer.settle({ ...destination, operation: 'ack' }, message, () =>
+      Promise.resolve(),
+    );
+
+    // assert
+    const [span] = exporter.getFinishedSpans();
+
+    expect(span).toMatchObject({
+      name: 'ack events',
+      kind: SpanKind.CLIENT,
+      attributes: {
+        'messaging.operation.name': 'ack',
+        'messaging.operation.type': 'settle',
+        'messaging.destination.name': 'events',
+        'messaging.message.id': 'id-1',
+      },
+    });
+  });
+
+  it('settles in a span that continues the sent trace', async () => {
+    // arrange
+    const headers: Record<string, string> = {};
+    const message = { id: 'id-1', name: 'TestEvent', headers };
+
+    await tracer.send(destination, message, () => Promise.resolve());
+
+    // act
+    await tracer.settle(destination, message, () => Promise.resolve());
+
+    // assert
+    const spans = exporter.getFinishedSpans();
+    const send = spans.find((s) => s.name === 'send events')!;
+    const settled = spans.find((s) => s.name === 'settle events')!;
+
+    expect(settled.parentSpanContext?.spanId).toBe(send.spanContext().spanId);
+    expect(settled.spanContext().traceId).toBe(send.spanContext().traceId);
+    expect(settled.links).toEqual([]);
+  });
+
+  it('adds the attributes of the settled message', async () => {
+    // arrange
+    const message = {
+      id: 'id-1',
+      name: 'TestEvent',
+      headers: {},
+      attributes: [{ name: ['rabbitmq', 'message', 'delivery_tag'], value: 7 }],
+    };
+
+    // act
+    await tracer.settle(destination, message, () => Promise.resolve());
+
+    // assert
+    const [span] = exporter.getFinishedSpans();
+
+    expect(span!.attributes).toMatchObject({
+      'rabbitmq.message.delivery_tag': 7,
+    });
+  });
+
+  it('leaves out the message id of a settled message without one', async () => {
+    // arrange
+    const message = { id: '', name: 'TestEvent', headers: {} };
+
+    // act
+    await tracer.settle(destination, message, () => Promise.resolve());
+
+    // assert
+    const [span] = exporter.getFinishedSpans();
+
+    expect(span!.attributes).not.toHaveProperty('messaging.message.id');
+  });
+
+  it('runs the settled function inside the settle span', async () => {
+    // arrange
+    let active: string | undefined;
+
+    // act
+    await tracer.settle(
+      destination,
+      { id: 'id-1', name: 'TestEvent', headers: {} },
+      () => {
+        active = trace.getSpan(context.active())?.spanContext().spanId;
+
+        return Promise.resolve();
+      },
+    );
+
+    // assert
+    expect(active).toBe(exporter.getFinishedSpans()[0]!.spanContext().spanId);
+  });
+
+  it('records a failure of a settlement on its span and rethrows it', async () => {
+    // arrange
+    const failure = new Error('channel closed');
+
+    // act
+    const result = tracer.settle(
+      destination,
+      { id: 'id-1', name: 'TestEvent', headers: {} },
+      () => Promise.reject(failure),
+    );
+
+    // assert
+    await expect(result).rejects.toBe(failure);
+
+    const [span] = exporter.getFinishedSpans();
+
+    expect(span!.status.code).toBe(SpanStatusCode.ERROR);
+    expect(span!.attributes['error.type']).toBe('Error');
+  });
+
   it('names spans without a destination after the operation', async () => {
     // arrange
     const message = { id: 'id-1', name: 'TestEvent', headers: {} };

@@ -163,12 +163,35 @@ describe('Instrumentation', () => {
     expect(added('consumed.messages')?.map(([value]) => value)).toEqual([1]);
   });
 
-  it('counts a settlement by its outcome', () => {
+  it('runs a settlement once, inside the tracer', async () => {
+    // arrange
+    const { telemetry, instrumentation } = setup();
+    const traced = vi.spyOn(telemetry.getTracer(), 'settle');
+    const fn = vi.fn(() => Promise.resolve('done'));
+
+    // act
+    const result = await instrumentation.settle(
+      destination,
+      message,
+      'acked',
+      fn,
+    );
+
+    // assert
+    expect(result).toBe('done');
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(traced.mock.calls[0]![0]).toBe(destination);
+    expect(traced.mock.calls[0]![1]).toBe(message);
+  });
+
+  it('counts a settlement by its outcome', async () => {
     // arrange
     const { instrumentation, added } = setup();
 
     // act
-    instrumentation.settle(destination, 'dropped');
+    await instrumentation.settle(destination, message, 'dropped', () =>
+      Promise.resolve(),
+    );
 
     // assert
     expect(added('settled.messages')).toEqual([
@@ -182,6 +205,23 @@ describe('Instrumentation', () => {
         ],
       ],
     ]);
+  });
+
+  it('counts a retry without tracing or measuring a settlement', () => {
+    // arrange
+    const { telemetry, instrumentation, added, recorded } = setup();
+    const traced = vi.spyOn(telemetry.getTracer(), 'settle');
+
+    // act
+    instrumentation.retry(destination);
+
+    // assert
+    expect(added('settled.messages')?.[0]?.[1]).toContainEqual({
+      name: ['settlement', 'outcome'],
+      value: 'retried',
+    });
+    expect(traced).not.toHaveBeenCalled();
+    expect(recorded('operation.duration')).toEqual([]);
   });
 
   it('records a delivery latency', () => {

@@ -91,8 +91,22 @@ export class Instrumentation {
     );
   }
 
-  public settle(destination: TelemetryDestination, outcome: Settlement): void {
-    this.metrics.settle(destination, outcome);
+  public settle<T>(
+    destination: TelemetryDestination,
+    message: TelemetryMessage,
+    outcome: Settlement,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const tracer = this.telemetry.getTracer();
+
+    return this.metrics.settle(destination, outcome, () =>
+      tracer.settle(destination, message, fn),
+    );
+  }
+
+  /** Counts a delivery left for a retry, which sends nothing to the broker. */
+  public retry(destination: TelemetryDestination): void {
+    this.metrics.retry(destination);
   }
 
   /** Records how long the message took from its publish to now. */

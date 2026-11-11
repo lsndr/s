@@ -15,7 +15,7 @@ export interface OtelTracerConfig {
   propagator?: OtelApi.TextMapPropagator;
 }
 
-type Operation = 'create' | 'send' | 'receive' | 'process';
+type Operation = 'create' | 'send' | 'receive' | 'process' | 'settle';
 
 /** Keeps the span of a batch, so that process spans can link to it. */
 class OtelBatch implements TelemetryBatch {
@@ -87,6 +87,22 @@ export class OtelTracer implements TelemetryTracer {
     return this.run(span, fn, this.api.trace.setSpan(parent, span));
   }
 
+  public settle<T>(
+    destination: TelemetryDestination,
+    message: TelemetryMessage,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const { context, propagation, defaultTextMapGetter, trace } = this.api;
+    const parent = this.getPropagator(propagation).extract(
+      context.active(),
+      message.headers,
+      defaultTextMapGetter,
+    );
+    const span = this.startSpan('settle', destination, message, parent);
+
+    return this.run(span, fn, trace.setSpan(parent, span));
+  }
+
   private produce<T>(
     operation: 'create' | 'send',
     destination: TelemetryDestination,
@@ -147,7 +163,11 @@ export class OtelTracer implements TelemetryTracer {
     };
 
     if (message) {
-      attributes['messaging.message.id'] = message.id;
+      // a RabbitMQ message may come without an id, and is still settled
+      if (message.id) {
+        attributes['messaging.message.id'] = message.id;
+      }
+
       Object.assign(
         attributes,
         this.config.names.toAttributes(message.attributes),
@@ -210,6 +230,7 @@ export class OtelTracer implements TelemetryTracer {
       case 'process':
         return SpanKind.CONSUMER;
       case 'receive':
+      case 'settle':
         return SpanKind.CLIENT;
       default:
         return SpanKind.PRODUCER;

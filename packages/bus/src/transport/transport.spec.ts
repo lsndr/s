@@ -388,16 +388,23 @@ describe('Transport', { timeout: 60_000 }, () => {
         const telemetry = new NoopTelemetry();
         const counter = { add: vi.fn() };
         const histogram = { record: vi.fn() };
+        const durations = { record: vi.fn() };
 
         // only the instruments of the settlements and the latency are looked at
         vi.spyOn(telemetry.getMeter(), 'counter').mockImplementation((name) =>
           name.join('.') === 'settled.messages' ? counter : { add: vi.fn() },
         );
         vi.spyOn(telemetry.getMeter(), 'histogram').mockImplementation(
-          (name) =>
-            name.join('.') === 'delivery.latency'
-              ? histogram
-              : { record: vi.fn() },
+          (name) => {
+            switch (name.join('.')) {
+              case 'delivery.latency':
+                return histogram;
+              case 'operation.duration':
+                return durations;
+              default:
+                return { record: vi.fn() };
+            }
+          },
         );
 
         const group = crypto.randomUUID();
@@ -418,6 +425,16 @@ describe('Transport', { timeout: 60_000 }, () => {
         return {
           group,
           histogram,
+          settleOperations: () =>
+            durations.record.mock.calls
+              .map(([, attributes]) =>
+                new OtelNames('bus').toAttributes(attributes),
+              )
+              .filter(
+                (attributes) =>
+                  attributes['messaging.operation.type'] === 'settle',
+              )
+              .map((attributes) => attributes['messaging.operation.name']),
           publish: () => transport.publish(new TestEvent({ value })),
           outcomes: () =>
             counter.add.mock.calls.map(
@@ -446,6 +463,20 @@ describe('Transport', { timeout: 60_000 }, () => {
         expect(attributes()).toMatchObject({
           'messaging.consumer.group.name': group,
         });
+      });
+
+      it('measures the ack of a handled message', async () => {
+        // arrange
+        const { publish, settleOperations } = await setupSettlement(
+          { max: 0, delay: 100 },
+          'succeeds',
+        );
+
+        // act
+        await publish();
+
+        // assert
+        await vi.waitFor(() => expect(settleOperations()).toEqual(['ack']));
       });
 
       it('counts a failed message without retries left as dropped', async () => {
