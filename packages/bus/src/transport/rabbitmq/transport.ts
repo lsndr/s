@@ -17,10 +17,12 @@ import {
 import {
   Telemetry,
   type TelemetryDestination,
+  type TelemetryMessage,
   type TelemetryServer,
 } from '../../telemetry/telemetry.js';
 import { parseServer } from '../../telemetry/server.js';
 import { Instrumentation } from '../../telemetry/instrumentation.js';
+import { type Settlement } from '../../telemetry/metrics.js';
 
 export interface RabbitmqTransportConfig {
   url: string;
@@ -156,6 +158,9 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
         clientId: consumerTag,
         server: this.server,
       };
+      const settle = (outcome: Settlement) =>
+        this.settle(channel, destination, event.name, message, outcome);
+
       Promise.resolve()
         .then(() => {
           const payload = this.serializer.deserialize(event, message.content);
@@ -194,13 +199,12 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
           );
         })
         .then(
-          () => {
-            channel.ack(message);
-            this.instrumentation.settle(destination, 'acked');
+          async () => {
+            await settle('acked');
 
             this.logger.log(`Event ${event.name} handled successfully`);
           },
-          (err) => {
+          async (err) => {
             this.logger.error(
               `Error handling event ${event.name} (retryCount: ${retryCount}): ${String(err)}`,
               err instanceof Error ? err.stack : undefined,
@@ -211,11 +215,9 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
                 `Event ${event.name} failed permanently after ${retryCount} retries: ${String(err)}`,
                 err instanceof Error ? err.stack : undefined,
               );
-              channel.ack(message);
-              this.instrumentation.settle(destination, 'dropped');
+              await settle('dropped');
             } else {
-              channel.nack(message, false, false);
-              this.instrumentation.settle(destination, 'retried');
+              await settle('retried');
             }
           },
         )
@@ -230,6 +232,50 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     await channel.consume(queue, (message) => handler(message), {
       noAck: false,
     });
+  }
+
+  /**
+   * Tells the broker how a delivery ended: a retry is a nack, anything else an
+   * ack. The traced message is built from the AMQP message, not the payload,
+   * because a message that fails to deserialize is settled too.
+   */
+  private settle(
+    channel: ConfirmChannel,
+    destination: TelemetryDestination,
+    eventName: string,
+    message: ConsumeMessage,
+    outcome: Settlement,
+  ): Promise<void> {
+    const retried = outcome === 'retried';
+    const traced: TelemetryMessage = {
+      id: message.properties.messageId,
+      name: eventName,
+      headers: this.toStringHeaders(message),
+      attempt: this.getRetryCount(message) + 1,
+      attributes: [
+        {
+          name: ['rabbitmq', 'message', 'delivery_tag'],
+          value: message.fields.deliveryTag,
+        },
+      ],
+    };
+
+    return this.instrumentation.settle(
+      { ...destination, operation: retried ? 'nack' : 'ack' },
+      traced,
+      outcome,
+      // a throw on a closed channel has to be a rejection
+      () =>
+        new Promise<void>((resolve) => {
+          if (retried) {
+            channel.nack(message, false, false);
+          } else {
+            channel.ack(message);
+          }
+
+          resolve();
+        }),
+    );
   }
 
   private sendToBroker(

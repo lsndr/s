@@ -33,8 +33,9 @@ export interface TelemetryDestination {
   system?: string;
   /**
    * What the operation is called, when it isn't the plain `create`, `send`,
-   * `receive` or `process`, e.g. `reclaim` for a receive that takes over the
-   * messages of other consumers. Its type stays the generic one.
+   * `receive`, `process` or `settle`, e.g. `reclaim` for a receive that takes
+   * over the messages of other consumers, or `ack` for a settle. Its type
+   * stays the generic one.
    */
   operation?: string;
   /**
@@ -54,8 +55,8 @@ export interface TelemetryDestination {
 }
 
 /**
- * Traces how messages are created, sent, received and processed, each
- * operation wrapped around the function that does it.
+ * Traces how messages are created, sent, received, processed and settled,
+ * each operation wrapped around the function that does it.
  */
 export interface TelemetryTracer {
   /** Wraps storing a message for a later send, e.g. in an outbox. */
@@ -84,6 +85,13 @@ export interface TelemetryTracer {
 
   /** Wraps one handler processing a message. */
   process<T>(
+    destination: TelemetryDestination,
+    message: TelemetryMessage,
+    fn: () => Promise<T>,
+  ): Promise<T>;
+
+  /** Wraps telling the broker how a delivery ended, e.g. an ack. */
+  settle<T>(
     destination: TelemetryDestination,
     message: TelemetryMessage,
     fn: () => Promise<T>,

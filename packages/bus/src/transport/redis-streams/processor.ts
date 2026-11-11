@@ -147,7 +147,7 @@ export class Processor {
 
       if (failed.length > 0 && retryCount < maxRetries) {
         // stays pending and is retried by the reclaim loop
-        this.instrumentation.settle(destination, 'retried');
+        this.instrumentation.retry(destination);
 
         return;
       }
@@ -159,10 +159,16 @@ export class Processor {
         );
       }
 
-      await client.multi().xAck(stream.name, group, id).del(doneKey).exec();
-      this.instrumentation.settle(
-        destination,
+      await this.instrumentation.settle(
+        { ...destination, operation: 'ack' },
+        {
+          id: eventPayload.id,
+          name: eventName,
+          headers,
+          attempt,
+        },
         failed.length === 0 ? 'acked' : 'dropped',
+        () => client.multi().xAck(stream.name, group, id).del(doneKey).exec(),
       );
 
       if (failed.length === 0) {

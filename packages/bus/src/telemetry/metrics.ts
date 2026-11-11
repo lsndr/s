@@ -20,7 +20,7 @@ import {
 /** How a delivery ended: handled, left for a retry, or given up on. */
 export type Settlement = 'acked' | 'retried' | 'dropped';
 
-type Operation = 'create' | 'send' | 'receive' | 'process';
+type Operation = 'create' | 'send' | 'receive' | 'process' | 'settle';
 
 /** Boundaries the messaging conventions advise for durations, in seconds. */
 const DURATION_BOUNDARIES = [
@@ -129,13 +129,27 @@ export class Metrics {
     });
   }
 
-  public settle(destination: TelemetryDestination, outcome: Settlement): void {
-    this.record(({ settled }) =>
-      settled.add(1, [
-        ...toMetricAttributes(destination),
-        { name: ['settlement', 'outcome'], value: outcome },
-      ]),
-    );
+  public settle<T>(
+    destination: TelemetryDestination,
+    outcome: Settlement,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    return this.measure('settle', destination, fn, (attributes, duration) => {
+      this.recordOperation('settle', attributes, duration);
+      this.countSettled(
+        // the counter has no operation name, so that its series stay the same
+        attributes.filter(({ name }) => name[0] !== 'operation'),
+        outcome,
+      );
+    });
+  }
+
+  /**
+   * Counts a delivery left for a retry on Redis Streams, where nothing is
+   * sent to the broker, so there is no settlement to trace or measure.
+   */
+  public retry(destination: TelemetryDestination): void {
+    this.countSettled(toMetricAttributes(destination), 'retried');
   }
 
   /** Records how long the message took from its publish to now. */
@@ -232,6 +246,18 @@ export class Metrics {
     } finally {
       record(attributes, (performance.now() - start) / 1000);
     }
+  }
+
+  private countSettled(
+    attributes: TelemetryAttributes,
+    outcome: Settlement,
+  ): void {
+    this.record(({ settled }) =>
+      settled.add(1, [
+        ...attributes,
+        { name: ['settlement', 'outcome'], value: outcome },
+      ]),
+    );
   }
 
   /** Only the operation duration has the type among its attributes. */

@@ -41,6 +41,14 @@ class NoopTracer implements TelemetryTracer {
   ): Promise<T> {
     return fn();
   }
+
+  public settle<T>(
+    _destination: TelemetryDestination,
+    _message: TelemetryMessage,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    return fn();
+  }
 }
 
 class NoopMeter implements TelemetryMeter {
