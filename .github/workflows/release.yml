@@ -52,3 +52,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # nx release can't attach files, and the dashboard is not in the
+      # published package. Its tag points at HEAD only when bus was released.
+      - name: Attach the bus dashboard to its release
+        run: |
+          tag=$(git tag --points-at HEAD --list '@lsndr/bus@*')
+
+          if [ -n "$tag" ]; then
+            cp packages/bus/dashboards/bus.json "$RUNNER_TEMP/bus-dashboard.json"
+            gh release upload "$tag" "$RUNNER_TEMP/bus-dashboard.json" --clobber
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
