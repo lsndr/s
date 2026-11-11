@@ -2,6 +2,13 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { Logger } from '@nestjs/common';
 import { Signal } from './signal.js';
 
+interface Saturation {
+  /** Milliseconds the stream was full before the current stretch. */
+  total: number;
+  /** When the stream became full, unset while it has a free slot. */
+  since?: number;
+}
+
 /**
  * Each stream has `size` slots and every entry it runs holds one. Running is
  * not limited by the free count: entries that are read or reclaimed run
@@ -9,14 +16,28 @@ import { Signal } from './signal.js';
  */
 export class Inflight {
   private readonly inflight = new Map<string, Map<string, Promise<void>>>();
+  private readonly saturation = new Map<string, Saturation>();
   private readonly changes = new Signal();
   private readonly logger = new Logger(Inflight.name);
 
-  public constructor(private readonly size: number) {}
+  /**
+   * @param now - Clock in milliseconds. A parameter so that tests control how
+   * long a stream stays full.
+   */
+  public constructor(
+    private readonly size: number,
+    private readonly now: () => number = () => performance.now(),
+  ) {}
+
+  /** Number of slots of every stream. */
+  public get slots(): number {
+    return this.size;
+  }
 
   public register(stream: string): void {
     if (!this.inflight.has(stream)) {
       this.inflight.set(stream, new Map());
+      this.saturation.set(stream, { total: 0 });
       this.changes.notify();
     }
   }
@@ -47,10 +68,12 @@ export class Inflight {
       )
       .finally(() => {
         entries.delete(id);
+        this.track(stream, entries.size);
         this.changes.notify();
       });
 
     entries.set(id, promise);
+    this.track(stream, entries.size);
     // a slot is taken, which whoever waits for a change has to know
     this.changes.notify();
   }
@@ -61,6 +84,22 @@ export class Inflight {
 
   public has(stream: string, id: string): boolean {
     return this.inflight.get(stream)?.has(id) ?? false;
+  }
+
+  /**
+   * Seconds the stream has had no free slot since it was registered,
+   * including the time it is full right now.
+   */
+  public fullDuration(stream: string): number {
+    const state = this.saturation.get(stream);
+
+    if (!state) {
+      return 0;
+    }
+
+    const running = state.since === undefined ? 0 : this.now() - state.since;
+
+    return (state.total + running) / 1000;
   }
 
   /**
@@ -121,6 +160,22 @@ export class Inflight {
     } finally {
       // don't keep the process alive for a timeout that is not needed
       timer.abort();
+    }
+  }
+
+  /** Called after every change of the entries, to time how long it is full. */
+  private track(stream: string, running: number): void {
+    const state = this.saturation.get(stream);
+
+    if (!state) {
+      return;
+    }
+
+    if (running >= this.size && state.since === undefined) {
+      state.since = this.now();
+    } else if (running < this.size && state.since !== undefined) {
+      state.total += this.now() - state.since;
+      state.since = undefined;
     }
   }
 

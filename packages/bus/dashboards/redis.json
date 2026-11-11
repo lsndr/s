@@ -921,9 +921,9 @@
       "description": "bus.settled.messages with error.type: telling the broker how a delivery ended failed, so the broker delivers it again."
     },
     {
-      "id": 20,
+      "id": 29,
       "type": "row",
-      "title": "Redis Streams backlog",
+      "title": "Redis Streams slots",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -956,7 +956,27 @@
             "spanNulls": false
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [10, 10]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -978,9 +998,131 @@
           },
           "expr": "sum by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_inflight{job=~\"$job\"})",
           "legendFormat": "{{messaging_consumer_group_name}} {{messaging_destination_name}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_slots{job=~\"$job\"})",
+          "legendFormat": "slots {{messaging_consumer_group_name}} {{messaging_destination_name}}"
         }
       ],
-      "description": "redis.stream.inflight: entries being processed, summed over the instances."
+      "description": "redis.stream.inflight: entries being processed, summed over the instances, against redis.stream.slots, the slots of every instance."
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Slot utilization",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 33,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_inflight{job=~\"$job\"}) / sum by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_slots{job=~\"$job\"})",
+          "legendFormat": "{{messaging_consumer_group_name}} {{messaging_destination_name}}"
+        }
+      ],
+      "description": "redis.stream.inflight over redis.stream.slots. It can go above 100%: entries that are reclaimed, and the batch of a read, are not held back by the slots."
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Time full",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 33,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "avg by (messaging_destination_name, messaging_consumer_group_name) (rate(redis_stream_full_duration_seconds_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{messaging_consumer_group_name}} {{messaging_destination_name}}"
+        }
+      ],
+      "description": "redis.stream.full.duration: share of the time a stream had no free slot on an instance, averaged over the instances. A full stream is not read."
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Redis Streams backlog",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 24,
+        "h": 1
+      }
     },
     {
       "id": 22,
@@ -991,9 +1133,9 @@
         "uid": "${datasource}"
       },
       "gridPos": {
-        "x": 8,
-        "y": 33,
-        "w": 8,
+        "x": 0,
+        "y": 42,
+        "w": 12,
         "h": 8
       },
       "fieldConfig": {
@@ -1041,9 +1183,9 @@
         "uid": "${datasource}"
       },
       "gridPos": {
-        "x": 16,
-        "y": 33,
-        "w": 8,
+        "x": 12,
+        "y": 42,
+        "w": 12,
         "h": 8
       },
       "fieldConfig": {
@@ -1089,7 +1231,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 41,
+        "y": 50,
         "w": 24,
         "h": 1
       }
@@ -1104,7 +1246,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 51,
         "w": 8,
         "h": 8
       },
@@ -1172,7 +1314,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 42,
+        "y": 51,
         "w": 8,
         "h": 8
       },
@@ -1231,7 +1373,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 42,
+        "y": 51,
         "w": 8,
         "h": 8
       },

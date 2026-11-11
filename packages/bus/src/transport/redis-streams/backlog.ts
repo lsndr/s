@@ -38,6 +38,22 @@ export class Backlog {
     }));
   }
 
+  /** Slots of every stream. */
+  public slots(): TelemetryObservation[] {
+    return this.streams.all().map(({ name }) => ({
+      value: this.streams.slots(),
+      attributes: this.attributesOf(name),
+    }));
+  }
+
+  /** Seconds each stream has had no free slot, in total. */
+  public fullDuration(): TelemetryObservation[] {
+    return this.streams.all().map(({ name }) => ({
+      value: this.streams.fullDuration(name),
+      attributes: this.attributesOf(name),
+    }));
+  }
+
   /** Entries delivered to the group and not acknowledged, per stream. */
   public async pending(): Promise<TelemetryObservation[]> {
     return (await this.load()).map(({ stream, pending }) => ({

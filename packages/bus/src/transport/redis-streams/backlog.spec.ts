@@ -88,6 +88,28 @@ describe('Backlog', { timeout: 60_000 }, () => {
     return { backlog, streams, name, attributes };
   }
 
+  it('observes the slots of each stream', async () => {
+    // arrange
+    const { backlog, attributes } = await setup();
+
+    // act
+    const observations = backlog.slots();
+
+    // assert
+    expect(observations).toEqual([{ value: 10, attributes }]);
+  });
+
+  it('observes how long each stream had no free slot', async () => {
+    // arrange
+    const { backlog, attributes } = await setup();
+
+    // act
+    const observations = backlog.fullDuration();
+
+    // assert
+    expect(observations).toEqual([{ value: 0, attributes }]);
+  });
+
   it('observes the entries delivered and not acknowledged as pending', async () => {
     // arrange
     const { backlog, attributes } = await setup({ added: 3, read: 2 });

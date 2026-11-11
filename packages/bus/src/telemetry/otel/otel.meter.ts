@@ -9,6 +9,7 @@ import {
   type TelemetryInstrumentOptions,
   type TelemetryMeter,
   type TelemetryName,
+  type TelemetryObservableCounter,
   type TelemetryObservation,
 } from '../telemetry.js';
 import { type OtelNames } from './otel.names.js';
@@ -77,5 +78,25 @@ export class OtelMeter implements TelemetryMeter {
     gauge.addCallback(callback);
 
     return { close: () => gauge.removeCallback(callback) };
+  }
+
+  public observableCounter(
+    name: TelemetryName,
+    options: TelemetryInstrumentOptions,
+    observe: () => TelemetryObservation[] | Promise<TelemetryObservation[]>,
+  ): TelemetryObservableCounter {
+    const counter = this.meter.createObservableCounter(
+      this.names.toName(name),
+      options,
+    );
+    const callback = async (result: OtelApi.ObservableResult) => {
+      for (const { value, attributes } of await observe()) {
+        result.observe(value, this.names.toAttributes(attributes));
+      }
+    };
+
+    counter.addCallback(callback);
+
+    return { close: () => counter.removeCallback(callback) };
   }
 }

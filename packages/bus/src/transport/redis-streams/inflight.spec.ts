@@ -19,6 +19,126 @@ describe('Inflight', () => {
     vi.restoreAllMocks();
   });
 
+  describe('slots', () => {
+    it('is the number of slots of every stream', () => {
+      // arrange
+      const inflight = new Inflight(3);
+
+      // act
+      const { slots } = inflight;
+
+      // assert
+      expect(slots).toBe(3);
+    });
+  });
+
+  describe('fullDuration', () => {
+    function setup(size: number) {
+      let time = 0;
+      const inflight = new Inflight(size, () => time);
+
+      inflight.register('a');
+
+      return {
+        inflight,
+        advance: (ms: number) => {
+          time += ms;
+        },
+      };
+    }
+
+    it('is 0 for a stream that is not registered', () => {
+      // arrange
+      const inflight = new Inflight(1);
+
+      // act
+      const duration = inflight.fullDuration('a');
+
+      // assert
+      expect(duration).toBe(0);
+    });
+
+    it('does not grow while the stream has a free slot', () => {
+      // arrange
+      const { inflight, advance } = setup(2);
+      inflight.run('a', '1', () => deferred().promise);
+      advance(5_000);
+
+      // act
+      const duration = inflight.fullDuration('a');
+
+      // assert
+      expect(duration).toBe(0);
+    });
+
+    it('grows while all the slots are taken', () => {
+      // arrange
+      const { inflight, advance } = setup(1);
+      inflight.run('a', '1', () => deferred().promise);
+      advance(1_500);
+
+      // act
+      const duration = inflight.fullDuration('a');
+
+      // assert
+      expect(duration).toBe(1.5);
+    });
+
+    it('stops growing once a slot is released', async () => {
+      // arrange
+      const { inflight, advance } = setup(1);
+      const entry = deferred();
+      inflight.run('a', '1', () => entry.promise);
+      advance(2_000);
+      entry.resolve();
+      await setTimeout(0);
+      advance(10_000);
+
+      // act
+      const duration = inflight.fullDuration('a');
+
+      // assert
+      expect(duration).toBe(2);
+    });
+
+    it('adds up the stretches the stream was full', async () => {
+      // arrange
+      const { inflight, advance } = setup(1);
+      const first = deferred();
+      inflight.run('a', '1', () => first.promise);
+      advance(1_000);
+      first.resolve();
+      await setTimeout(0);
+      advance(5_000);
+      inflight.run('a', '2', () => deferred().promise);
+      advance(500);
+
+      // act
+      const duration = inflight.fullDuration('a');
+
+      // assert
+      expect(duration).toBe(1.5);
+    });
+
+    it('keeps counting while a slot taken by another entry is released', async () => {
+      // arrange
+      const { inflight, advance } = setup(2);
+      const first = deferred();
+      inflight.run('a', '1', () => first.promise);
+      inflight.run('a', '2', () => deferred().promise);
+      advance(1_000);
+      first.resolve();
+      await setTimeout(0);
+      advance(1_000);
+
+      // act
+      const duration = inflight.fullDuration('a');
+
+      // assert
+      expect(duration).toBe(1);
+    });
+  });
+
   describe('readable', () => {
     it('makes a registered stream readable right away', async () => {
       // arrange
