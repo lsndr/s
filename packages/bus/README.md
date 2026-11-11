@@ -388,7 +388,7 @@ The metrics of the bus:
 
 ### Dashboard
 
-[`dashboards/bus.json`](dashboards/bus.json) is a Grafana dashboard of these metrics: throughput, durations, failures, the Redis Streams backlog and the outbox. Import it in Grafana and pick a Prometheus data source. It is not part of the published package, but every release of the bus has it attached as `bus-dashboard.json`.
+[`dashboards/grafana.json`](dashboards/grafana.json) is a Grafana dashboard of these metrics: throughput, durations, failures, the Redis Streams backlog and the outbox. Import it in Grafana and pick a Prometheus data source. It is not part of the published package, but every release of the bus has the files of `dashboards/` attached.
 
 It expects the names Prometheus gives OpenTelemetry metrics, with the unit as a suffix: `messaging.process.duration` is `messaging_process_duration_seconds`, counters end in `_total`, and the service is the `job` label. It also expects the default `prefix` of `BusOtel`.
 
