@@ -49,6 +49,7 @@ export {
   type TelemetryMessage,
   type TelemetryMeter,
   type TelemetryName,
+  type TelemetryObservableCounter,
   type TelemetryObservation,
   type TelemetryServer,
   type TelemetryTracer,

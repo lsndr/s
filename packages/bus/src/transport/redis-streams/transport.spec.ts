@@ -154,7 +154,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       ]);
     });
 
-    it('registers a gauge for the entries in flight, pending and lagging', async () => {
+    it('registers a gauge for the entries in flight, the slots, pending and lagging', async () => {
       // arrange
       const telemetry = new NoopTelemetry();
       const gauge = vi.spyOn(telemetry.getMeter(), 'gauge');
@@ -165,17 +165,35 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       // assert
       expect(gauge.mock.calls.map(([name]) => name.join('.'))).toEqual([
         'redis.stream.inflight',
+        'redis.stream.slots',
         'redis.stream.pending',
         'redis.stream.lag',
       ]);
     });
 
-    it('closes the gauges on shutdown', async () => {
+    it('registers a counter for the time a stream had no free slot', async () => {
+      // arrange
+      const telemetry = new NoopTelemetry();
+      const counter = vi.spyOn(telemetry.getMeter(), 'observableCounter');
+
+      // act
+      await createTransport({}, telemetry);
+
+      // assert
+      expect(counter.mock.calls.map(([name]) => name.join('.'))).toEqual([
+        'redis.stream.full.duration',
+      ]);
+    });
+
+    it('closes the gauges and counters on shutdown', async () => {
       // arrange
       const telemetry = new NoopTelemetry();
       const close = vi.fn();
 
       vi.spyOn(telemetry.getMeter(), 'gauge').mockReturnValue({ close });
+      vi.spyOn(telemetry.getMeter(), 'observableCounter').mockReturnValue({
+        close,
+      });
 
       const { transport } = await createTransport({}, telemetry);
 
@@ -183,7 +201,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       await shutdown(transport);
 
       // assert
-      expect(close).toHaveBeenCalledTimes(3);
+      expect(close).toHaveBeenCalledTimes(5);
     });
   });
 

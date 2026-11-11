@@ -141,6 +141,11 @@ export interface TelemetryGauge {
   close(): void;
 }
 
+export interface TelemetryObservableCounter {
+  /** Stops observing. */
+  close(): void;
+}
+
 /**
  * Makes the instruments the bus records its metrics with. Which metrics there
  * are is up to the bus, how they are named and stored is up to the meter.
@@ -162,6 +167,16 @@ export interface TelemetryMeter {
     options: TelemetryInstrumentOptions,
     observe: () => TelemetryObservation[] | Promise<TelemetryObservation[]>,
   ): TelemetryGauge;
+
+  /**
+   * Calls `observe` for the totals so far whenever metrics are collected, for
+   * a count that is only known as a total, e.g. a time that is still running.
+   */
+  observableCounter(
+    name: TelemetryName,
+    options: TelemetryInstrumentOptions,
+    observe: () => TelemetryObservation[] | Promise<TelemetryObservation[]>,
+  ): TelemetryObservableCounter;
 }
 
 /** Observes the bus with traces and metrics. */

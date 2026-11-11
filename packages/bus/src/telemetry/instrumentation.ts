@@ -7,6 +7,7 @@ import {
   type TelemetryInstrumentOptions,
   type TelemetryMessage,
   type TelemetryName,
+  type TelemetryObservableCounter,
   type TelemetryObservation,
 } from './telemetry.js';
 
@@ -133,5 +134,13 @@ export class Instrumentation {
     observe: () => TelemetryObservation[] | Promise<TelemetryObservation[]>,
   ): TelemetryGauge {
     return this.metrics.gauge(name, options, observe);
+  }
+
+  public observableCounter(
+    name: TelemetryName,
+    options: TelemetryInstrumentOptions,
+    observe: () => TelemetryObservation[] | Promise<TelemetryObservation[]>,
+  ): TelemetryObservableCounter {
+    return this.metrics.observableCounter(name, options, observe);
   }
 }

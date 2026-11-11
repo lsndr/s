@@ -382,6 +382,8 @@ The metrics of the bus:
 | `bus.outbox.relayed.messages` | counter      | Records an outbox handed to `dispatch`, with `error.type` when the dispatch failed. Records of a failed dispatch are counted again when they are retried.                                                                                                                   |
 | `bus.outbox.relay.duration`   | histogram, s | Duration of one `relay` round, the ones that find nothing included, with `error.type` when it failed.                                                                                                                                                                       |
 | `redis.stream.inflight`       | gauge        | Entries of a stream this instance is processing, which `concurrency` limits.                                                                                                                                                                                                |
+| `redis.stream.slots`          | gauge        | Slots of a stream on this instance, which is `concurrency`. Compare it with `redis.stream.inflight` for how much of them is used.                                                                                                                                           |
+| `redis.stream.full.duration`  | counter, s   | Time a stream had no free slot on this instance, so it wasn't read. Its rate is the share of time the stream was full, and it counts the stretch that is still running.                                                                                                     |
 | `redis.stream.pending`        | gauge        | Entries of a stream delivered to the group and not acknowledged: in flight on any instance or waiting for a retry.                                                                                                                                                          |
 | `redis.stream.lag`            | gauge        | Entries of a stream not delivered to the group yet. Left out while Redis can't tell.                                                                                                                                                                                        |
 
@@ -391,7 +393,7 @@ A settlement on RabbitMQ is measured as close to zero: `ack` and `nack` only wri
 
 ### Dashboard
 
-There is a Grafana dashboard of these metrics for each broker: [`dashboards/redis.json`](dashboards/redis.json) and [`dashboards/rabbitmq.json`](dashboards/rabbitmq.json). Both show throughput, durations, failures and the [outbox](#outbox), and the Redis one adds the Redis Streams backlog. Import the one you need in Grafana and pick a Prometheus data source. They are not part of the published package, but every release of the bus has the files of `dashboards/` attached.
+There is a Grafana dashboard of these metrics for each broker: [`dashboards/redis.json`](dashboards/redis.json) and [`dashboards/rabbitmq.json`](dashboards/rabbitmq.json). Both show throughput, durations, failures and the [outbox](#outbox), and the Redis one adds the slots of the streams and the Redis Streams backlog. Import the one you need in Grafana and pick a Prometheus data source. They are not part of the published package, but every release of the bus has the files of `dashboards/` attached.
 
 It expects the names Prometheus gives OpenTelemetry metrics, with the unit as a suffix: `messaging.process.duration` is `messaging_process_duration_seconds`, counters end in `_total`, and the service is the `job` label. It also expects the default `prefix` of `BusOtel`.
 
@@ -408,7 +410,7 @@ interface Telemetry {
 
 The tracer has `create`, `send`, `receive`, `process` and `settle`, each wrapping the function that does the work.
 
-The meter only makes instruments: `counter`, `histogram` and `gauge`. Which metrics there are, and when they are recorded, is decided by the bus, so a custom meter gets all of them.
+The meter only makes instruments: `counter`, `histogram`, `gauge` and `observableCounter`, which like a gauge is observed whenever metrics are collected, but reports a total that only grows. Which metrics there are, and when they are recorded, is decided by the bus, so a custom meter gets all of them.
 
 Names are given by their parts and joined by the telemetry the way its backend writes them: a metric is `['delivery', 'latency']`, an attribute is `{ name: ['system'], value: 'redis' }`. This goes for the attributes of metrics and for the ones a transport adds to a destination or a message.
 
@@ -446,7 +448,7 @@ class StatsdMeter implements TelemetryMeter {
     };
   }
 
-  // histogram and gauge alike
+  // histogram, gauge and observableCounter alike
 }
 ```
 

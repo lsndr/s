@@ -7,6 +7,7 @@ import {
   type TelemetryHistogram,
   type TelemetryMessage,
   type TelemetryMeter,
+  type TelemetryObservableCounter,
   type TelemetryTracer,
 } from './telemetry.js';
 
@@ -61,6 +62,10 @@ class NoopMeter implements TelemetryMeter {
   }
 
   public gauge(): TelemetryGauge {
+    return { close: () => undefined };
+  }
+
+  public observableCounter(): TelemetryObservableCounter {
     return { close: () => undefined };
   }
 }

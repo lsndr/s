@@ -279,6 +279,32 @@ describe('Streams', () => {
     });
   });
 
+  describe('slots', () => {
+    it('is the number of slots per stream', () => {
+      // arrange
+      const streams = new Streams(4);
+
+      // act
+      const slots = streams.slots();
+
+      // assert
+      expect(slots).toBe(4);
+    });
+  });
+
+  describe('fullDuration', () => {
+    it('is 0 for a stream that is not registered', () => {
+      // arrange
+      const streams = new Streams(1);
+
+      // act
+      const duration = streams.fullDuration('a');
+
+      // assert
+      expect(duration).toBe(0);
+    });
+  });
+
   describe('isInflight', () => {
     it('is false for a stream that is not registered', () => {
       // arrange

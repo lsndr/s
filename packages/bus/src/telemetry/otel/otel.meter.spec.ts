@@ -191,4 +191,37 @@ describe('BusOtel meter', () => {
     // assert
     expect(points).toEqual([]);
   });
+
+  it('observes a counter when metrics are collected', async () => {
+    // arrange
+    meter.observableCounter(['test', 'total'], {}, () =>
+      Promise.resolve([
+        { value: 4, attributes: [{ name: ['test', 'kind'], value: 'a' }] },
+      ]),
+    );
+
+    // act
+    const [point] = await pointsOf('bus.test.total');
+
+    // assert
+    expect(point).toMatchObject({
+      value: 4,
+      attributes: { 'bus.test.kind': 'a' },
+    });
+  });
+
+  it('stops observing a closed counter', async () => {
+    // arrange
+    const counter = meter.observableCounter(['test', 'total'], {}, () => [
+      { value: 4 },
+    ]);
+
+    counter.close();
+
+    // act
+    const points = await pointsOf('bus.test.total');
+
+    // assert
+    expect(points).toEqual([]);
+  });
 });

@@ -11,11 +11,7 @@ import { type BusProvider } from '../../provider.js';
 import { type EventCallback } from '../subscriber.js';
 import { type PublishOptions } from '../dispatcher.js';
 import { Serializer } from '../../serialization/serializer.js';
-import {
-  Telemetry,
-  type TelemetryGauge,
-  type TelemetryServer,
-} from '../../telemetry/telemetry.js';
+import { Telemetry, type TelemetryServer } from '../../telemetry/telemetry.js';
 import { parseServer } from '../../telemetry/server.js';
 import { Instrumentation } from '../../telemetry/instrumentation.js';
 import { Backlog } from './backlog.js';
@@ -213,7 +209,7 @@ export class RedisStreamsTransport
   private readonly server?: TelemetryServer;
   private readonly instrumentation: Instrumentation;
   private readonly backlog: Backlog;
-  private gauges: TelemetryGauge[] = [];
+  private observers: { close(): void }[] = [];
   private readonly logger = new Logger(RedisStreamsTransport.name);
 
   public constructor(
@@ -329,8 +325,8 @@ export class RedisStreamsTransport
     }
 
     // before the connections close, so nothing is observed through them
-    for (const gauge of this.gauges.splice(0)) {
-      gauge.close();
+    for (const observer of this.observers.splice(0)) {
+      observer.close();
     }
 
     await this.clients.destroy();
@@ -397,7 +393,7 @@ export class RedisStreamsTransport
   private observe(): void {
     const { instrumentation, backlog } = this;
 
-    this.gauges = [
+    this.observers = [
       instrumentation.gauge(
         ['redis', 'stream', 'inflight'],
         {
@@ -405,6 +401,22 @@ export class RedisStreamsTransport
           unit: '{entry}',
         },
         () => backlog.inflight(),
+      ),
+      instrumentation.gauge(
+        ['redis', 'stream', 'slots'],
+        {
+          description: 'Number of slots of a stream on this consumer.',
+          unit: '{slot}',
+        },
+        () => backlog.slots(),
+      ),
+      instrumentation.observableCounter(
+        ['redis', 'stream', 'full', 'duration'],
+        {
+          description: 'Time a stream had no free slot on this consumer.',
+          unit: 's',
+        },
+        () => backlog.fullDuration(),
       ),
       instrumentation.gauge(
         ['redis', 'stream', 'pending'],

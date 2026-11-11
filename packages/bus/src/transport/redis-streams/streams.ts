@@ -99,6 +99,16 @@ export class Streams {
     return this.entries.ids(name);
   }
 
+  /** Number of slots of every stream. */
+  public slots(): number {
+    return this.entries.slots;
+  }
+
+  /** Seconds the stream has had no free slot, the current stretch included. */
+  public fullDuration(name: string): number {
+    return this.entries.fullDuration(name);
+  }
+
   public isInflight(name: string, id: string): boolean {
     return this.entries.has(name, id);
   }
