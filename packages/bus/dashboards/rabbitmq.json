@@ -1,10 +1,10 @@
 {
-  "uid": "lsndr-bus",
-  "title": "Bus",
-  "tags": ["bus", "messaging"],
+  "uid": "lsndr-bus-rabbitmq",
+  "title": "Bus · RabbitMQ",
+  "tags": ["bus", "messaging", "rabbitmq"],
   "schemaVersion": 39,
   "editable": true,
-  "description": "Metrics of @lsndr/bus recorded by BusOtel, as Prometheus names them.",
+  "description": "Metrics of @lsndr/bus on RabbitMQ recorded by BusOtel, as Prometheus names them.",
   "time": {
     "from": "now-1h",
     "to": "now"
@@ -27,26 +27,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "query": "label_values(messaging_client_operation_duration_seconds_count, job)",
-        "refresh": 2,
-        "multi": true,
-        "includeAll": true,
-        "allValue": ".*",
-        "current": {
-          "text": "All",
-          "value": "$__all"
-        },
-        "sort": 1
-      },
-      {
-        "name": "system",
-        "label": "System",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${datasource}"
-        },
-        "query": "label_values(messaging_client_operation_duration_seconds_count{job=~\"$job\"}, messaging_system_name)",
+        "query": "label_values(messaging_client_operation_duration_seconds_count{messaging_system_name=\"rabbitmq\"}, job)",
         "refresh": 2,
         "multi": true,
         "includeAll": true,
@@ -118,7 +99,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(messaging_client_sent_messages_total{job=~\"$job\", messaging_system_name=~\"$system\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(messaging_client_sent_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\"}[$__range])) or vector(0)",
           "legendFormat": "sent",
           "instant": true
         }
@@ -170,7 +151,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(messaging_client_consumed_messages_total{job=~\"$job\", messaging_system_name=~\"$system\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(messaging_client_consumed_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\"}[$__range])) or vector(0)",
           "legendFormat": "consumed",
           "instant": true
         }
@@ -222,7 +203,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome=\"acked\", error_type=\"\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(bus_settled_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\", bus_settlement_outcome=\"acked\", error_type=\"\"}[$__range])) or vector(0)",
           "legendFormat": "acked",
           "instant": true
         }
@@ -274,7 +255,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome=\"retried\", error_type=\"\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(bus_settled_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\", bus_settlement_outcome=\"retried\", error_type=\"\"}[$__range])) or vector(0)",
           "legendFormat": "retried",
           "instant": true
         }
@@ -330,7 +311,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome=\"dropped\", error_type=\"\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(bus_settled_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\", bus_settlement_outcome=\"dropped\", error_type=\"\"}[$__range])) or vector(0)",
           "legendFormat": "dropped",
           "instant": true
         }
@@ -382,7 +363,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(messaging_process_duration_seconds_count{job=~\"$job\", messaging_system_name=~\"$system\", error_type!=\"\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(messaging_process_duration_seconds_count{job=~\"$job\", messaging_system_name=\"rabbitmq\", error_type!=\"\"}[$__range])) or vector(0)",
           "legendFormat": "failed",
           "instant": true
         }
@@ -444,8 +425,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (messaging_system_name, messaging_destination_name) (rate(messaging_client_sent_messages_total{job=~\"$job\", messaging_system_name=~\"$system\"}[$__rate_interval]))",
-          "legendFormat": "{{messaging_system_name}} {{messaging_destination_name}}"
+          "expr": "sum by (messaging_destination_name) (rate(messaging_client_sent_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\"}[$__rate_interval]))",
+          "legendFormat": "{{messaging_destination_name}}"
         }
       ],
       "description": "messaging.client.sent.messages"
@@ -494,8 +475,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (messaging_system_name, messaging_operation_name, messaging_destination_name) (rate(messaging_client_consumed_messages_total{job=~\"$job\", messaging_system_name=~\"$system\"}[$__rate_interval]))",
-          "legendFormat": "{{messaging_system_name}} {{messaging_operation_name}} {{messaging_destination_name}}"
+          "expr": "sum by (messaging_operation_name, messaging_destination_name) (rate(messaging_client_consumed_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\"}[$__rate_interval]))",
+          "legendFormat": "{{messaging_operation_name}} {{messaging_destination_name}}"
         }
       ],
       "description": "messaging.client.consumed.messages. On Redis Streams the read of new entries has no destination."
@@ -544,7 +525,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (bus_settlement_outcome, messaging_destination_name) (rate(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", error_type=\"\"}[$__rate_interval]))",
+          "expr": "sum by (bus_settlement_outcome, messaging_destination_name) (rate(bus_settled_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\", error_type=\"\"}[$__rate_interval]))",
           "legendFormat": "{{bus_settlement_outcome}} {{messaging_destination_name}}"
         }
       ],
@@ -606,7 +587,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.5, sum by (le, messaging_destination_subscription_name) (rate(messaging_process_duration_seconds_bucket{job=~\"$job\", messaging_system_name=~\"$system\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le, messaging_destination_subscription_name) (rate(messaging_process_duration_seconds_bucket{job=~\"$job\", messaging_system_name=\"rabbitmq\"}[$__rate_interval])))",
           "legendFormat": "p50 {{messaging_destination_subscription_name}}"
         },
         {
@@ -615,7 +596,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, messaging_destination_subscription_name) (rate(messaging_process_duration_seconds_bucket{job=~\"$job\", messaging_system_name=~\"$system\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, messaging_destination_subscription_name) (rate(messaging_process_duration_seconds_bucket{job=~\"$job\", messaging_system_name=\"rabbitmq\"}[$__rate_interval])))",
           "legendFormat": "p95 {{messaging_destination_subscription_name}}"
         }
       ],
@@ -665,8 +646,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, messaging_system_name, messaging_operation_name) (rate(messaging_client_operation_duration_seconds_bucket{job=~\"$job\", messaging_system_name=~\"$system\"}[$__rate_interval])))",
-          "legendFormat": "{{messaging_system_name}} {{messaging_operation_name}}"
+          "expr": "histogram_quantile(0.95, sum by (le, messaging_operation_name) (rate(messaging_client_operation_duration_seconds_bucket{job=~\"$job\", messaging_system_name=\"rabbitmq\"}[$__rate_interval])))",
+          "legendFormat": "{{messaging_operation_name}}"
         }
       ],
       "description": "messaging.client.operation.duration. A Redis Streams receive includes the time it blocks waiting for entries."
@@ -715,7 +696,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.5, sum by (le, messaging_destination_name) (rate(bus_delivery_latency_seconds_bucket{job=~\"$job\", messaging_system_name=~\"$system\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le, messaging_destination_name) (rate(bus_delivery_latency_seconds_bucket{job=~\"$job\", messaging_system_name=\"rabbitmq\"}[$__rate_interval])))",
           "legendFormat": "p50 {{messaging_destination_name}}"
         },
         {
@@ -724,7 +705,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, messaging_destination_name) (rate(bus_delivery_latency_seconds_bucket{job=~\"$job\", messaging_system_name=~\"$system\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, messaging_destination_name) (rate(bus_delivery_latency_seconds_bucket{job=~\"$job\", messaging_system_name=\"rabbitmq\"}[$__rate_interval])))",
           "legendFormat": "p95 {{messaging_destination_name}}"
         }
       ],
@@ -786,7 +767,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (messaging_destination_subscription_name, error_type) (rate(messaging_process_duration_seconds_count{job=~\"$job\", messaging_system_name=~\"$system\", error_type!=\"\"}[$__rate_interval]))",
+          "expr": "sum by (messaging_destination_subscription_name, error_type) (rate(messaging_process_duration_seconds_count{job=~\"$job\", messaging_system_name=\"rabbitmq\", error_type!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{messaging_destination_subscription_name}} {{error_type}}"
         }
       ]
@@ -835,7 +816,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (bus_settlement_outcome, messaging_destination_name) (rate(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome!=\"acked\", error_type=\"\"}[$__rate_interval]))",
+          "expr": "sum by (bus_settlement_outcome, messaging_destination_name) (rate(bus_settled_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\", bus_settlement_outcome!=\"acked\", error_type=\"\"}[$__rate_interval]))",
           "legendFormat": "{{bus_settlement_outcome}} {{messaging_destination_name}}"
         }
       ]
@@ -884,7 +865,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (messaging_destination_name, error_type) (rate(messaging_client_sent_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", error_type!=\"\"}[$__rate_interval]))",
+          "expr": "sum by (messaging_destination_name, error_type) (rate(messaging_client_sent_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\", error_type!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{messaging_destination_name}} {{error_type}}"
         }
       ]
@@ -933,173 +914,11 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (messaging_destination_name, error_type) (rate(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", error_type!=\"\"}[$__rate_interval]))",
+          "expr": "sum by (messaging_destination_name, error_type) (rate(bus_settled_messages_total{job=~\"$job\", messaging_system_name=\"rabbitmq\", error_type!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{messaging_destination_name}} {{error_type}}"
         }
       ],
       "description": "bus.settled.messages with error.type: telling the broker how a delivery ended failed, so the broker delivers it again."
-    },
-    {
-      "id": 20,
-      "type": "row",
-      "title": "Redis Streams backlog",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 32,
-        "w": 24,
-        "h": 1
-      }
-    },
-    {
-      "id": 21,
-      "type": "timeseries",
-      "title": "In flight",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 33,
-        "w": 8,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "min": 0,
-          "custom": {
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": ["mean", "max"]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_inflight{job=~\"$job\"})",
-          "legendFormat": "{{messaging_consumer_group_name}} {{messaging_destination_name}}"
-        }
-      ],
-      "description": "redis.stream.inflight: entries being processed, summed over the instances."
-    },
-    {
-      "id": 22,
-      "type": "timeseries",
-      "title": "Pending",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 33,
-        "w": 8,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "min": 0,
-          "custom": {
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": ["mean", "max"]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "max by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_pending{job=~\"$job\"})",
-          "legendFormat": "{{messaging_consumer_group_name}} {{messaging_destination_name}}"
-        }
-      ],
-      "description": "redis.stream.pending: entries delivered to the group and not acknowledged. The same on every instance, so the maximum is shown."
-    },
-    {
-      "id": 23,
-      "type": "timeseries",
-      "title": "Lag",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 33,
-        "w": 8,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "min": 0,
-          "custom": {
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": ["mean", "max"]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "max by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_lag{job=~\"$job\"})",
-          "legendFormat": "{{messaging_consumer_group_name}} {{messaging_destination_name}}"
-        }
-      ],
-      "description": "redis.stream.lag: entries not delivered to the group yet. The same on every instance, so the maximum is shown."
     },
     {
       "id": 24,
@@ -1108,7 +927,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 41,
+        "y": 32,
         "w": 24,
         "h": 1
       }
@@ -1123,7 +942,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 33,
         "w": 8,
         "h": 8
       },
@@ -1191,7 +1010,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 42,
+        "y": 33,
         "w": 8,
         "h": 8
       },
@@ -1250,7 +1069,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 42,
+        "y": 33,
         "w": 8,
         "h": 8
       },

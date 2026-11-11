@@ -391,7 +391,7 @@ A settlement on RabbitMQ is measured as close to zero: `ack` and `nack` only wri
 
 ### Dashboard
 
-[`dashboards/grafana.json`](dashboards/grafana.json) is a Grafana dashboard of these metrics: throughput, durations, failures, the Redis Streams backlog and the outbox. Import it in Grafana and pick a Prometheus data source. It is not part of the published package, but every release of the bus has the files of `dashboards/` attached.
+There is a Grafana dashboard of these metrics for each broker: [`dashboards/redis.json`](dashboards/redis.json) and [`dashboards/rabbitmq.json`](dashboards/rabbitmq.json). Both show throughput, durations, failures and the [outbox](#outbox), and the Redis one adds the Redis Streams backlog. Import the one you need in Grafana and pick a Prometheus data source. They are not part of the published package, but every release of the bus has the files of `dashboards/` attached.
 
 It expects the names Prometheus gives OpenTelemetry metrics, with the unit as a suffix: `messaging.process.duration` is `messaging_process_duration_seconds`, counters end in `_total`, and the service is the `job` label. It also expects the default `prefix` of `BusOtel`.
 
