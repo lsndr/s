@@ -8,6 +8,7 @@ import {
   type TelemetryTracer,
 } from '../telemetry.js';
 import { OtelMeter } from './otel.meter.js';
+import { OtelNames } from './otel.names.js';
 import { OtelTracer } from './otel.tracer.js';
 
 export interface BusOtelConfig {
@@ -17,6 +18,11 @@ export interface BusOtelConfig {
   meterProvider?: OtelApi.MeterProvider;
   /** Defaults to the global propagator. */
   propagator?: OtelApi.TextMapPropagator;
+  /**
+   * Goes before the names the conventions have no name for, e.g.
+   * `bus.delivery.latency`. Defaults to `bus`.
+   */
+  prefix?: string;
 }
 
 const BusOtelConfigToken = Symbol('BusOtelConfig');
@@ -43,9 +49,10 @@ export class BusOtel implements Telemetry, OnBusInit {
   public async onBusInit(): Promise<void> {
     const api = await import('@opentelemetry/api');
     const { tracerProvider, meterProvider, propagator } = this.config;
+    const names = new OtelNames(this.config.prefix ?? 'bus');
 
-    this.tracer = new OtelTracer(api, { tracerProvider, propagator });
-    this.meter = new OtelMeter(api, { meterProvider });
+    this.tracer = new OtelTracer(api, { tracerProvider, propagator, names });
+    this.meter = new OtelMeter(api, { meterProvider, names });
   }
 
   public getTracer(): TelemetryTracer {

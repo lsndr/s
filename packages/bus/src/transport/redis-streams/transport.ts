@@ -399,7 +399,7 @@ export class RedisStreamsTransport
 
     this.gauges = [
       instrumentation.gauge(
-        'bus.redis.stream.inflight',
+        ['redis', 'stream', 'inflight'],
         {
           description: 'Number of entries this consumer is processing.',
           unit: '{entry}',
@@ -407,7 +407,7 @@ export class RedisStreamsTransport
         () => backlog.inflight(),
       ),
       instrumentation.gauge(
-        'bus.redis.stream.pending',
+        ['redis', 'stream', 'pending'],
         {
           description:
             'Number of entries delivered to the group and not acknowledged.',
@@ -416,7 +416,7 @@ export class RedisStreamsTransport
         () => backlog.pending(),
       ),
       instrumentation.gauge(
-        'bus.redis.stream.lag',
+        ['redis', 'stream', 'lag'],
         {
           description: 'Number of entries not delivered to the group yet.',
           unit: '{entry}',

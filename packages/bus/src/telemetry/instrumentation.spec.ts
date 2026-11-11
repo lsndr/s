@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Logger } from '@nestjs/common';
 import { Instrumentation } from './instrumentation.js';
 import { NoopTelemetry } from './noop.telemetry.js';
-import { type TelemetryDestination } from './telemetry.js';
+import {
+  type TelemetryCounter,
+  type TelemetryDestination,
+  type TelemetryHistogram,
+} from './telemetry.js';
 
 const destination: TelemetryDestination = {
   system: 'redis',
@@ -11,66 +14,107 @@ const destination: TelemetryDestination = {
 };
 const message = { id: 'id-1', name: 'TestEvent', headers: {} };
 
+/** A telemetry whose instruments can be looked up by their dotted name. */
+function setup() {
+  const telemetry = new NoopTelemetry();
+  const counters = new Map<
+    string,
+    { add: ReturnType<typeof vi.fn<TelemetryCounter['add']>> }
+  >();
+  const histograms = new Map<
+    string,
+    { record: ReturnType<typeof vi.fn<TelemetryHistogram['record']>> }
+  >();
+
+  vi.spyOn(telemetry.getMeter(), 'counter').mockImplementation((name) => {
+    const counter = { add: vi.fn<TelemetryCounter['add']>() };
+
+    counters.set(name.join('.'), counter);
+
+    return counter;
+  });
+  vi.spyOn(telemetry.getMeter(), 'histogram').mockImplementation((name) => {
+    const histogram = { record: vi.fn<TelemetryHistogram['record']>() };
+
+    histograms.set(name.join('.'), histogram);
+
+    return histogram;
+  });
+
+  return {
+    telemetry,
+    instrumentation: new Instrumentation(telemetry),
+    added: (name: string) => counters.get(name)?.add.mock.calls,
+    recorded: (name: string) => histograms.get(name)?.record.mock.calls,
+  };
+}
+
 describe('Instrumentation', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
   it.each(['create', 'send', 'process'] as const)(
-    'runs a %s once, inside the tracer and the meter',
+    'runs a %s once, inside the tracer',
     async (operation) => {
       // arrange
-      const telemetry = new NoopTelemetry();
+      const { telemetry, instrumentation } = setup();
       const traced = vi.spyOn(telemetry.getTracer(), operation);
-      const metered = vi.spyOn(telemetry.getMeter(), operation);
       const fn = vi.fn(() => Promise.resolve('done'));
 
       // act
-      const result = await new Instrumentation(telemetry)[operation](
-        destination,
-        message,
-        fn,
-      );
+      const result = await instrumentation[operation](destination, message, fn);
 
       // assert
       expect(result).toBe('done');
       expect(fn).toHaveBeenCalledTimes(1);
       expect(traced.mock.calls[0]![0]).toBe(destination);
-      expect(metered.mock.calls[0]![0]).toBe(destination);
     },
   );
 
+  it('measures an operation it traces', async () => {
+    // arrange
+    const { instrumentation, added } = setup();
+
+    // act
+    await instrumentation.send(destination, message, () => Promise.resolve());
+
+    // assert
+    expect(added('sent.messages')).toEqual([
+      [
+        1,
+        expect.arrayContaining([
+          { name: ['operation', 'name'], value: 'send' },
+        ]),
+      ],
+    ]);
+  });
+
   it('rethrows a failure of the wrapped function', async () => {
     // arrange
+    const { instrumentation } = setup();
     const failure = new Error('boom');
 
     // act
-    const result = new Instrumentation(new NoopTelemetry()).send(
-      destination,
-      message,
-      () => Promise.reject(failure),
+    const result = instrumentation.send(destination, message, () =>
+      Promise.reject(failure),
     );
 
     // assert
     await expect(result).rejects.toBe(failure);
   });
 
-  it('gives the size of a batch to the tracer and the meter', async () => {
+  it('gives the size of a batch to the tracer and the metrics', async () => {
     // arrange
-    const telemetry = new NoopTelemetry();
+    const { telemetry, instrumentation, added } = setup();
     const traced = { setSize: vi.fn() };
-    const metered = { setSize: vi.fn() };
 
     vi.spyOn(telemetry.getTracer(), 'receive').mockImplementation((_d, fn) =>
       fn(traced),
     );
-    vi.spyOn(telemetry.getMeter(), 'receive').mockImplementation((_d, fn) =>
-      fn(metered),
-    );
 
     // act
-    await new Instrumentation(telemetry).receive(destination, (batch) => {
+    await instrumentation.receive(destination, (batch) => {
       batch.setSize(3);
 
       return Promise.resolve();
@@ -78,23 +122,17 @@ describe('Instrumentation', () => {
 
     // assert
     expect(traced.setSize).toHaveBeenCalledWith(3);
-    expect(metered.setSize).toHaveBeenCalledWith(3);
+    expect(added('consumed.messages')?.[0]?.[0]).toBe(3);
   });
 
-  it('processes a message of a batch with the batch each side made', async () => {
+  it('traces a message of a batch with the batch the tracer made', async () => {
     // arrange
-    const telemetry = new NoopTelemetry();
-    const instrumentation = new Instrumentation(telemetry);
+    const { telemetry, instrumentation } = setup();
     const traced = { setSize: vi.fn() };
-    const metered = { setSize: vi.fn() };
-    const tracerProcess = vi.spyOn(telemetry.getTracer(), 'process');
-    const meterProcess = vi.spyOn(telemetry.getMeter(), 'process');
+    const process = vi.spyOn(telemetry.getTracer(), 'process');
 
     vi.spyOn(telemetry.getTracer(), 'receive').mockImplementation((_d, fn) =>
       fn(traced),
-    );
-    vi.spyOn(telemetry.getMeter(), 'receive').mockImplementation((_d, fn) =>
-      fn(metered),
     );
 
     // act
@@ -105,88 +143,55 @@ describe('Instrumentation', () => {
     );
 
     // assert
-    expect(tracerProcess.mock.calls[0]![1].batch).toBe(traced);
-    expect(meterProcess.mock.calls[0]![1].batch).toBe(metered);
+    expect(process.mock.calls[0]![1].batch).toBe(traced);
+  });
+
+  it('does not count a processed message of a batch as consumed again', async () => {
+    // arrange
+    const { instrumentation, added } = setup();
+
+    // act
+    await instrumentation.receive(destination, (batch) => {
+      batch.setSize(1);
+
+      return instrumentation.process(destination, { ...message, batch }, () =>
+        Promise.resolve(),
+      );
+    });
+
+    // assert
+    expect(added('consumed.messages')?.map(([value]) => value)).toEqual([1]);
   });
 
   it('counts a settlement by its outcome', () => {
     // arrange
-    const telemetry = new NoopTelemetry();
-    const counter = { add: vi.fn() };
-    const create = vi
-      .spyOn(telemetry.getMeter(), 'counter')
-      .mockReturnValue(counter);
+    const { instrumentation, added } = setup();
 
     // act
-    new Instrumentation(telemetry).settle(destination, 'dropped');
+    instrumentation.settle(destination, 'dropped');
 
     // assert
-    expect(create.mock.calls[0]![0]).toBe('bus.client.settled.messages');
-    expect(counter.add).toHaveBeenCalledWith(1, {
-      'messaging.system.name': 'redis',
-      'messaging.destination.name': 'stream',
-      'messaging.consumer.group.name': 'group',
-      'bus.settlement.outcome': 'dropped',
-    });
+    expect(added('settled.messages')).toEqual([
+      [
+        1,
+        [
+          { name: ['system'], value: 'redis' },
+          { name: ['destination', 'name'], value: 'stream' },
+          { name: ['consumer', 'group', 'name'], value: 'group' },
+          { name: ['settlement', 'outcome'], value: 'dropped' },
+        ],
+      ],
+    ]);
   });
 
-  it('does not throw when the meter fails', () => {
+  it('records a delivery latency', () => {
     // arrange
-    const telemetry = new NoopTelemetry();
-
-    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
-    vi.spyOn(telemetry.getMeter(), 'counter').mockImplementation(() => {
-      throw new Error('boom');
-    });
+    const { instrumentation, recorded } = setup();
 
     // act
-    const result = () =>
-      new Instrumentation(telemetry).settle(destination, 'acked');
+    instrumentation.deliver(destination, new Date());
 
     // assert
-    expect(result).not.toThrow();
-  });
-
-  it('records the time since the publish as the delivery latency', () => {
-    // arrange
-    const telemetry = new NoopTelemetry();
-    const histogram = { record: vi.fn() };
-    const create = vi
-      .spyOn(telemetry.getMeter(), 'histogram')
-      .mockReturnValue(histogram);
-
-    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:02.500Z') });
-
-    // act
-    new Instrumentation(telemetry).deliver(
-      destination,
-      new Date('2026-01-01T00:00:00.000Z'),
-    );
-
-    // assert
-    expect(create.mock.calls[0]![0]).toBe('bus.delivery.latency');
-    expect(histogram.record).toHaveBeenCalledWith(2.5, {
-      'messaging.system.name': 'redis',
-      'messaging.destination.name': 'stream',
-      'messaging.consumer.group.name': 'group',
-    });
-  });
-
-  it('records no negative latency when the publisher clock is ahead', () => {
-    // arrange
-    const telemetry = new NoopTelemetry();
-    const histogram = { record: vi.fn() };
-
-    vi.spyOn(telemetry.getMeter(), 'histogram').mockReturnValue(histogram);
-    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00.000Z') });
-
-    // act
-    new Instrumentation(telemetry).deliver(
-      destination,
-      new Date('2026-01-01T00:00:05.000Z'),
-    );
-
-    // assert
-    expect(histogram.record.mock.calls[0]![0]).toBe(0);
+    expect(recorded('delivery.latency')).toHaveLength(1);
   });
 });

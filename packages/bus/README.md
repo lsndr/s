@@ -343,7 +343,7 @@ BusModule.forRoot({
     url: 'amqp://localhost',
     group: 'billing',
   }),
-  telemetry: BusOtel.withConfig(), // optional: { tracerProvider, meterProvider, propagator }
+  telemetry: BusOtel.withConfig(), // optional: { tracerProvider, meterProvider, propagator, prefix }
 });
 ```
 
@@ -375,14 +375,14 @@ The metrics of the bus:
 
 | Metric                        | Type         | What it tells                                                                                                                                                                                                             |
 | ----------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bus.client.settled.messages` | counter      | How a delivery ended, as `bus.settlement.outcome`: `acked` (handled), `retried` (failed, will be delivered again) or `dropped` (failed with no retries left). On Redis Streams one entry is settled for all its handlers. |
+| `bus.settled.messages`        | counter      | How a delivery ended, as `bus.settlement.outcome`: `acked` (handled), `retried` (failed, will be delivered again) or `dropped` (failed with no retries left). On Redis Streams one entry is settled for all its handlers. |
 | `bus.delivery.latency`        | histogram, s | Time from `publishedAt` to the start of the first processing, so it includes the wait in an outbox. Retries are not recorded. It compares the clocks of the publisher and the consumer.                                   |
 | `bus.outbox.relay.latency`    | histogram, s | Time a record waited in an [outbox](#outbox), from `publishedAt` to its relay. Only relayed records are recorded.                                                                                                         |
 | `bus.outbox.relayed.messages` | counter      | Records an outbox handed to `dispatch`, with `error.type` when the dispatch failed. Records of a failed dispatch are counted again when they are retried.                                                                 |
 | `bus.outbox.relay.duration`   | histogram, s | Duration of one `relay` round, the ones that find nothing included, with `error.type` when it failed.                                                                                                                     |
-| `bus.redis.stream.inflight`   | gauge        | Entries of a stream this instance is processing, which `concurrency` limits.                                                                                                                                              |
-| `bus.redis.stream.pending`    | gauge        | Entries of a stream delivered to the group and not acknowledged: in flight on any instance or waiting for a retry.                                                                                                        |
-| `bus.redis.stream.lag`        | gauge        | Entries of a stream not delivered to the group yet. Left out while Redis can't tell.                                                                                                                                      |
+| `redis.stream.inflight`       | gauge        | Entries of a stream this instance is processing, which `concurrency` limits.                                                                                                                                              |
+| `redis.stream.pending`        | gauge        | Entries of a stream delivered to the group and not acknowledged: in flight on any instance or waiting for a retry.                                                                                                        |
+| `redis.stream.lag`            | gauge        | Entries of a stream not delivered to the group yet. Left out while Redis can't tell.                                                                                                                                      |
 
 `pending` and `lag` describe the whole group, so every instance reports the same value: aggregate them with a maximum, not a sum. They cost one `XINFO GROUPS` per stream on every collection.
 
@@ -390,7 +390,7 @@ The metrics of the bus:
 
 [`dashboards/bus.json`](dashboards/bus.json) is a Grafana dashboard of these metrics: throughput, durations, failures, the Redis Streams backlog and the outbox. Import it in Grafana and pick a Prometheus data source. It is not part of the published package.
 
-It expects the names Prometheus gives OpenTelemetry metrics, with the unit as a suffix: `messaging.process.duration` is `messaging_process_duration_seconds`, counters end in `_total`, and the service is the `job` label.
+It expects the names Prometheus gives OpenTelemetry metrics, with the unit as a suffix: `messaging.process.duration` is `messaging_process_duration_seconds`, counters end in `_total`, and the service is the `job` label. It also expects the default `prefix` of `BusOtel`.
 
 ### Custom telemetry
 
@@ -403,7 +403,49 @@ interface Telemetry {
 }
 ```
 
-Both have `create`, `send`, `receive` and `process`, each wrapping the function that does the work, and a transport runs an operation inside both. The meter also makes the instruments (`counter`, `histogram`, `gauge`) that the metrics of the bus are recorded with.
+The tracer has `create`, `send`, `receive` and `process`, each wrapping the function that does the work.
+
+The meter only makes instruments: `counter`, `histogram` and `gauge`. Which metrics there are, and when they are recorded, is decided by the bus, so a custom meter gets all of them.
+
+Names are given by their parts and joined by the telemetry the way its backend writes them: a metric is `['delivery', 'latency']`, an attribute is `{ name: ['system'], value: 'redis' }`. This goes for the attributes of metrics and for the ones a transport adds to a destination or a message.
+
+The names of the bus have no prefix, it is up to the telemetry to add one. `BusOtel` joins the parts with dots and exports the names the semantic conventions know under their convention name. Names of a broker (`rabbitmq`, `redis`) stay as they are, like the conventions write the ones of RabbitMQ. The rest goes under `prefix`, which is `bus` by default: `['delivery', 'latency']` is exported as `bus.delivery.latency`.
+
+| Name of the bus                                                               | Exported by `BusOtel`                     |
+| ----------------------------------------------------------------------------- | ----------------------------------------- |
+| `operation.duration`                                                          | `messaging.client.operation.duration`     |
+| `process.duration`                                                            | `messaging.process.duration`              |
+| `sent.messages`                                                               | `messaging.client.sent.messages`          |
+| `consumed.messages`                                                           | `messaging.client.consumed.messages`      |
+| `operation.name`                                                              | `messaging.operation.name`                |
+| `operation.type`                                                              | `messaging.operation.type`                |
+| `system`                                                                      | `messaging.system.name`                   |
+| `destination.name`                                                            | `messaging.destination.name`              |
+| `consumer.group.name`                                                         | `messaging.consumer.group.name`           |
+| `subscription.name`                                                           | `messaging.destination.subscription.name` |
+| anything in `server`, `error`, `rabbitmq` or `redis`, e.g. `redis.stream.lag` | the same                                  |
+| anything else, e.g. `settled.messages`                                        | `<prefix>.settled.messages`               |
+
+A custom meter gets the names of the bus:
+
+```typescript
+class StatsdMeter implements TelemetryMeter {
+  public counter(name: TelemetryName): TelemetryCounter {
+    const key = name.join('_');
+
+    return {
+      add: (value, attributes = []) =>
+        statsd.increment(
+          key,
+          value,
+          attributes.map(({ name, value }) => `${name.join('_')}:${value}`),
+        ),
+    };
+  }
+
+  // histogram and gauge alike
+}
+```
 
 ## Configuration
 

@@ -1,5 +1,5 @@
 import {
-  type TelemetryAttributes,
+  type TelemetryAttribute,
   type TelemetryDestination,
 } from './telemetry.js';
 
@@ -11,31 +11,48 @@ import {
  */
 export function toMetricAttributes(
   destination: TelemetryDestination,
-): TelemetryAttributes {
-  const attributes: TelemetryAttributes = {};
+): TelemetryAttribute[] {
+  const attributes: TelemetryAttribute[] = [];
 
   if (destination.system) {
-    attributes['messaging.system.name'] = destination.system;
+    attributes.push({
+      name: ['system'],
+      value: destination.system,
+    });
   }
 
   if (destination.name) {
-    attributes['messaging.destination.name'] = destination.name;
+    attributes.push({
+      name: ['destination', 'name'],
+      value: destination.name,
+    });
   }
 
   if (destination.consumerGroup) {
-    attributes['messaging.consumer.group.name'] = destination.consumerGroup;
+    attributes.push({
+      name: ['consumer', 'group', 'name'],
+      value: destination.consumerGroup,
+    });
   }
 
   if (destination.subscription) {
-    attributes['messaging.destination.subscription.name'] =
-      destination.subscription;
+    attributes.push({
+      name: ['subscription', 'name'],
+      value: destination.subscription,
+    });
   }
 
   if (destination.server) {
-    attributes['server.address'] = destination.server.address;
+    attributes.push({
+      name: ['server', 'address'],
+      value: destination.server.address,
+    });
 
     if (destination.server.port !== undefined) {
-      attributes['server.port'] = destination.server.port;
+      attributes.push({
+        name: ['server', 'port'],
+        value: destination.server.port,
+      });
     }
   }
 

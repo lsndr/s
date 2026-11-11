@@ -21,7 +21,9 @@ const destination: TelemetryDestination = {
   subscription: 'Handler',
   clientId: 'client-1',
   server: { address: 'localhost', port: 5672 },
-  attributes: { 'rabbitmq.destination.routing_key': 'TestEvent' },
+  attributes: [
+    { name: ['rabbitmq', 'destination', 'routing_key'], value: 'TestEvent' },
+  ],
 };
 
 describe('BusOtel tracer', () => {
@@ -91,7 +93,7 @@ describe('BusOtel tracer', () => {
       id: 'id-1',
       name: 'TestEvent',
       headers: {},
-      attributes: { 'rabbitmq.message.delivery_tag': 7 },
+      attributes: [{ name: ['rabbitmq', 'message', 'delivery_tag'], value: 7 }],
     };
 
     // act

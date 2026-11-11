@@ -1,5 +1,6 @@
 import { NoopTelemetry } from '../telemetry/noop.telemetry.js';
 import { type Telemetry } from '../telemetry/telemetry.js';
+import { OtelNames } from '../telemetry/otel/otel.names.js';
 import {
   afterAll,
   afterEach,
@@ -388,8 +389,16 @@ describe('Transport', { timeout: 60_000 }, () => {
         const counter = { add: vi.fn() };
         const histogram = { record: vi.fn() };
 
-        vi.spyOn(telemetry.getMeter(), 'counter').mockReturnValue(counter);
-        vi.spyOn(telemetry.getMeter(), 'histogram').mockReturnValue(histogram);
+        // only the instruments of the settlements and the latency are looked at
+        vi.spyOn(telemetry.getMeter(), 'counter').mockImplementation((name) =>
+          name.join('.') === 'settled.messages' ? counter : { add: vi.fn() },
+        );
+        vi.spyOn(telemetry.getMeter(), 'histogram').mockImplementation(
+          (name) =>
+            name.join('.') === 'delivery.latency'
+              ? histogram
+              : { record: vi.fn() },
+        );
 
         const group = crypto.randomUUID();
         const value = crypto.randomUUID();
@@ -412,9 +421,13 @@ describe('Transport', { timeout: 60_000 }, () => {
           publish: () => transport.publish(new TestEvent({ value })),
           outcomes: () =>
             counter.add.mock.calls.map(
-              ([, attributes]) => attributes['bus.settlement.outcome'],
+              ([, attributes]) =>
+                new OtelNames('bus').toAttributes(attributes)[
+                  'bus.settlement.outcome'
+                ],
             ),
-          attributes: () => counter.add.mock.calls[0]?.[1],
+          attributes: () =>
+            new OtelNames('bus').toAttributes(counter.add.mock.calls[0]?.[1]),
         };
       }
 
@@ -479,9 +492,12 @@ describe('Transport', { timeout: 60_000 }, () => {
         await vi.waitFor(() => expect(outcomes()).toHaveLength(2));
         expect(histogram.record).toHaveBeenCalledExactlyOnceWith(
           expect.any(Number),
-          expect.objectContaining({
-            'messaging.system.name': expect.any(String),
-          }),
+          expect.arrayContaining([
+            {
+              name: ['system'],
+              value: expect.any(String),
+            },
+          ]),
         );
       });
     });

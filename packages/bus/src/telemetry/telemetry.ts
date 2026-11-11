@@ -18,7 +18,7 @@ export interface TelemetryMessage {
   /** Number of the delivery, 1 for the first try and 2 for the first retry. */
   attempt?: number;
   /** Attributes specific to the transport that differ per message. */
-  attributes?: Record<string, string | number>;
+  attributes?: TelemetryAttributes;
   /** Batch the message was received in. */
   batch?: TelemetryBatch;
 }
@@ -50,11 +50,14 @@ export interface TelemetryDestination {
   /** Broker the message goes through. */
   server?: TelemetryServer;
   /** Attributes specific to the transport. */
-  attributes?: Record<string, string | number>;
+  attributes?: TelemetryAttributes;
 }
 
-/** Wraps the operations of the bus, each around the function that does it. */
-interface TelemetryOperations {
+/**
+ * Traces how messages are created, sent, received and processed, each
+ * operation wrapped around the function that does it.
+ */
+export interface TelemetryTracer {
   /** Wraps storing a message for a later send, e.g. in an outbox. */
   create<T>(
     destination: TelemetryDestination,
@@ -87,10 +90,19 @@ interface TelemetryOperations {
   ): Promise<T>;
 }
 
-/** Traces how messages are created, sent, received and processed. */
-export type TelemetryTracer = TelemetryOperations;
+/**
+ * Name of a metric or an attribute as its parts, e.g.
+ * `['delivery', 'latency']`, for the tracer and the meter to join the
+ * way their backend writes names.
+ */
+export type TelemetryName = readonly string[];
 
-export type TelemetryAttributes = Record<string, string | number>;
+export interface TelemetryAttribute {
+  name: TelemetryName;
+  value: string | number;
+}
+
+export type TelemetryAttributes = readonly TelemetryAttribute[];
 
 export interface TelemetryInstrumentOptions {
   description?: string;
@@ -122,20 +134,23 @@ export interface TelemetryGauge {
 }
 
 /**
- * Measures how messages are created, sent, received and processed, and hands
- * out the instruments a transport measures everything else with.
+ * Makes the instruments the bus records its metrics with. Which metrics there
+ * are is up to the bus, how they are named and stored is up to the meter.
  */
-export interface TelemetryMeter extends TelemetryOperations {
-  counter(name: string, options?: TelemetryInstrumentOptions): TelemetryCounter;
+export interface TelemetryMeter {
+  counter(
+    name: TelemetryName,
+    options?: TelemetryInstrumentOptions,
+  ): TelemetryCounter;
 
   histogram(
-    name: string,
+    name: TelemetryName,
     options?: TelemetryHistogramOptions,
   ): TelemetryHistogram;
 
   /** Calls `observe` for the current values whenever metrics are collected. */
   gauge(
-    name: string,
+    name: TelemetryName,
     options: TelemetryInstrumentOptions,
     observe: () => TelemetryObservation[] | Promise<TelemetryObservation[]>,
   ): TelemetryGauge;

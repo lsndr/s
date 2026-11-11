@@ -14,6 +14,7 @@ import { Serializer } from '../../serialization/serializer.js';
 import { type JsonSerializer } from '../../serialization/json.serializer.js';
 import {
   Telemetry,
+  type TelemetryCounter,
   type TelemetryHistogram,
 } from '../../telemetry/telemetry.js';
 import { Outbox, type OutboxConfig, type OutboxRecord } from './outbox.js';
@@ -317,23 +318,31 @@ describe('Outbox', () => {
   });
 
   describe('relay metrics', () => {
+    const outbox = [{ name: ['system'], value: 'outbox' }];
+
     /** A module whose meter hands out the given instruments. */
     async function createMeteredModule() {
       const module = await createModule();
       const meter = module.get<Telemetry>(Telemetry).getMeter();
-      const counter = { add: vi.fn() };
+      const counter = { add: vi.fn<TelemetryCounter['add']>() };
       const histograms = new Map<
         string,
         { record: Mock<TelemetryHistogram['record']> }
       >();
 
-      vi.spyOn(meter, 'counter').mockReturnValue(counter);
+      // only the counter of the relayed records is looked at
+      vi.spyOn(meter, 'counter').mockImplementation((name) =>
+        name.join('.') === 'outbox.relayed.messages'
+          ? counter
+          : { add: vi.fn() },
+      );
       vi.spyOn(meter, 'histogram').mockImplementation((name) => {
-        const histogram = histograms.get(name) ?? {
+        const key = name.join('.');
+        const histogram = histograms.get(key) ?? {
           record: vi.fn<TelemetryHistogram['record']>(),
         };
 
-        histograms.set(name, histogram);
+        histograms.set(key, histogram);
 
         return histogram;
       });
@@ -359,9 +368,7 @@ describe('Outbox', () => {
       await vi.waitFor(() => expect(MemoryOutbox.pending).toHaveLength(0));
 
       // assert
-      expect(counter.add).toHaveBeenCalledExactlyOnceWith(2, {
-        'messaging.system.name': 'outbox',
-      });
+      expect(counter.add).toHaveBeenCalledExactlyOnceWith(2, outbox);
     });
 
     it('counts records that failed to relay with the type of the error', async () => {
@@ -376,10 +383,10 @@ describe('Outbox', () => {
 
       // assert
       await vi.waitFor(() =>
-        expect(counter.add).toHaveBeenCalledWith(1, {
-          'messaging.system.name': 'outbox',
-          'error.type': 'TypeError',
-        }),
+        expect(counter.add).toHaveBeenCalledWith(1, [
+          ...outbox,
+          { name: ['error', 'type'], value: 'TypeError' },
+        ]),
       );
     });
 
@@ -397,13 +404,13 @@ describe('Outbox', () => {
       await vi.waitFor(() => expect(MemoryOutbox.pending).toHaveLength(0));
 
       // assert
-      const [[latency, attributes]] = recorded('bus.outbox.relay.latency') as [
+      const [[latency, attributes]] = recorded('outbox.relay.latency') as [
         [number, object],
       ];
 
       expect(latency).toBeGreaterThanOrEqual(5);
       expect(latency).toBeLessThan(10);
-      expect(attributes).toEqual({ 'messaging.system.name': 'outbox' });
+      expect(attributes).toEqual(outbox);
     });
 
     it('records no latency for records that failed to relay', async () => {
@@ -419,7 +426,7 @@ describe('Outbox', () => {
       await vi.waitFor(() => expect(counter.add).toHaveBeenCalled());
 
       // assert
-      expect(recorded('bus.outbox.relay.latency')).toEqual([]);
+      expect(recorded('outbox.relay.latency')).toEqual([]);
     });
 
     it('records the duration of a relay round', async () => {
@@ -431,9 +438,9 @@ describe('Outbox', () => {
 
       // assert
       await vi.waitFor(() =>
-        expect(recorded('bus.outbox.relay.duration')?.[0]).toEqual([
+        expect(recorded('outbox.relay.duration')?.[0]).toEqual([
           expect.any(Number),
-          { 'messaging.system.name': 'outbox' },
+          outbox,
         ]),
       );
     });

@@ -17,8 +17,7 @@ export interface BacklogOptions {
 interface GroupBacklog {
   stream: string;
   pending: number;
-  /** Unknown when Redis can't tell, e.g. after entries were deleted. */
-  lag: number | undefined;
+  lag?: number;
 }
 
 export class Backlog {
@@ -97,6 +96,7 @@ export class Backlog {
       } catch (err) {
         this.logger.warn(
           `Failed to observe the backlog of ${stream}: ${String(err)}`,
+          err instanceof Error ? err.stack : undefined,
         );
       }
     }

@@ -187,7 +187,6 @@ export abstract class Outbox<C extends OutboxConfig = OutboxConfig>
   }
 
   private getInstrumentation(): Instrumentation {
-    // not made in the constructor: the telemetry is injected as a property
     this.instrumentation ??= new Instrumentation(this.telemetry);
 
     return this.instrumentation;

@@ -43,7 +43,7 @@ class NoopTracer implements TelemetryTracer {
   }
 }
 
-class NoopMeter extends NoopTracer implements TelemetryMeter {
+class NoopMeter implements TelemetryMeter {
   public counter(): TelemetryCounter {
     return { add: () => undefined };
   }

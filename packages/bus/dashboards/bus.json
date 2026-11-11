@@ -222,7 +222,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(bus_client_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome=\"acked\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome=\"acked\"}[$__range])) or vector(0)",
           "legendFormat": "acked",
           "instant": true
         }
@@ -274,7 +274,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(bus_client_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome=\"retried\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome=\"retried\"}[$__range])) or vector(0)",
           "legendFormat": "retried",
           "instant": true
         }
@@ -330,7 +330,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(bus_client_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome=\"dropped\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome=\"dropped\"}[$__range])) or vector(0)",
           "legendFormat": "dropped",
           "instant": true
         }
@@ -544,11 +544,11 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (bus_settlement_outcome, messaging_destination_name) (rate(bus_client_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\"}[$__rate_interval]))",
+          "expr": "sum by (bus_settlement_outcome, messaging_destination_name) (rate(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\"}[$__rate_interval]))",
           "legendFormat": "{{bus_settlement_outcome}} {{messaging_destination_name}}"
         }
       ],
-      "description": "bus.client.settled.messages"
+      "description": "bus.settled.messages"
     },
     {
       "id": 12,
@@ -835,7 +835,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (bus_settlement_outcome, messaging_destination_name) (rate(bus_client_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome!=\"acked\"}[$__rate_interval]))",
+          "expr": "sum by (bus_settlement_outcome, messaging_destination_name) (rate(bus_settled_messages_total{job=~\"$job\", messaging_system_name=~\"$system\", bus_settlement_outcome!=\"acked\"}[$__rate_interval]))",
           "legendFormat": "{{bus_settlement_outcome}} {{messaging_destination_name}}"
         }
       ]
@@ -945,11 +945,11 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (messaging_destination_name, messaging_consumer_group_name) (bus_redis_stream_inflight{job=~\"$job\"})",
+          "expr": "sum by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_inflight{job=~\"$job\"})",
           "legendFormat": "{{messaging_consumer_group_name}} {{messaging_destination_name}}"
         }
       ],
-      "description": "bus.redis.stream.inflight: entries being processed, summed over the instances."
+      "description": "redis.stream.inflight: entries being processed, summed over the instances."
     },
     {
       "id": 22,
@@ -995,11 +995,11 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (messaging_destination_name, messaging_consumer_group_name) (bus_redis_stream_pending{job=~\"$job\"})",
+          "expr": "max by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_pending{job=~\"$job\"})",
           "legendFormat": "{{messaging_consumer_group_name}} {{messaging_destination_name}}"
         }
       ],
-      "description": "bus.redis.stream.pending: entries delivered to the group and not acknowledged. The same on every instance, so the maximum is shown."
+      "description": "redis.stream.pending: entries delivered to the group and not acknowledged. The same on every instance, so the maximum is shown."
     },
     {
       "id": 23,
@@ -1045,11 +1045,11 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (messaging_destination_name, messaging_consumer_group_name) (bus_redis_stream_lag{job=~\"$job\"})",
+          "expr": "max by (messaging_destination_name, messaging_consumer_group_name) (redis_stream_lag{job=~\"$job\"})",
           "legendFormat": "{{messaging_consumer_group_name}} {{messaging_destination_name}}"
         }
       ],
-      "description": "bus.redis.stream.lag: entries not delivered to the group yet. The same on every instance, so the maximum is shown."
+      "description": "redis.stream.lag: entries not delivered to the group yet. The same on every instance, so the maximum is shown."
     },
     {
       "id": 24,

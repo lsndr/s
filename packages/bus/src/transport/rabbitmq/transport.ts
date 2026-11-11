@@ -116,7 +116,12 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
         system: 'rabbitmq',
         name: `${this.exchange}:${eventName}`,
         server: this.server,
-        attributes: { 'rabbitmq.destination.routing_key': eventName },
+        attributes: [
+          {
+            name: ['rabbitmq', 'destination', 'routing_key'],
+            value: eventName,
+          },
+        ],
       },
       { id, name: eventName, headers, bodySize: Buffer.byteLength(data) },
       () => this.sendToBroker(id, eventName, data, headers),
@@ -151,7 +156,6 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
         clientId: consumerTag,
         server: this.server,
       };
-
       Promise.resolve()
         .then(() => {
           const payload = this.serializer.deserialize(event, message.content);
@@ -171,12 +175,20 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
               headers: this.toStringHeaders(message),
               bodySize: message.content.length,
               attempt: retryCount + 1,
-              attributes: {
-                ...(routingKey && {
-                  'rabbitmq.destination.routing_key': routingKey,
-                }),
-                'rabbitmq.message.delivery_tag': deliveryTag,
-              },
+              attributes: [
+                ...(routingKey
+                  ? [
+                      {
+                        name: ['rabbitmq', 'destination', 'routing_key'],
+                        value: routingKey,
+                      },
+                    ]
+                  : []),
+                {
+                  name: ['rabbitmq', 'message', 'delivery_tag'],
+                  value: deliveryTag,
+                },
+              ],
             },
             async () => callback(payload),
           );

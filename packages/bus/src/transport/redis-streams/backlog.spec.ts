@@ -77,13 +77,13 @@ describe('Backlog', { timeout: 60_000 }, () => {
 
     const server = { address: 'localhost', port: 6379 };
     const backlog = new Backlog(clients, streams, { group, server });
-    const attributes = {
-      'messaging.system.name': 'redis',
-      'messaging.destination.name': name,
-      'messaging.consumer.group.name': group,
-      'server.address': 'localhost',
-      'server.port': 6379,
-    };
+    const attributes = [
+      { name: ['system'], value: 'redis' },
+      { name: ['destination', 'name'], value: name },
+      { name: ['consumer', 'group', 'name'], value: group },
+      { name: ['server', 'address'], value: 'localhost' },
+      { name: ['server', 'port'], value: 6379 },
+    ];
 
     return { backlog, streams, name, attributes };
   }

@@ -133,7 +133,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       await transport.publish(new FirstEvent('x'));
 
       const observe = gauge.mock.calls.find(
-        ([name]) => name === 'bus.redis.stream.lag',
+        ([name]) => name.join('.') === 'redis.stream.lag',
       )![2];
 
       // act
@@ -143,10 +143,13 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       expect(observations).toEqual([
         {
           value: 1,
-          attributes: expect.objectContaining({
-            'messaging.destination.name': stream(FirstEvent),
-            'messaging.consumer.group.name': group,
-          }),
+          attributes: expect.arrayContaining([
+            {
+              name: ['destination', 'name'],
+              value: stream(FirstEvent),
+            },
+            { name: ['consumer', 'group', 'name'], value: group },
+          ]),
         },
       ]);
     });
@@ -160,10 +163,10 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       await createTransport({}, telemetry);
 
       // assert
-      expect(gauge.mock.calls.map(([name]) => name)).toEqual([
-        'bus.redis.stream.inflight',
-        'bus.redis.stream.pending',
-        'bus.redis.stream.lag',
+      expect(gauge.mock.calls.map(([name]) => name.join('.'))).toEqual([
+        'redis.stream.inflight',
+        'redis.stream.pending',
+        'redis.stream.lag',
       ]);
     });
 

@@ -37,6 +37,7 @@ export { type EventPayload } from './types.js';
 export { type EventHandlerMiddleware } from './middleware/middleware.js';
 export {
   Telemetry,
+  type TelemetryAttribute,
   type TelemetryAttributes,
   type TelemetryBatch,
   type TelemetryCounter,
@@ -47,6 +48,7 @@ export {
   type TelemetryInstrumentOptions,
   type TelemetryMessage,
   type TelemetryMeter,
+  type TelemetryName,
   type TelemetryObservation,
   type TelemetryServer,
   type TelemetryTracer,

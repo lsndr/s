@@ -7,8 +7,10 @@ import {
   type TelemetryTracer,
 } from '../telemetry.js';
 import { getErrorType } from '../error-type.js';
+import { type OtelNames } from './otel.names.js';
 
 export interface OtelTracerConfig {
+  names: OtelNames;
   tracerProvider?: OtelApi.TracerProvider;
   propagator?: OtelApi.TextMapPropagator;
 }
@@ -105,7 +107,6 @@ export class OtelTracer implements TelemetryTracer {
       defaultTextMapGetter,
     );
     const span = this.startSpan(operation, destination, message, parent);
-
     const ctx = trace.setSpan(parent, span);
 
     propagator.inject(ctx, message.headers, defaultTextMapSetter);
@@ -142,12 +143,15 @@ export class OtelTracer implements TelemetryTracer {
     const attributes: OtelApi.Attributes = {
       'messaging.operation.name': operationName,
       'messaging.operation.type': operation,
-      ...destination.attributes,
+      ...this.config.names.toAttributes(destination.attributes),
     };
 
     if (message) {
       attributes['messaging.message.id'] = message.id;
-      Object.assign(attributes, message.attributes);
+      Object.assign(
+        attributes,
+        this.config.names.toAttributes(message.attributes),
+      );
     }
 
     if (destination.name) {
@@ -171,7 +175,8 @@ export class OtelTracer implements TelemetryTracer {
     }
 
     if (message?.attempt !== undefined) {
-      attributes['bus.delivery.attempt'] = message.attempt;
+      attributes[this.config.names.toName(['delivery', 'attempt'])] =
+        message.attempt;
     }
 
     if (message?.bodySize !== undefined) {
