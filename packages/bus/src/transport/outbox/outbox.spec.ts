@@ -1,7 +1,7 @@
 import { Inject, Injectable, type ModuleMetadata } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { setTimeout } from 'node:timers/promises';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { BusModule } from '../../bus.module.js';
 import { EventHandler } from '../../decorators/event-handler.decorator.js';
 import { Dispatcher, type PublishOptions } from '../dispatcher.js';
@@ -12,7 +12,11 @@ import { Transport } from '../transport.js';
 import { type BusProvider } from '../../provider.js';
 import { Serializer } from '../../serialization/serializer.js';
 import { type JsonSerializer } from '../../serialization/json.serializer.js';
-import { NoopTelemetry } from '../../telemetry/noop.telemetry.js';
+import {
+  Telemetry,
+  type TelemetryCounter,
+  type TelemetryHistogram,
+} from '../../telemetry/telemetry.js';
 import { Outbox, type OutboxConfig, type OutboxRecord } from './outbox.js';
 
 class TestEvent {
@@ -290,8 +294,11 @@ describe('Outbox', () => {
 
   it('wraps storing the records in a telemetry create', async () => {
     // arrange
-    const create = vi.spyOn(NoopTelemetry.prototype, 'create');
     const module = await createModule();
+    const create = vi.spyOn(
+      module.get<Telemetry>(Telemetry).getTracer(),
+      'create',
+    );
     const dispatcher = module.get<Dispatcher>(Dispatcher);
 
     // act
@@ -308,6 +315,135 @@ describe('Outbox', () => {
       },
       expect.any(Function),
     );
+  });
+
+  describe('relay metrics', () => {
+    const outbox = [{ name: ['system'], value: 'outbox' }];
+
+    /** A module whose meter hands out the given instruments. */
+    async function createMeteredModule() {
+      const module = await createModule();
+      const meter = module.get<Telemetry>(Telemetry).getMeter();
+      const counter = { add: vi.fn<TelemetryCounter['add']>() };
+      const histograms = new Map<
+        string,
+        { record: Mock<TelemetryHistogram['record']> }
+      >();
+
+      // only the counter of the relayed records is looked at
+      vi.spyOn(meter, 'counter').mockImplementation((name) =>
+        name.join('.') === 'outbox.relayed.messages'
+          ? counter
+          : { add: vi.fn() },
+      );
+      vi.spyOn(meter, 'histogram').mockImplementation((name) => {
+        const key = name.join('.');
+        const histogram = histograms.get(key) ?? {
+          record: vi.fn<TelemetryHistogram['record']>(),
+        };
+
+        histograms.set(key, histogram);
+
+        return histogram;
+      });
+
+      return {
+        module,
+        counter,
+        dispatcher: module.get<Dispatcher>(Dispatcher),
+        recorded: (name: string) => histograms.get(name)?.record.mock.calls,
+      };
+    }
+
+    it('counts the relayed records', async () => {
+      // arrange
+      const { module, dispatcher, counter } = await createMeteredModule();
+
+      InnerTransport.publish.mockResolvedValue(undefined);
+      await dispatcher.publish(new TestEvent({ value: 'a' }));
+      await dispatcher.publish(new TestEvent({ value: 'b' }));
+
+      // act
+      await module.init();
+      await vi.waitFor(() => expect(MemoryOutbox.pending).toHaveLength(0));
+
+      // assert
+      expect(counter.add).toHaveBeenCalledExactlyOnceWith(2, outbox);
+    });
+
+    it('counts records that failed to relay with the type of the error', async () => {
+      // arrange
+      const { module, dispatcher, counter } = await createMeteredModule();
+
+      InnerTransport.publish.mockRejectedValue(new TypeError('boom'));
+      await dispatcher.publish(new TestEvent({ value: 'a' }));
+
+      // act
+      await module.init();
+
+      // assert
+      await vi.waitFor(() =>
+        expect(counter.add).toHaveBeenCalledWith(1, [
+          ...outbox,
+          { name: ['error', 'type'], value: 'TypeError' },
+        ]),
+      );
+    });
+
+    it('records how long each relayed record waited', async () => {
+      // arrange
+      const { module, dispatcher, recorded } = await createMeteredModule();
+
+      InnerTransport.publish.mockResolvedValue(undefined);
+      await dispatcher.publish(new TestEvent({ value: 'a' }), {
+        publishedAt: new Date(Date.now() - 5_000),
+      });
+
+      // act
+      await module.init();
+      await vi.waitFor(() => expect(MemoryOutbox.pending).toHaveLength(0));
+
+      // assert
+      const [[latency, attributes]] = recorded('outbox.relay.latency') as [
+        [number, object],
+      ];
+
+      expect(latency).toBeGreaterThanOrEqual(5);
+      expect(latency).toBeLessThan(10);
+      expect(attributes).toEqual(outbox);
+    });
+
+    it('records no latency for records that failed to relay', async () => {
+      // arrange
+      const { module, dispatcher, counter, recorded } =
+        await createMeteredModule();
+
+      InnerTransport.publish.mockRejectedValue(new Error('boom'));
+      await dispatcher.publish(new TestEvent({ value: 'a' }));
+
+      // act
+      await module.init();
+      await vi.waitFor(() => expect(counter.add).toHaveBeenCalled());
+
+      // assert
+      expect(recorded('outbox.relay.latency')).toEqual([]);
+    });
+
+    it('records the duration of a relay round', async () => {
+      // arrange
+      const { module, recorded } = await createMeteredModule();
+
+      // act
+      await module.init();
+
+      // assert
+      await vi.waitFor(() =>
+        expect(recorded('outbox.relay.duration')?.[0]).toEqual([
+          expect.any(Number),
+          outbox,
+        ]),
+      );
+    });
   });
 
   it('relays stored events to the transport as they were stored', async () => {

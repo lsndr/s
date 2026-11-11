@@ -1,4 +1,6 @@
 import { NoopTelemetry } from '../telemetry/noop.telemetry.js';
+import { type Telemetry } from '../telemetry/telemetry.js';
+import { OtelNames } from '../telemetry/otel/otel.names.js';
 import {
   afterAll,
   afterEach,
@@ -55,6 +57,7 @@ interface TransportTest {
     createTransport: (
       config: CommonConfig,
       serializer?: Serializer,
+      telemetry?: Telemetry,
     ) => Promise<Transport>;
     teardown: () => Promise<void>;
   }>;
@@ -102,6 +105,7 @@ describe('Transport', { timeout: 60_000 }, () => {
         const createTransport = async (
           busConfig: CommonConfig,
           custom: Serializer = serializer,
+          telemetry: Telemetry = new NoopTelemetry(),
         ) => {
           const transport = new RabbitmqTransport(
             {
@@ -109,7 +113,7 @@ describe('Transport', { timeout: 60_000 }, () => {
               ...busConfig,
             } satisfies RabbitmqTransportConfig,
             custom,
-            new NoopTelemetry(),
+            telemetry,
           );
 
           await init(transport);
@@ -145,6 +149,7 @@ describe('Transport', { timeout: 60_000 }, () => {
         const createTransport = async (
           busConfig: CommonConfig,
           custom: Serializer = serializer,
+          telemetry: Telemetry = new NoopTelemetry(),
         ) => {
           const transport = new RedisStreamsTransport(
             {
@@ -156,7 +161,7 @@ describe('Transport', { timeout: 60_000 }, () => {
               concurrency: 1,
             } satisfies RedisStreamsTransportConfig,
             custom,
-            new NoopTelemetry(),
+            telemetry,
           );
 
           await init(transport);
@@ -179,6 +184,7 @@ describe('Transport', { timeout: 60_000 }, () => {
     let createTransport: (
       config: CommonConfig,
       serializer?: Serializer,
+      telemetry?: Telemetry,
     ) => Promise<Transport>;
 
     beforeAll(async () => {
@@ -366,6 +372,132 @@ describe('Transport', { timeout: 60_000 }, () => {
         );
         expect(handler2).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ event }),
+        );
+      });
+    });
+
+    describe('telemetry', () => {
+      /**
+       * Every queue also gets what later tests publish, so the handler only
+       * fails the event of its own test.
+       */
+      async function setupSettlement(
+        retries: CommonConfig['retries'],
+        outcome: 'succeeds' | 'fails',
+      ) {
+        const telemetry = new NoopTelemetry();
+        const counter = { add: vi.fn() };
+        const histogram = { record: vi.fn() };
+
+        // only the instruments of the settlements and the latency are looked at
+        vi.spyOn(telemetry.getMeter(), 'counter').mockImplementation((name) =>
+          name.join('.') === 'settled.messages' ? counter : { add: vi.fn() },
+        );
+        vi.spyOn(telemetry.getMeter(), 'histogram').mockImplementation(
+          (name) =>
+            name.join('.') === 'delivery.latency'
+              ? histogram
+              : { record: vi.fn() },
+        );
+
+        const group = crypto.randomUUID();
+        const value = crypto.randomUUID();
+        const transport = await createTransport(
+          { group, retries },
+          serializer,
+          telemetry,
+        );
+
+        await transport.subscribe(TestEvent, 'TestHandler', ({ event }) =>
+          outcome === 'fails' && event.value === value
+            ? Promise.reject(new Error('boom'))
+            : Promise.resolve(),
+        );
+        await bootstrap(transport);
+
+        return {
+          group,
+          histogram,
+          publish: () => transport.publish(new TestEvent({ value })),
+          outcomes: () =>
+            counter.add.mock.calls.map(
+              ([, attributes]) =>
+                new OtelNames('bus').toAttributes(attributes)[
+                  'bus.settlement.outcome'
+                ],
+            ),
+          attributes: () =>
+            new OtelNames('bus').toAttributes(counter.add.mock.calls[0]?.[1]),
+        };
+      }
+
+      it('counts a handled message as acked', async () => {
+        // arrange
+        const { publish, outcomes, attributes, group } = await setupSettlement(
+          { max: 0, delay: 100 },
+          'succeeds',
+        );
+
+        // act
+        await publish();
+
+        // assert
+        await vi.waitFor(() => expect(outcomes()).toEqual(['acked']));
+        expect(attributes()).toMatchObject({
+          'messaging.consumer.group.name': group,
+        });
+      });
+
+      it('counts a failed message without retries left as dropped', async () => {
+        // arrange
+        const { publish, outcomes } = await setupSettlement(
+          { max: 0, delay: 100 },
+          'fails',
+        );
+
+        // act
+        await publish();
+
+        // assert
+        await vi.waitFor(() => expect(outcomes()).toEqual(['dropped']));
+      });
+
+      it('counts a failed message with retries left as retried', async () => {
+        // arrange
+        const { publish, outcomes } = await setupSettlement(
+          { max: 1, delay: 100 },
+          'fails',
+        );
+
+        // act
+        await publish();
+
+        // assert
+        await vi.waitFor(() =>
+          expect(outcomes()).toEqual(['retried', 'dropped']),
+        );
+      });
+
+      it('records the delivery latency once, not for the retries', async () => {
+        // arrange
+        const { publish, outcomes, histogram } = await setupSettlement(
+          { max: 1, delay: 100 },
+          'fails',
+        );
+
+        // act
+        await publish();
+
+        // assert
+        await vi.waitFor(() => expect(outcomes()).toHaveLength(2));
+        expect(histogram.record).toHaveBeenCalledExactlyOnceWith(
+          expect.any(Number),
+          expect.arrayContaining([
+            {
+              name: ['system'],
+              value: expect.any(String),
+            },
+          ]),
         );
       });
     });

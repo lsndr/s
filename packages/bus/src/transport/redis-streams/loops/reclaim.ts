@@ -1,9 +1,9 @@
 import { Logger } from '@nestjs/common';
 import {
-  type Telemetry,
   type TelemetryBatch,
   type TelemetryServer,
 } from '../../../telemetry/telemetry.js';
+import { type Instrumentation } from '../../../telemetry/instrumentation.js';
 import { type Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { type Streams } from '../streams.js';
@@ -28,7 +28,7 @@ export class ReclaimLoop implements Loop {
     private readonly clients: Clients<'command'>,
     private readonly streams: Streams,
     private readonly processor: Processor,
-    private readonly telemetry: Telemetry,
+    private readonly instrumentation: Instrumentation,
     private readonly options: ReclaimLoopOptions,
   ) {}
 
@@ -38,7 +38,7 @@ export class ReclaimLoop implements Loop {
   }
 
   public async next(signal: AbortSignal): Promise<void> {
-    const { telemetry } = this;
+    const { instrumentation } = this;
     const { group, consumer, server } = this.options;
 
     for (const { name: stream } of this.streams.all()) {
@@ -47,7 +47,7 @@ export class ReclaimLoop implements Loop {
       }
 
       try {
-        await telemetry.receive(
+        await instrumentation.receive(
           {
             system: 'redis',
             operation: 'reclaim',

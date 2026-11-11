@@ -8,7 +8,10 @@ import {
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import packageJson from '../../../package.json' with { type: 'json' };
-import { type TelemetryDestination } from '../telemetry.js';
+import {
+  type TelemetryDestination,
+  type TelemetryTracer,
+} from '../telemetry.js';
 import { BusOtel } from './otel.telemetry.js';
 
 const destination: TelemetryDestination = {
@@ -18,14 +21,16 @@ const destination: TelemetryDestination = {
   subscription: 'Handler',
   clientId: 'client-1',
   server: { address: 'localhost', port: 5672 },
-  attributes: { 'rabbitmq.destination.routing_key': 'TestEvent' },
+  attributes: [
+    { name: ['rabbitmq', 'destination', 'routing_key'], value: 'TestEvent' },
+  ],
 };
 
-describe('BusOtel', () => {
+describe('BusOtel tracer', () => {
   let exporter: InMemorySpanExporter;
   let provider: BasicTracerProvider;
   let contextManager: AsyncLocalStorageContextManager;
-  let telemetry: BusOtel;
+  let tracer: TelemetryTracer;
 
   beforeEach(async () => {
     exporter = new InMemorySpanExporter();
@@ -35,11 +40,13 @@ describe('BusOtel', () => {
     contextManager = new AsyncLocalStorageContextManager().enable();
     context.setGlobalContextManager(contextManager);
 
-    telemetry = new BusOtel({
+    const telemetry = new BusOtel({
       tracerProvider: provider,
       propagator: new W3CTraceContextPropagator(),
     });
+
     await telemetry.onBusInit();
+    tracer = telemetry.getTracer();
   });
 
   afterEach(async () => {
@@ -53,7 +60,7 @@ describe('BusOtel', () => {
     const headers: Record<string, string> = {};
 
     // act
-    await telemetry.send(
+    await tracer.send(
       destination,
       { id: 'id-1', name: 'TestEvent', headers },
       () => Promise.resolve(),
@@ -86,11 +93,11 @@ describe('BusOtel', () => {
       id: 'id-1',
       name: 'TestEvent',
       headers: {},
-      attributes: { 'rabbitmq.message.delivery_tag': 7 },
+      attributes: [{ name: ['rabbitmq', 'message', 'delivery_tag'], value: 7 }],
     };
 
     // act
-    await telemetry.process(destination, message, () => Promise.resolve());
+    await tracer.process(destination, message, () => Promise.resolve());
 
     // assert
     const [span] = exporter.getFinishedSpans();
@@ -105,7 +112,7 @@ describe('BusOtel', () => {
     const message = { id: 'id-1', name: 'TestEvent', headers: {}, attempt: 2 };
 
     // act
-    await telemetry.process(destination, message, () => Promise.resolve());
+    await tracer.process(destination, message, () => Promise.resolve());
 
     // assert
     const [span] = exporter.getFinishedSpans();
@@ -118,7 +125,7 @@ describe('BusOtel', () => {
     const message = { id: 'id-1', name: 'TestEvent', headers: {}, bodySize: 5 };
 
     // act
-    await telemetry.send(destination, message, () => Promise.resolve());
+    await tracer.send(destination, message, () => Promise.resolve());
 
     // assert
     const [span] = exporter.getFinishedSpans();
@@ -131,12 +138,10 @@ describe('BusOtel', () => {
     const headers: Record<string, string> = {};
     const message = { id: 'id-1', name: 'TestEvent', headers };
 
-    await telemetry.create({ system: 'outbox' }, message, () =>
-      Promise.resolve(),
-    );
+    await tracer.create({ system: 'outbox' }, message, () => Promise.resolve());
 
     // act
-    await telemetry.send(destination, message, () => Promise.resolve());
+    await tracer.send(destination, message, () => Promise.resolve());
 
     // assert
     const spans = exporter.getFinishedSpans();
@@ -153,10 +158,10 @@ describe('BusOtel', () => {
     const headers: Record<string, string> = {};
     const message = { id: 'id-1', name: 'TestEvent', headers };
 
-    await telemetry.send(destination, message, () => Promise.resolve());
+    await tracer.send(destination, message, () => Promise.resolve());
 
     // act
-    await telemetry.process(destination, message, () => Promise.resolve());
+    await tracer.process(destination, message, () => Promise.resolve());
 
     // assert
     const spans = exporter.getFinishedSpans();
@@ -178,9 +183,7 @@ describe('BusOtel', () => {
     const message = { id: 'id-1', name: 'TestEvent', headers: {} };
 
     // act
-    await telemetry.send({ system: 'outbox' }, message, () =>
-      Promise.resolve(),
-    );
+    await tracer.send({ system: 'outbox' }, message, () => Promise.resolve());
 
     // assert
     const [span] = exporter.getFinishedSpans();
@@ -194,7 +197,7 @@ describe('BusOtel', () => {
     let active: string | undefined;
 
     // act
-    await telemetry.process(
+    await tracer.process(
       destination,
       { id: 'id-1', name: 'TestEvent', headers: {} },
       () => {
@@ -213,7 +216,7 @@ describe('BusOtel', () => {
     let active: string | undefined;
 
     // act
-    await telemetry.send(
+    await tracer.send(
       destination,
       { id: 'id-1', name: 'TestEvent', headers: {} },
       () => {
@@ -232,7 +235,7 @@ describe('BusOtel', () => {
     let active: string | undefined;
 
     // act
-    await telemetry.create(
+    await tracer.create(
       destination,
       { id: 'id-1', name: 'TestEvent', headers: {} },
       () => {
@@ -251,7 +254,7 @@ describe('BusOtel', () => {
     const failure = new TypeError('boom');
 
     // act
-    const result = telemetry.process(
+    const result = tracer.process(
       destination,
       { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.reject(failure),
@@ -275,7 +278,7 @@ describe('BusOtel', () => {
     const failure = new Error('nacked');
 
     // act
-    const result = telemetry.send(
+    const result = tracer.send(
       destination,
       { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.reject(failure),
@@ -290,7 +293,7 @@ describe('BusOtel', () => {
 
   it('names the instrumentation scope after the package', async () => {
     // act
-    await telemetry.send(
+    await tracer.send(
       destination,
       { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.resolve(),
@@ -305,7 +308,7 @@ describe('BusOtel', () => {
 
   it('receives in a client span with the size of the batch', async () => {
     // act
-    await telemetry.receive(destination, (batch) => {
+    await tracer.receive(destination, (batch) => {
       batch.setSize(3);
 
       return Promise.resolve();
@@ -327,7 +330,7 @@ describe('BusOtel', () => {
 
   it('names a receive after the custom operation of the destination', async () => {
     // act
-    await telemetry.receive({ ...destination, operation: 'reclaim' }, () =>
+    await tracer.receive({ ...destination, operation: 'reclaim' }, () =>
       Promise.resolve(),
     );
 
@@ -343,7 +346,7 @@ describe('BusOtel', () => {
 
   it('names a send after the custom operation of the destination', async () => {
     // act
-    await telemetry.send(
+    await tracer.send(
       { ...destination, operation: 'publish' },
       { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.resolve(),
@@ -361,7 +364,7 @@ describe('BusOtel', () => {
 
   it('names a process after the custom operation of the destination', async () => {
     // act
-    await telemetry.process(
+    await tracer.process(
       { ...destination, operation: 'handle' },
       { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.resolve(),
@@ -379,7 +382,7 @@ describe('BusOtel', () => {
 
   it('names a create after the custom operation of the destination', async () => {
     // act
-    await telemetry.create(
+    await tracer.create(
       { operation: 'store' },
       { id: 'id-1', name: 'TestEvent', headers: {} },
       () => Promise.resolve(),
@@ -397,7 +400,7 @@ describe('BusOtel', () => {
 
   it('names a receive without a destination after the operation', async () => {
     // act
-    await telemetry.receive({ ...destination, name: undefined }, () =>
+    await tracer.receive({ ...destination, name: undefined }, () =>
       Promise.resolve(),
     );
 
@@ -410,7 +413,7 @@ describe('BusOtel', () => {
     const error = new Error('boom');
 
     // act
-    const result = telemetry.receive(destination, () => Promise.reject(error));
+    const result = tracer.receive(destination, () => Promise.reject(error));
 
     // assert
     await expect(result).rejects.toBe(error);
@@ -425,8 +428,8 @@ describe('BusOtel', () => {
     const message = { id: 'id-1', name: 'TestEvent', headers: {} };
 
     // act
-    await telemetry.receive(destination, (batch) =>
-      telemetry.process(destination, { ...message, batch }, () =>
+    await tracer.receive(destination, (batch) =>
+      tracer.process(destination, { ...message, batch }, () =>
         Promise.resolve(),
       ),
     );
@@ -445,15 +448,15 @@ describe('BusOtel', () => {
     // arrange
     const headers: Record<string, string> = {};
 
-    await telemetry.send(
+    await tracer.send(
       destination,
       { id: 'id-1', name: 'TestEvent', headers },
       () => Promise.resolve(),
     );
 
     // act
-    await telemetry.receive(destination, (batch) =>
-      telemetry.process(
+    await tracer.receive(destination, (batch) =>
+      tracer.process(
         destination,
         { id: 'id-1', name: 'TestEvent', headers, batch },
         () => Promise.resolve(),
@@ -473,25 +476,9 @@ describe('BusOtel', () => {
     const message = { id: 'id-1', name: 'TestEvent', headers: {} };
 
     // act
-    await telemetry.process(destination, message, () => Promise.resolve());
+    await tracer.process(destination, message, () => Promise.resolve());
 
     // assert
     expect(exporter.getFinishedSpans()[0]!.links).toEqual([]);
-  });
-
-  it('throws when it is not initialized', () => {
-    // arrange
-    const uninitialized = new BusOtel({});
-
-    // act
-    const result = () =>
-      uninitialized.process(
-        destination,
-        { id: 'id-1', name: 'TestEvent', headers: {} },
-        () => Promise.resolve(),
-      );
-
-    // assert
-    expect(result).toThrow('not initialized');
   });
 });

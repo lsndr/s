@@ -1,9 +1,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Logger } from '@nestjs/common';
-import {
-  type Telemetry,
-  type TelemetryServer,
-} from '../../../telemetry/telemetry.js';
+import { type TelemetryServer } from '../../../telemetry/telemetry.js';
+import { type Instrumentation } from '../../../telemetry/instrumentation.js';
 import { type Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { type Streams } from '../streams.js';
@@ -39,15 +37,15 @@ export class ReadLoop implements Loop, OnTransportShutdown {
     private readonly clients: Clients<'read' | 'command'>,
     private readonly streams: Streams,
     private readonly processor: Processor,
-    private readonly telemetry: Telemetry,
+    private readonly instrumentation: Instrumentation,
     private readonly options: ReadLoopOptions,
   ) {}
 
   public async next(signal: AbortSignal): Promise<void> {
-    const { streams, processor, telemetry } = this;
+    const { streams, processor, instrumentation } = this;
     const { group, consumer, server } = this.options;
 
-    await telemetry.receive(
+    await instrumentation.receive(
       { system: 'redis', consumerGroup: group, clientId: consumer, server },
       async (batch) => {
         const reply = await this.read(signal);

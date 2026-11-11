@@ -18,7 +18,7 @@ export interface TelemetryMessage {
   /** Number of the delivery, 1 for the first try and 2 for the first retry. */
   attempt?: number;
   /** Attributes specific to the transport that differ per message. */
-  attributes?: Record<string, string | number>;
+  attributes?: TelemetryAttributes;
   /** Batch the message was received in. */
   batch?: TelemetryBatch;
 }
@@ -50,11 +50,14 @@ export interface TelemetryDestination {
   /** Broker the message goes through. */
   server?: TelemetryServer;
   /** Attributes specific to the transport. */
-  attributes?: Record<string, string | number>;
+  attributes?: TelemetryAttributes;
 }
 
-/** Observes how messages are created, sent and processed. */
-export interface Telemetry {
+/**
+ * Traces how messages are created, sent, received and processed, each
+ * operation wrapped around the function that does it.
+ */
+export interface TelemetryTracer {
   /** Wraps storing a message for a later send, e.g. in an outbox. */
   create<T>(
     destination: TelemetryDestination,
@@ -85,6 +88,78 @@ export interface Telemetry {
     message: TelemetryMessage,
     fn: () => Promise<T>,
   ): Promise<T>;
+}
+
+/**
+ * Name of a metric or an attribute as its parts, e.g.
+ * `['delivery', 'latency']`, for the tracer and the meter to join the
+ * way their backend writes names.
+ */
+export type TelemetryName = readonly string[];
+
+export interface TelemetryAttribute {
+  name: TelemetryName;
+  value: string | number;
+}
+
+export type TelemetryAttributes = readonly TelemetryAttribute[];
+
+export interface TelemetryInstrumentOptions {
+  description?: string;
+  /** Unit of the values, e.g. `s` or `{message}`. */
+  unit?: string;
+}
+
+export interface TelemetryHistogramOptions extends TelemetryInstrumentOptions {
+  /** Upper bounds of the buckets the values are sorted into. */
+  boundaries?: number[];
+}
+
+export interface TelemetryCounter {
+  add(value: number, attributes?: TelemetryAttributes): void;
+}
+
+export interface TelemetryHistogram {
+  record(value: number, attributes?: TelemetryAttributes): void;
+}
+
+export interface TelemetryObservation {
+  value: number;
+  attributes?: TelemetryAttributes;
+}
+
+export interface TelemetryGauge {
+  /** Stops observing. */
+  close(): void;
+}
+
+/**
+ * Makes the instruments the bus records its metrics with. Which metrics there
+ * are is up to the bus, how they are named and stored is up to the meter.
+ */
+export interface TelemetryMeter {
+  counter(
+    name: TelemetryName,
+    options?: TelemetryInstrumentOptions,
+  ): TelemetryCounter;
+
+  histogram(
+    name: TelemetryName,
+    options?: TelemetryHistogramOptions,
+  ): TelemetryHistogram;
+
+  /** Calls `observe` for the current values whenever metrics are collected. */
+  gauge(
+    name: TelemetryName,
+    options: TelemetryInstrumentOptions,
+    observe: () => TelemetryObservation[] | Promise<TelemetryObservation[]>,
+  ): TelemetryGauge;
+}
+
+/** Observes the bus with traces and metrics. */
+export interface Telemetry {
+  getTracer(): TelemetryTracer;
+  getMeter(): TelemetryMeter;
 }
 
 export const Telemetry = Symbol('Telemetry');

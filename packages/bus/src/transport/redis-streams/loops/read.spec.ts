@@ -11,6 +11,7 @@ import { GenericContainer, Wait } from 'testcontainers';
 import { createClient, type RedisClientType } from 'redis';
 import { Logger } from '@nestjs/common';
 import { NoopTelemetry } from '../../../telemetry/noop.telemetry.js';
+import { Instrumentation } from '../../../telemetry/instrumentation.js';
 import { Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
 import { Handler } from '../handler.js';
@@ -62,7 +63,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
       clients,
       streams,
       { process } as unknown as Processor,
-      telemetry,
+      new Instrumentation(telemetry),
       { group, consumer, batchSize, blockTimeout },
     );
 
@@ -144,7 +145,7 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
     it('reads inside a receive of the consumer group', async () => {
       // arrange
       const { next, telemetry, group, consumer } = await setup();
-      const receive = vi.spyOn(telemetry, 'receive');
+      const receive = vi.spyOn(telemetry.getTracer(), 'receive');
 
       // act
       await next();
@@ -163,7 +164,9 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
       const [name] = names as [string];
       const batch = { setSize: vi.fn() };
 
-      vi.spyOn(telemetry, 'receive').mockImplementation((_d, fn) => fn(batch));
+      vi.spyOn(telemetry.getTracer(), 'receive').mockImplementation((_d, fn) =>
+        fn(batch),
+      );
       await add(name, 3);
 
       // act
@@ -179,14 +182,16 @@ describe('ReadLoop', { timeout: 60_000 }, () => {
       const [name] = names as [string];
       const batch = { setSize: vi.fn() };
 
-      vi.spyOn(telemetry, 'receive').mockImplementation((_d, fn) => fn(batch));
+      vi.spyOn(telemetry.getTracer(), 'receive').mockImplementation((_d, fn) =>
+        fn(batch),
+      );
       await add(name);
 
       // act
       await next();
 
       // assert
-      expect(process.mock.calls[0]![3]).toBe(batch);
+      expect(process.mock.calls[0]![3]).toMatchObject({ traced: batch });
     });
   });
 
