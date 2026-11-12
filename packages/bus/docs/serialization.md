@@ -8,7 +8,7 @@ A serializer turns an event, together with its envelope, into the message a tran
 
 ## Custom serializer
 
-Provide your own with the `serializer` option, in any form accepted by [`transport`](transports.md#providing-a-transport):
+Provide your own with the `serializer` option:
 
 ```typescript
 import { Injectable } from '@nestjs/common';
