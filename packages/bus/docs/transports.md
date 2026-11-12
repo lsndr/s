@@ -82,6 +82,22 @@ With `trim.onlyAcked: false` the cap is hard: unhandled entries are trimmed too,
 - On shutdown the transport stops reading, waits for entries in flight (up to `shutdownTimeout`), and removes the consumer from its groups unless it still has pending entries.
 - Consumers that crashed or were renamed stay registered in the group. Each running instance periodically removes the consumers that have no pending entries and have been idle for more than an hour.
 
+### Telemetry
+
+Besides the general [telemetry](telemetry.md), this transport adds the following.
+
+Each batch of entries read from Redis gets a `receive` span, and each claim of entries to retry gets a `reclaim <stream>` span. Both have `messaging.batch.message_count`. One `ack` span is made per entry for all its handlers, and its duration is the round trip of the `XACK`. A retry sends nothing to Redis, so it has no span, but it is counted in `bus.settled.messages` as `retried`.
+
+| Metric                       | Type       | What it tells                                                                                                          |
+| ---------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `redis.stream.inflight`      | gauge      | Entries of a stream this instance is processing.                                                                       |
+| `redis.stream.slots`         | gauge      | Slots of a stream on this instance (`concurrency`). Compare with `inflight` for utilisation.                           |
+| `redis.stream.full.duration` | counter, s | Time a stream had no free slot on this instance, so it wasn't read. Its rate is the share of time the stream was full. |
+| `redis.stream.pending`       | gauge      | Entries of a stream delivered to the group and not acknowledged, on any instance.                                      |
+| `redis.stream.lag`           | gauge      | Entries of a stream not delivered to the group yet. Left out while Redis can't tell.                                   |
+
+`redis.stream.pending` and `redis.stream.lag` describe the whole group, so every instance reports the same value: aggregate them with a maximum, not a sum. They cost one `XINFO GROUPS` per stream on every collection.
+
 ## RabbitMQ
 
 ```typescript
@@ -116,3 +132,9 @@ Delivery is **at-least-once**: make handlers idempotent.
 - A failed message is nacked into `<queue>.delay` (through the `events.delay` exchange), waits `retries.delay` ms, and returns to the original queue. This repeats up to `retries.max` times.
 - After that the message is logged as permanently failed and acknowledged, which drops it. A message is therefore tried at most `retries.max + 1` times.
 - `publish` resolves once the broker confirms the message and rejects if the broker nacks it.
+
+### Telemetry
+
+Besides the general [telemetry](telemetry.md), this transport reports the following.
+
+When sending, the destination is `<exchange>:<routing key>`, and when processing it is the queue. `process`, `ack` and `nack` spans have `rabbitmq.message.delivery_tag`. A handled message and one that failed permanently are an `ack`, and one left for a retry is a `nack`. A settlement is measured as close to zero, since `ack` and `nack` only write to the socket and don't wait for the broker.
