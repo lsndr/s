@@ -11,7 +11,7 @@ import { OtelMeter } from './otel.meter.js';
 import { OtelNames } from './otel.names.js';
 import { OtelTracer } from './otel.tracer.js';
 
-export interface BusOtelConfig {
+export interface OtelTelemetryConfig {
   /** Defaults to the global tracer provider. */
   tracerProvider?: OtelApi.TracerProvider;
   /** Defaults to the global meter provider. */
@@ -25,24 +25,27 @@ export interface BusOtelConfig {
   prefix?: string;
 }
 
-const BusOtelConfigToken = Symbol('BusOtelConfig');
+const OtelTelemetryConfigToken = Symbol('OtelTelemetryConfig');
 
 /**
  * Telemetry that traces and measures the bus with OpenTelemetry, following the
  * messaging semantic conventions. Needs `@opentelemetry/api` to be installed.
  */
-export class BusOtel implements Telemetry, OnBusInit {
+export class OtelTelemetry implements Telemetry, OnBusInit {
   private tracer?: OtelTracer;
   private meter?: OtelMeter;
 
   public constructor(
-    @Inject(BusOtelConfigToken) private readonly config: BusOtelConfig,
+    @Inject(OtelTelemetryConfigToken)
+    private readonly config: OtelTelemetryConfig,
   ) {}
 
-  public static withConfig(config: BusOtelConfig = {}): BusProvider<BusOtel> {
+  public static withConfig(
+    config: OtelTelemetryConfig = {},
+  ): BusProvider<OtelTelemetry> {
     return {
-      useClass: BusOtel,
-      providers: [{ provide: BusOtelConfigToken, useValue: config }],
+      useClass: OtelTelemetry,
+      providers: [{ provide: OtelTelemetryConfigToken, useValue: config }],
     };
   }
 
@@ -57,7 +60,7 @@ export class BusOtel implements Telemetry, OnBusInit {
 
   public getTracer(): TelemetryTracer {
     if (!this.tracer) {
-      throw new Error('BusOtel is not initialized');
+      throw new Error('OtelTelemetry is not initialized');
     }
 
     return this.tracer;
@@ -65,7 +68,7 @@ export class BusOtel implements Telemetry, OnBusInit {
 
   public getMeter(): TelemetryMeter {
     if (!this.meter) {
-      throw new Error('BusOtel is not initialized');
+      throw new Error('OtelTelemetry is not initialized');
     }
 
     return this.meter;

@@ -43,7 +43,7 @@ Install the optional peer dependencies for what you use:
 | ------------------------------------ | -------------------- |
 | `RedisStreamsTransport` (Redis 8.2+) | `redis`              |
 | `RabbitmqTransport`                  | `amqplib`            |
-| `BusOtel`                            | `@opentelemetry/api` |
+| `OtelTelemetry`                      | `@opentelemetry/api` |
 
 ## Quick start
 
@@ -212,7 +212,7 @@ export class HealthService {
 | ------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `transport`   | **Required.** A [transport](docs/transports.md).                                                                   |
 | `serializer`  | A provider of the [serializer](docs/serialization.md). Defaults to `JsonSerializer`.                               |
-| `telemetry`   | A provider of [telemetry](docs/telemetry.md), such as `BusOtel.withConfig()`.                                      |
+| `telemetry`   | A provider of [telemetry](docs/telemetry.md), such as `OtelTelemetry.withConfig()`.                                |
 | `middlewares` | Global middleware classes. They must be provided in a module of the application.                                   |
 | `imports`     | Additional Nest imports for the module.                                                                            |
 | `providers`   | Additional providers for the module, such as your handlers. They receive the [lifecycle hooks](docs/lifecycle.md). |

@@ -4,7 +4,7 @@
   "tags": ["bus", "messaging", "rabbitmq"],
   "schemaVersion": 39,
   "editable": true,
-  "description": "Metrics of @lsndr/bus on RabbitMQ recorded by BusOtel, as Prometheus names them.",
+  "description": "Metrics of @lsndr/bus on RabbitMQ recorded by OtelTelemetry, as Prometheus names them.",
   "time": {
     "from": "now-1h",
     "to": "now"

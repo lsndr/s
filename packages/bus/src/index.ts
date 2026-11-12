@@ -56,6 +56,6 @@ export {
 } from './telemetry/telemetry.js';
 export { NoopTelemetry } from './telemetry/noop.telemetry.js';
 export {
-  BusOtel,
-  type BusOtelConfig,
+  OtelTelemetry,
+  type OtelTelemetryConfig,
 } from './telemetry/otel/otel.telemetry.js';

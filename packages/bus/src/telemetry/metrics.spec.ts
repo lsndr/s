@@ -11,7 +11,7 @@ import {
 } from '@opentelemetry/sdk-metrics';
 import { Metrics } from './metrics.js';
 import { NoopTelemetry } from './noop.telemetry.js';
-import { BusOtel } from './otel/otel.telemetry.js';
+import { OtelTelemetry } from './otel/otel.telemetry.js';
 import { type TelemetryDestination } from './telemetry.js';
 
 const destination: TelemetryDestination = {
@@ -42,7 +42,7 @@ describe('Metrics', () => {
     });
     provider = new MeterProvider({ readers: [reader] });
 
-    const telemetry = new BusOtel({ meterProvider: provider });
+    const telemetry = new OtelTelemetry({ meterProvider: provider });
 
     await telemetry.onBusInit();
     metrics = new Metrics(telemetry);
