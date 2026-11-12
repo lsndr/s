@@ -4,11 +4,19 @@ Event bus for [NestJS](https://nestjs.com/): transport agnostic, with outbox sup
 
 ## Features
 
-- RabbitMQ and Redis Streams transports, or bring your own
+- Pluggable transports
 - Middlewares
 - Transactional outbox
 - Pluggable serialization
-- Tracing and metrics with OpenTelemetry, and ready-made Grafana dashboards
+- Logs, tracing and metrics, and ready-made Grafana dashboards
+
+## Supported transports
+
+- [Redis Streams](docs/transports.md#redis-streams) (`RedisStreamsTransport`)
+- [RabbitMQ](docs/transports.md#rabbitmq) (`RabbitmqTransport`)
+- Any [custom transport](docs/transports.md#providing-a-transport) implementing the `Transport` interface
+
+More transports are coming.
 
 ## Requirements
 
@@ -33,8 +41,8 @@ Install the optional peer dependencies for what you use:
 
 | You use                              | Install              |
 | ------------------------------------ | -------------------- |
-| `RabbitmqTransport`                  | `amqplib`            |
 | `RedisStreamsTransport` (Redis 8.2+) | `redis`              |
+| `RabbitmqTransport`                  | `amqplib`            |
 | `BusOtel`                            | `@opentelemetry/api` |
 
 ## Quick start
@@ -213,7 +221,7 @@ export class HealthService {
 
 ## Further documentation
 
-- [Transports](docs/transports.md): providing a transport, RabbitMQ and Redis Streams internals
+- [Transports](docs/transports.md): providing a transport, Redis Streams and RabbitMQ internals
 - [Outbox](docs/outbox.md): publishing in the same transaction as your data
 - [Serialization](docs/serialization.md): custom message formats
 - [Lifecycle hooks](docs/lifecycle.md): `onBusInit`, `onBusBootstrap`, `onBusShutdown`
