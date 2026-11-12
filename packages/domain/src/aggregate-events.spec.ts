@@ -51,6 +51,18 @@ describe('Aggregate Events', () => {
     expect(act).toThrowError('Event must be an object: 1 provided');
   });
 
+  it('should fail to add an array containing a non-object', () => {
+    // arrange
+    const events = [new TestEvent('value 1'), 1];
+
+    // act
+    const act = (): void => eventsManager.add(events);
+
+    // assert
+    expect(act).toThrowError('Event must be an object: 1 provided');
+    expect(eventsManager.all()).toEqual([]);
+  });
+
   it('should add an array of events', () => {
     const event1 = new TestEvent('value 1');
     const event2 = new TestEvent('value 2');
