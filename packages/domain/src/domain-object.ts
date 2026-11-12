@@ -1,5 +1,6 @@
 import { DomainError } from './domain-error.js';
 
+/** Base class for domain objects: holds their state and provides `assert` for enforcing invariants. */
 export abstract class DomainObject<S> {
   protected state: S;
 
