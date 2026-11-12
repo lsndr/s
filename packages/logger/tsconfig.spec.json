@@ -1,8 +1,1 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "noUnusedLocals": false,
-    "noUnusedParameters": false
-  },
-  "include": ["src/**/*.ts", "vitest.config.ts"]
-}
+{ "extends": "../../tsconfig.base.spec.json" }

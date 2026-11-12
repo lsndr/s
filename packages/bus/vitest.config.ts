@@ -1,9 +1,11 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, mergeConfig } from 'vitest/config';
+import { sharedVitestConfig } from '../../vitest.shared.js';
 
-// eslint-disable-next-line import-x/no-default-export -- required by Vitest
-export default defineConfig({
-  test: {
-    globals: true,
-    setupFiles: ['reflect-metadata'],
-  },
-});
+export default mergeConfig(
+  sharedVitestConfig,
+  defineConfig({
+    test: {
+      setupFiles: ['reflect-metadata'],
+    },
+  }),
+);

@@ -8,7 +8,7 @@ import commentsPluginConfigs from '@eslint-community/eslint-plugin-eslint-commen
 
 export default defineConfig(
   {
-    ignores: ['node_modules', 'dist', 'coverage'],
+    ignores: ['**/node_modules', '**/dist', '**/coverage'],
   },
   {
     languageOptions: {
@@ -35,7 +35,7 @@ export default defineConfig(
     files: ['**/*.ts'],
     languageOptions: {
       parserOptions: {
-        project: './tsconfig.eslint.json',
+        projectService: true,
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -48,7 +48,9 @@ export default defineConfig(
     settings: {
       'import-x/resolver-next': [
         createTypeScriptImportResolver({
-          project: ['./tsconfig.eslint.json'],
+          project: ['packages/*/tsconfig.json', 'tsconfig.json'],
+          // each run matches several tsconfigs by design, one per project
+          noWarnOnMultipleProjects: true,
         }),
       ],
     },
@@ -108,6 +110,13 @@ export default defineConfig(
         'error',
         { argsIgnorePattern: '^_' },
       ],
+    },
+  },
+  {
+    // Vitest loads its config from the default export
+    files: ['**/vitest.config.ts'],
+    rules: {
+      'import-x/no-default-export': 'off',
     },
   },
 );

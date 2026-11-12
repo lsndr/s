@@ -1,20 +1,30 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*"],
+    "typescript": ["{workspaceRoot}/tsconfig.base*.json"],
+    "eslint": ["{workspaceRoot}/eslint.config.mjs", "typescript"],
+    "vitest": ["{workspaceRoot}/vitest.shared.ts", "typescript"]
+  },
   "targetDefaults": {
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["{projectRoot}/dist"],
-      "cache": true
+      "cache": true,
+      "inputs": ["default", "^default", "typescript"]
     },
     "test": {
       "dependsOn": ["build"],
-      "cache": true
+      "cache": true,
+      "inputs": ["default", "^default", "vitest"]
     },
     "test:build": {
-      "cache": true
+      "cache": true,
+      "inputs": ["default", "^default", "vitest"]
     },
     "lint": {
-      "cache": true
+      "cache": true,
+      "inputs": ["default", "^default", "eslint"]
     }
   },
   "release": {
