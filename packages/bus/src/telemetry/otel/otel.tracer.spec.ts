@@ -3,10 +3,10 @@ import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import {
-  BasicTracerProvider,
+  TracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+} from '@opentelemetry/sdk-trace';
 import packageJson from '../../../package.json' with { type: 'json' };
 import {
   type TelemetryDestination,
@@ -28,14 +28,14 @@ const destination: TelemetryDestination = {
 
 describe('OtelTelemetry tracer', () => {
   let exporter: InMemorySpanExporter;
-  let provider: BasicTracerProvider;
+  let provider: TracerProvider;
   let contextManager: AsyncLocalStorageContextManager;
   let tracer: TelemetryTracer;
 
   beforeEach(async () => {
     exporter = new InMemorySpanExporter();
-    provider = new BasicTracerProvider({
-      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    provider = new TracerProvider({
+      spanProcessors: [new SimpleSpanProcessor({ exporter })],
     });
     contextManager = new AsyncLocalStorageContextManager().enable();
     context.setGlobalContextManager(contextManager);
