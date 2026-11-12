@@ -12,6 +12,10 @@ export interface MeasureOptions {
   level?: LogLevel;
 }
 
+/**
+ * NestJS-compatible logger that writes structured entries through a shared pino instance,
+ * merging in the params of the active `LoggerContext`.
+ */
 export class Logger implements LoggerService {
   private baseParams?: LogParams;
 

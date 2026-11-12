@@ -4,6 +4,9 @@ import type { LogParams } from './types.js';
 
 const storage = new AsyncLocalStorage<LogParams>();
 
+/**
+ * Carries log params across async calls with `AsyncLocalStorage`. Nested contexts deep-merge over outer ones.
+ */
 export class LoggerContext {
   public static create<T>(params: LogParams, fn: () => T): T {
     const existingParams = this.params();
