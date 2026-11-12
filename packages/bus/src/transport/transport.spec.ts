@@ -155,7 +155,7 @@ describe('Transport', { timeout: 60_000 }, () => {
             {
               url,
               ...busConfig,
-              reclaimInterval: 25,
+              retries: { ...busConfig.retries, reclaimInterval: 25 },
               // one entry at a time, so that a busy instance leaves the
               // next entries to the others
               concurrency: 1,

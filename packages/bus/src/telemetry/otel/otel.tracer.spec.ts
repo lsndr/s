@@ -12,7 +12,7 @@ import {
   type TelemetryDestination,
   type TelemetryTracer,
 } from '../telemetry.js';
-import { BusOtel } from './otel.telemetry.js';
+import { OtelTelemetry } from './otel.telemetry.js';
 
 const destination: TelemetryDestination = {
   system: 'rabbitmq',
@@ -26,7 +26,7 @@ const destination: TelemetryDestination = {
   ],
 };
 
-describe('BusOtel tracer', () => {
+describe('OtelTelemetry tracer', () => {
   let exporter: InMemorySpanExporter;
   let provider: BasicTracerProvider;
   let contextManager: AsyncLocalStorageContextManager;
@@ -40,7 +40,7 @@ describe('BusOtel tracer', () => {
     contextManager = new AsyncLocalStorageContextManager().enable();
     context.setGlobalContextManager(contextManager);
 
-    const telemetry = new BusOtel({
+    const telemetry = new OtelTelemetry({
       tracerProvider: provider,
       propagator: new W3CTraceContextPropagator(),
     });

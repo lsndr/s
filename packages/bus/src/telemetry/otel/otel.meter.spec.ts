@@ -10,9 +10,9 @@ import {
 } from '@opentelemetry/sdk-metrics';
 import packageJson from '../../../package.json' with { type: 'json' };
 import { type TelemetryMeter } from '../telemetry.js';
-import { BusOtel } from './otel.telemetry.js';
+import { OtelTelemetry } from './otel.telemetry.js';
 
-describe('BusOtel meter', () => {
+describe('OtelTelemetry meter', () => {
   let exporter: InMemoryMetricExporter;
   let reader: PeriodicExportingMetricReader;
   let provider: MeterProvider;
@@ -27,7 +27,7 @@ describe('BusOtel meter', () => {
     });
     provider = new MeterProvider({ readers: [reader] });
 
-    const telemetry = new BusOtel({ meterProvider: provider });
+    const telemetry = new OtelTelemetry({ meterProvider: provider });
 
     await telemetry.onBusInit();
     meter = telemetry.getMeter();
@@ -132,7 +132,10 @@ describe('BusOtel meter', () => {
 
   it('puts a custom prefix before a name', async () => {
     // arrange
-    const telemetry = new BusOtel({ meterProvider: provider, prefix: 'acme' });
+    const telemetry = new OtelTelemetry({
+      meterProvider: provider,
+      prefix: 'acme',
+    });
 
     await telemetry.onBusInit();
 
