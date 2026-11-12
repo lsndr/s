@@ -48,17 +48,21 @@ export interface RedisStreamsTransportConfig {
      * @default 300000
      */
     delay?: number;
+    /**
+     * How often pending entries are checked for retries and abandoned
+     * entries, in milliseconds. A retry happens between `delay` and `delay`
+     * plus this interval after a failure. Each check is jittered by up to 10%
+     * so instances don't poll at the same moment.
+     *
+     * @default Math.max(delay / 4, 1000)
+     */
+    reclaimInterval?: number;
   };
   /**
-   * Consumer name used in every consumer group.
+   * Consumer name in a group. An event is delivered to a single consumer of
+   * the group.
    *
-   * Instances with the same name share their pending entries, so the default
-   * includes the process id to keep instances on the same host apart. Set a
-   * name that is stable across restarts to avoid leaving stale consumers in
-   * the groups. Pending entries are recovered after `retries.delay` whatever
-   * the name is.
-   *
-   * @default `${os.hostname()}-${process.pid}`
+   * @default os.hostname()
    */
   consumer?: string;
   /**
@@ -95,15 +99,6 @@ export interface RedisStreamsTransportConfig {
    */
   concurrency?: number;
   /**
-   * How often pending entries are checked for retries and abandoned entries,
-   * in milliseconds. A retry happens between `retries.delay` and
-   * `retries.delay` plus this interval after a failure. Each check is jittered
-   * by up to 10% so instances don't poll at the same moment.
-   *
-   * @default Math.max(retries.delay / 4, 1000)
-   */
-  reclaimInterval?: number;
-  /**
    * How long shutdown waits for the entries in flight, in milliseconds. Entries
    * that are not finished by then stay pending and are retried later. Waits
    * for all of them when not set.
@@ -116,9 +111,8 @@ interface Settings {
   group: string;
   consumer: string;
   keyPrefix: string;
-  retries: { max: number; delay: number };
+  retries: { max: number; delay: number; reclaimInterval: number };
   concurrency: number;
-  reclaimInterval: number;
   /** How long a read blocks waiting for new entries, in milliseconds. */
   blockTimeout: number;
   /**
@@ -168,18 +162,18 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
   return {
     url: config.url,
     group: config.group,
-    consumer: config.consumer ?? `${hostname()}-${process.pid}`,
+    consumer: config.consumer ?? hostname(),
     keyPrefix: config.keyPrefix ?? 'events:',
     retries: {
       max: atLeast('retries.max', config.retries?.max, 5, 0),
       delay,
+      reclaimInterval: positive(
+        'retries.reclaimInterval',
+        config.retries?.reclaimInterval,
+        Math.max(delay / 4, 1_000),
+      ),
     },
     concurrency: atLeast('concurrency', config.concurrency, 10, 1),
-    reclaimInterval: positive(
-      'reclaimInterval',
-      config.reclaimInterval,
-      Math.max(delay / 4, 1_000),
-    ),
     // not configurable: the TTL has to stay longer than the block timeout,
     // which is how often a live consumer shows activity
     blockTimeout: 5_000,
@@ -234,12 +228,15 @@ export class RedisStreamsTransport
       consumer,
       keyPrefix,
       concurrency,
-      reclaimInterval,
       blockTimeout,
       consumerTtl,
     } = this.settings;
     const { clients, streams, instrumentation } = this;
-    const { max: maxRetries, delay: retriesDelay } = this.settings.retries;
+    const {
+      max: maxRetries,
+      delay: retriesDelay,
+      reclaimInterval,
+    } = this.settings.retries;
     const processor = new Processor(clients, serializer, instrumentation, {
       group,
       consumer,

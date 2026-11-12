@@ -65,8 +65,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
     const transport = new RedisStreamsTransport(
       {
         url,
-        retries: { max: 3, delay: 100 },
-        reclaimInterval: 25,
+        retries: { max: 3, delay: 100, reclaimInterval: 25 },
         ...config,
         group,
         keyPrefix,
@@ -318,7 +317,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       ['retries.delay', { retries: { delay: 10 } }],
       ['concurrency', { concurrency: 0 }],
       ['trim.maxLength', { trim: { maxLength: 0 } }],
-      ['reclaimInterval', { reclaimInterval: 0 }],
+      ['retries.reclaimInterval', { retries: { reclaimInterval: 0 } }],
       ['shutdownTimeout', { shutdownTimeout: 0 }],
     ] satisfies [string, Partial<RedisStreamsTransportConfig>][])(
       'rejects an invalid %s',
@@ -357,7 +356,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       });
     });
 
-    it('defaults the name to the host name and the process id', async () => {
+    it('defaults the name to the host name', async () => {
       // arrange
       const { transport, group, stream } = await createTransport();
 
@@ -370,9 +369,7 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       // assert
       await vi.waitFor(async () => {
         const consumers = await redis.xInfoConsumers(stream(FirstEvent), group);
-        expect(consumers.map(({ name }) => name)).toEqual([
-          `${hostname()}-${process.pid}`,
-        ]);
+        expect(consumers.map(({ name }) => name)).toEqual([hostname()]);
       });
     });
   });
