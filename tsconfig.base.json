@@ -18,5 +18,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true
-  }
+  },
+  "include": ["${configDir}/**/*.ts"],
+  "exclude": ["${configDir}/node_modules", "${configDir}/dist"]
 }

@@ -1,8 +1,3 @@
-import { defineConfig } from 'vitest/config';
+import { sharedVitestConfig } from '../../vitest.shared.js';
 
-// eslint-disable-next-line import-x/no-default-export --- required by Vitest
-export default defineConfig({
-  test: {
-    globals: true,
-  },
-});
+export default sharedVitestConfig;

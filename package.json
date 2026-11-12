@@ -17,6 +17,27 @@
     "format": "prettier --check .",
     "format:fix": "prettier --write ."
   },
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "lint": {
+        "command": "eslint \"*.{ts,mjs}\"",
+        "options": {
+          "cwd": "{workspaceRoot}"
+        },
+        "inputs": [
+          "{workspaceRoot}/*.{ts,mjs,json}",
+          "eslint"
+        ]
+      },
+      "lint:fix": {
+        "command": "eslint \"*.{ts,mjs}\" --fix",
+        "options": {
+          "cwd": "{workspaceRoot}"
+        }
+      }
+    }
+  },
   "devDependencies": {
     "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.2.3",
