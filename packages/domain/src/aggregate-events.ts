@@ -12,13 +12,14 @@ export class AggregateEvents {
   public add(event: unknown): void {
     const events = Array.isArray(event) ? event : [event];
 
+    // validate everything first so a bad item doesn't leave a partial add
     for (const e of events) {
-      if (typeof event !== 'object' || event === null) {
-        throw new Error(`Event must be an object: ${String(event)} provided`);
+      if (typeof e !== 'object' || e === null) {
+        throw new Error(`Event must be an object: ${String(e)} provided`);
       }
-
-      this.#events.push(e);
     }
+
+    this.#events.push(...events);
   }
 
   public replace(replacer: (event: unknown) => unknown): number {
