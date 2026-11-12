@@ -14,7 +14,7 @@ Event bus for [NestJS](https://nestjs.com/): transport agnostic, with outbox sup
 
 - [Redis Streams](docs/transports.md#redis-streams) (`RedisStreamsTransport`)
 - [RabbitMQ](docs/transports.md#rabbitmq) (`RabbitmqTransport`)
-- Any [custom transport](docs/transports.md#providing-a-transport) implementing the `Transport` interface
+- Any [custom transport](docs/transports.md) implementing the `Transport` interface
 
 More transports are coming.
 
@@ -210,7 +210,7 @@ export class HealthService {
 
 | Option        | Description                                                                                                        |
 | ------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `transport`   | **Required.** A [transport provider](docs/transports.md#providing-a-transport).                                    |
+| `transport`   | **Required.** A [transport](docs/transports.md).                                                                   |
 | `serializer`  | A provider of the [serializer](docs/serialization.md). Defaults to `JsonSerializer`.                               |
 | `telemetry`   | A provider of [telemetry](docs/telemetry.md), such as `BusOtel.withConfig()`.                                      |
 | `middlewares` | Global middleware classes. They must be provided in a module of the application.                                   |
@@ -221,7 +221,7 @@ export class HealthService {
 
 ## Further documentation
 
-- [Transports](docs/transports.md): providing a transport, Redis Streams and RabbitMQ internals
+- [Transports](docs/transports.md): Redis Streams and RabbitMQ internals
 - [Outbox](docs/outbox.md): publishing in the same transaction as your data
 - [Serialization](docs/serialization.md): custom message formats
 - [Lifecycle hooks](docs/lifecycle.md): `onBusInit`, `onBusBootstrap`, `onBusShutdown`
