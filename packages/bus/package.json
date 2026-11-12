@@ -27,7 +27,9 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --check .",
-    "format:fix": "prettier --write ."
+    "format:fix": "prettier --write .",
+    "prepack": "readme-links pin",
+    "postpack": "readme-links restore"
   },
   "peerDependencies": {
     "@nestjs/common": "^12.0.0",

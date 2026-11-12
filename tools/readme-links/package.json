@@ -1,0 +1,22 @@
+{
+  "name": "@lsndr/readme-links",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "readme-links": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.lib.json && chmod +x dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:build": "tsc -p tsconfig.spec.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write ."
+  }
+}
