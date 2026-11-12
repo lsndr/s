@@ -41,6 +41,15 @@ Packages are published to the GitHub registry and versioned independently by `nx
 
 Use conventional commits (enforced by commitlint). The commit type decides each package's version bump on release.
 
+## Writing docs
+
+READMEs and other docs are read as fact, so every claim in them must be true.
+
+- Check each claim against the code before writing it: behaviour, defaults, ordering, limits, error cases, names and signatures. Don't rely on memory or on what the old docs said.
+- Keep code samples compilable against the package's current exports, with their imports.
+- When code changes behaviour that a doc describes, update the doc in the same change.
+- Link to other files of the repository with relative paths.
+
 ## Verification
 
 Before considering a change done, run all of these and make sure they pass:
