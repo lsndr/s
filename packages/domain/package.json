@@ -29,9 +29,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --check .",
-    "format:fix": "prettier --write .",
-    "prepack": "readme-links pin",
-    "postpack": "readme-links restore"
+    "format:fix": "prettier --write ."
   },
   "peerDependencies": {
     "typescript": "^5.0.0 || ^6.0.0"
@@ -40,9 +38,6 @@
     "typescript": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@lsndr/readme-links": "*"
   },
   "repository": {
     "type": "git",

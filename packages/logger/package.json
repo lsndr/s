@@ -27,9 +27,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --check .",
-    "format:fix": "prettier --write .",
-    "prepack": "readme-links pin",
-    "postpack": "readme-links restore"
+    "format:fix": "prettier --write ."
   },
   "dependencies": {
     "lodash-es": "^4.17.21",
@@ -45,7 +43,6 @@
     }
   },
   "devDependencies": {
-    "@lsndr/readme-links": "*",
     "@nestjs/common": "^12.4.0",
     "@types/lodash-es": "^4.17.12",
     "pino-pretty": "^13.2.0"
