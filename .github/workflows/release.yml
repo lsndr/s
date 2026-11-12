@@ -10,6 +10,11 @@ env:
 permissions:
   contents: read
 
+# runs push to main, so overlapping ones race and get rejected as non-fast-forward
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
