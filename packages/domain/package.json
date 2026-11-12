@@ -41,7 +41,9 @@
       "optional": true
     }
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "@lsndr/readme-links": "*"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lsndr/s.git",

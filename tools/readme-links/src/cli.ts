@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { PackageReadme } from './package-readme.js';
 
 // Run from the `prepack` and `postpack` scripts of a package. nx release has
