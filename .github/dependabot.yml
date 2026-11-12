@@ -33,6 +33,10 @@ updates:
         patterns: ['nx', '@nx/*']
       nestjs:
         patterns: ['@nestjs/*']
+      opentelemetry:
+        patterns: ['@opentelemetry/*']
+      lodash:
+        patterns: ['lodash-es', '@types/lodash-es']
       lint:
         patterns:
           - 'eslint'
