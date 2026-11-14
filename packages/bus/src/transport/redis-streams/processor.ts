@@ -101,7 +101,6 @@ export class Processor {
             await this.instrumentation.process(
               {
                 ...destination,
-                span: `${stream.name} ${name}`,
                 subscription: name,
                 clientId: consumer,
               },

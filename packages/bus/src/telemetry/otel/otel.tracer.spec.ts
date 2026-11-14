@@ -294,23 +294,6 @@ describe('OtelTelemetry tracer', () => {
     expect(span!.attributes['error.type']).toBe('Error');
   });
 
-  it('names spans after the span target', async () => {
-    // arrange
-    const message = { id: 'id-1', name: 'TestEvent', headers: {} };
-
-    // act
-    await tracer.process(
-      { ...destination, span: 'events Handler' },
-      message,
-      () => Promise.resolve(),
-    );
-
-    // assert
-    const [span] = exporter.getFinishedSpans();
-
-    expect(span!.name).toBe('process events Handler');
-  });
-
   it('names spans without a destination after the operation', async () => {
     // arrange
     const message = { id: 'id-1', name: 'TestEvent', headers: {} };

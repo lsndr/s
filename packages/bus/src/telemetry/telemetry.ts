@@ -43,11 +43,6 @@ export interface TelemetryDestination {
    * when there is none, e.g. while an outbox stores the message.
    */
   name?: string;
-  /**
-   * What a span is named after, when it isn't `name`, e.g. a stream together
-   * with its handler. Only the span name changes, not the `name` attribute.
-   */
-  span?: string;
   consumerGroup?: string;
   /** Name of the handler that consumes the message. */
   subscription?: string;

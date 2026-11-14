@@ -305,30 +305,6 @@ describe('Processor', { timeout: 60_000 }, () => {
       );
     });
 
-    it('names the process span after the stream and the handler', async () => {
-      // arrange
-      const telemetry = new NoopTelemetry();
-      const process = vi.spyOn(telemetry.getTracer(), 'process');
-      const { stream, entry, options } = await setup({
-        handlers: { A: vi.fn(), B: vi.fn() },
-      });
-      const processor = new Processor(
-        clients,
-        serializer,
-        new Instrumentation(telemetry),
-        options,
-      );
-
-      // act
-      await processor.process(stream, entry, 1);
-
-      // assert
-      expect(process.mock.calls.map(([d]) => d.span)).toEqual([
-        `${stream.name} A`,
-        `${stream.name} B`,
-      ]);
-    });
-
     it('falls back to no headers for entries without them', async () => {
       // arrange
       const telemetry = new NoopTelemetry();
