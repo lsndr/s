@@ -30,7 +30,7 @@ BusModule.forRoot({
 | `consumer`        | `<hostname>` | Consumer name in a group. An event is delivered to a single consumer of the group.                                                            |
 | `retries`         | see below    | How failed entries are retried, see [`retries`](#retries).                                                                                    |
 | `keyPrefix`       | `events:`    | Prefix of all keys: streams and the hashes that record succeeded handlers.                                                                    |
-| `concurrency`     | `10`         | Slots of each stream on one instance, see [Concurrency](#concurrency).                                                                        |
+| `concurrency`     | `32`         | Slots of each stream on one instance, see [Concurrency](#concurrency).                                                                        |
 | `trim`            | see below    | How streams are trimmed, see [`trim`](#trim).                                                                                                 |
 | `shutdownTimeout` | none         | Milliseconds to wait for entries in flight on shutdown. Unset waits for all of them.                                                          |
 

@@ -95,7 +95,7 @@ export interface RedisStreamsTransportConfig {
    * up to `2 * concurrency - 1` read entries at once. Reclaimed entries are
    * not limited by the slots, so they come on top of that.
    *
-   * @default 10
+   * @default 32
    */
   concurrency?: number;
   /**
@@ -173,7 +173,7 @@ function resolveSettings(config: RedisStreamsTransportConfig): Settings {
         Math.max(delay / 4, 1_000),
       ),
     },
-    concurrency: atLeast('concurrency', config.concurrency, 10, 1),
+    concurrency: atLeast('concurrency', config.concurrency, 32, 1),
     // not configurable: the TTL has to stay longer than the block timeout,
     // which is how often a live consumer shows activity
     blockTimeout: 5_000,
