@@ -42,26 +42,84 @@
     },
     "changelog": {
       "projectChangelogs": {
+        "renderOptions": {
+          "authors": false
+        },
         "createRelease": "github",
         "file": false
       }
     },
     "conventionalCommits": {
       "types": {
-        "docs": {
-          "semverBump": "patch"
+        "feat": {
+          "changelog": {
+            "title": "Features"
+          }
+        },
+        "fix": {
+          "changelog": {
+            "title": "Fixes"
+          }
         },
         "perf": {
-          "semverBump": "patch"
+          "semverBump": "patch",
+          "changelog": {
+            "title": "Performance"
+          }
         },
         "refactor": {
-          "semverBump": "patch"
+          "semverBump": "patch",
+          "changelog": {
+            "title": "Refactors"
+          }
+        },
+        "docs": {
+          "semverBump": "patch",
+          "changelog": {
+            "title": "Documentation"
+          }
         },
         "build": {
-          "semverBump": "patch"
+          "semverBump": "patch",
+          "changelog": {
+            "title": "Build"
+          }
+        },
+        "types": {
+          "changelog": {
+            "title": "Types"
+          }
+        },
+        "chore": {
+          "changelog": {
+            "title": "Chore"
+          }
+        },
+        "examples": {
+          "changelog": {
+            "title": "Examples"
+          }
+        },
+        "test": {
+          "changelog": {
+            "title": "Tests"
+          }
+        },
+        "style": {
+          "changelog": {
+            "title": "Styles"
+          }
+        },
+        "ci": {
+          "changelog": {
+            "title": "CI"
+          }
         },
         "revert": {
-          "semverBump": "patch"
+          "semverBump": "patch",
+          "changelog": {
+            "title": "Revert"
+          }
         }
       }
     },
