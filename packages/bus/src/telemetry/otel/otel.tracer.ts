@@ -247,8 +247,8 @@ export class OtelTracer implements TelemetryTracer {
 
     if (operation == 'create' && message) {
       name += ` ${message.name}`;
-    } else if (destination.name) {
-      name += ` ${destination.name}`;
+    } else if (destination.span ?? destination.name) {
+      name += ` ${destination.span ?? destination.name}`;
     }
 
     return name;
