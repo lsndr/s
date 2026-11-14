@@ -6,11 +6,11 @@ export {
 } from './decorators/event-handler.decorator.js';
 export {
   RabbitmqTransport,
-  RabbitmqTransportConfig,
+  type RabbitmqTransportConfig,
 } from './transport/rabbitmq/transport.js';
 export {
   RedisStreamsTransport,
-  RedisStreamsTransportConfig,
+  type RedisStreamsTransportConfig,
 } from './transport/redis-streams/transport.js';
 export {
   Outbox,
