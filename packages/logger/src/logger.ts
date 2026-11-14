@@ -1,7 +1,7 @@
 import { type LoggerService } from '@nestjs/common';
 import type { Level, LogFn } from 'pino';
 import { styleText } from 'node:util';
-import { merge } from 'lodash-es';
+import { deepMerge } from './deep-merge.js';
 import { pino } from './pino.js';
 import { type LogParams } from './types.js';
 import { LoggerContext } from './logger-context.js';
@@ -78,15 +78,7 @@ export class Logger implements LoggerService {
   }
 
   private buildParams(paramsArray: unknown[]): LogParams {
-    const result: LogParams = {};
-
-    for (const params of paramsArray) {
-      if (typeof params === 'object' && params !== null) {
-        merge(result, params);
-      }
-    }
-
-    return result;
+    return deepMerge(...paramsArray);
   }
 
   private write(
@@ -106,8 +98,7 @@ export class Logger implements LoggerService {
       optionalParams = [];
     }
 
-    const params = merge(
-      {},
+    const params = deepMerge(
       contextParams,
       this.baseParams,
       this.buildParams(optionalParams),

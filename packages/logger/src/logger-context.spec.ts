@@ -45,6 +45,21 @@ describe('LoggerContext', () => {
       });
     });
 
+    it('deep-merges nested objects of inner and outer contexts', () => {
+      // arrange
+      let params: unknown;
+
+      // act
+      LoggerContext.create({ user: { id: '1' } }, () => {
+        LoggerContext.create({ user: { role: 'admin' } }, () => {
+          params = LoggerContext.params();
+        });
+      });
+
+      // assert
+      expect(params).toEqual({ user: { id: '1', role: 'admin' } });
+    });
+
     it('outer context is restored after inner context exits', () => {
       LoggerContext.create({ requestId: 'outer' }, () => {
         LoggerContext.create({ requestId: 'inner' }, () => {});

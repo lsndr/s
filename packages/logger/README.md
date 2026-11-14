@@ -99,7 +99,7 @@ logger.error(new Error('Payment failed'), { orderId: '42' });
 
 ### Params precedence
 
-When the same field is set in several places, the later one wins (nested objects are merged key by key):
+When the same field is set in several places, the later one wins. Nested objects are merged key by key; arrays and any other value replace the earlier one:
 
 1. the active [context](#contextual-logging)
 2. `setParams()`
