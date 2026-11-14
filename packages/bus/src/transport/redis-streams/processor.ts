@@ -100,12 +100,9 @@ export class Processor {
           try {
             await this.instrumentation.process(
               {
-                system: 'redis',
-                name,
-                consumerGroup: group,
+                ...destination,
                 subscription: name,
                 clientId: consumer,
-                server,
               },
               {
                 id: eventPayload.id,

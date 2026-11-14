@@ -279,7 +279,7 @@ describe('Processor', { timeout: 60_000 }, () => {
       expect(process.mock.calls[0]![1].bodySize).toBe(payload.length);
     });
 
-    it('uses the name of the handler as the destination', async () => {
+    it('uses the stream as the destination and the handler as the subscription', async () => {
       // arrange
       const telemetry = new NoopTelemetry();
       const process = vi.spyOn(telemetry.getTracer(), 'process');
@@ -297,7 +297,12 @@ describe('Processor', { timeout: 60_000 }, () => {
       await processor.process(stream, entry, 1);
 
       // assert
-      expect(process.mock.calls.map(([d]) => d.name)).toEqual(['A', 'B']);
+      expect(process.mock.calls.map(([d]) => [d.name, d.subscription])).toEqual(
+        [
+          [stream.name, 'A'],
+          [stream.name, 'B'],
+        ],
+      );
     });
 
     it('falls back to no headers for entries without them', async () => {
