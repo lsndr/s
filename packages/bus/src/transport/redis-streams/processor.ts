@@ -126,28 +126,24 @@ export class Processor {
         this.instrumentation.deliver(destination, eventPayload.publishedAt);
       }
 
-      const results = await Promise.all(
+      const results = await Promise.allSettled(
         pending.map(async ({ name, callback }) => {
-          try {
-            await this.instrumentation.process(
-              {
-                ...destination,
-                subscription: name,
-                clientId: consumer,
-              },
-              {
-                id: eventPayload.id,
-                name: eventName,
-                headers,
-                bodySize: rawPayload.length,
-                attempt,
-                batch,
-              },
-              async () => callback(eventPayload),
-            );
-          } catch (err) {
-            return { error: err };
-          }
+          await this.instrumentation.process(
+            {
+              ...destination,
+              subscription: name,
+              clientId: consumer,
+            },
+            {
+              id: eventPayload.id,
+              name: eventName,
+              headers,
+              bodySize: rawPayload.length,
+              attempt,
+              batch,
+            },
+            async () => callback(eventPayload),
+          );
 
           await client
             .multi()
@@ -164,19 +160,18 @@ export class Processor {
           return undefined;
         }),
       );
-      const failed = results
-        .filter((result) => result !== undefined)
-        .map(({ error }) => error);
+      const errors = results
+        .filter((result) => result.status === 'rejected')
+        .map(({ reason }) => reason);
 
-      await this.settle(delivery, eventPayload.id, failed);
+      await this.settle(delivery, eventPayload.id, errors);
 
-      if (failed.length === 0) {
+      if (errors.length === 0) {
         this.logger.log(
           `Event ${eventName} (${streamId}) handled successfully`,
         );
       }
     } catch (err) {
-      // redis failure, the entry stays pending
       this.logger.error(
         `Failed to process entry ${streamId} of ${stream.name}: ${String(err)}`,
         err instanceof Error ? err.stack : undefined,
