@@ -5,7 +5,7 @@ import {
 } from '../../../telemetry/telemetry.js';
 import { type Instrumentation } from '../../../telemetry/instrumentation.js';
 import { type Clients } from '../clients.js';
-import { type Processor } from '../processor.js';
+import { type Processor, type StreamEntry } from '../processor.js';
 import { type Streams } from '../streams.js';
 import { type Loop } from './loop.js';
 
@@ -113,7 +113,12 @@ export class ReclaimLoop implements Loop {
         const attempt = (deliveries.get(id) ?? 0) + 1;
 
         streams.run(stream, id, (current) =>
-          processor.process(current, { ...entry, id }, attempt, batch),
+          processor.process(
+            current,
+            { ...entry, id } as unknown as StreamEntry,
+            attempt,
+            batch,
+          ),
         );
       }
     }
