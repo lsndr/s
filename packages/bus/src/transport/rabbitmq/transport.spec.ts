@@ -75,6 +75,66 @@ describe('RabbitmqTransport', { timeout: 60_000 }, () => {
     };
   }
 
+  describe('name clashes', () => {
+    const transports: RabbitmqTransport[] = [];
+
+    afterEach(async () => {
+      await Promise.all(transports.splice(0).map((t) => t.onBusShutdown()));
+    });
+
+    async function setup() {
+      const transport = new RabbitmqTransport(
+        { url, group: crypto.randomUUID() },
+        serializer,
+        new NoopTelemetry(),
+      );
+
+      transports.push(transport);
+      await transport.onBusInit();
+
+      return transport;
+    }
+
+    it('throws when a handler with the same name is subscribed to an event twice', async () => {
+      // arrange
+      const transport = await setup();
+
+      await transport.subscribe(TestEvent, 'TestHandler', () => {});
+
+      // act
+      const subscribing = transport.subscribe(
+        TestEvent,
+        'TestHandler',
+        () => {},
+      );
+
+      // assert
+      await expect(subscribing).rejects.toThrow(
+        'Handler TestHandler is already subscribed to',
+      );
+    });
+
+    it('throws when an event class with the same name is subscribed', async () => {
+      // arrange
+      const transport = await setup();
+      const OtherTestEvent = { TestEvent: class TestEvent {} }.TestEvent;
+
+      await transport.subscribe(TestEvent, 'TestHandler', () => {});
+
+      // act
+      const subscribing = transport.subscribe(
+        OtherTestEvent,
+        'OtherHandler',
+        () => {},
+      );
+
+      // assert
+      await expect(subscribing).rejects.toThrow(
+        'Routing key TestEvent is registered for another event class with the same name',
+      );
+    });
+  });
+
   const settleWarning = expect.stringContaining('Failed to settle event');
 
   it('warns when a handled message cannot be acked after a shutdown', async () => {

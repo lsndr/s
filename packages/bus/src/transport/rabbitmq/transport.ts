@@ -52,6 +52,8 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
 
   private connection?: ChannelModel;
   private channel?: ConfirmChannel;
+  private readonly events = new Map<string, EventConstructor<any>>();
+  private readonly queues = new Set<string>();
   private readonly logger = new Logger(RabbitmqTransport.name);
   private readonly server?: TelemetryServer;
   private readonly instrumentation: Instrumentation;
@@ -134,6 +136,8 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     C extends EventConstructor<any>,
     E extends InstanceType<C> = InstanceType<C>,
   >(event: C, handlerName: string, callback: EventCallback<E>): Promise<void> {
+    this.register(event, handlerName);
+
     const queue = await this.assertQueue(event.name, handlerName);
     const channel = this.getChannel();
 
@@ -319,6 +323,31 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     });
   }
 
+  private register(event: EventConstructor<any>, handlerName: string): void {
+    const registered = this.events.get(event.name);
+
+    if (registered && registered !== event) {
+      throw new Error(
+        `Routing key ${event.name} is registered for another event class with the same name`,
+      );
+    }
+
+    const queueName = this.getQueueName(event.name, handlerName);
+
+    if (this.queues.has(queueName)) {
+      throw new Error(
+        `Handler ${handlerName} is already subscribed to ${queueName}`,
+      );
+    }
+
+    this.events.set(event.name, event);
+    this.queues.add(queueName);
+  }
+
+  private getQueueName(eventName: string, handlerName: string): string {
+    return `${this.config.group}.${handlerName}.${eventName}`;
+  }
+
   private async assertQueue(
     eventName: string,
     handlerName: string,
@@ -326,7 +355,7 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     const channel = this.getChannel();
 
     const routingKey = eventName;
-    const queueName = `${this.config.group}.${handlerName}.${eventName}`;
+    const queueName = this.getQueueName(eventName, handlerName);
     const delayQueueName = `${queueName}.delay`;
 
     const queue = await channel.assertQueue(queueName, {
