@@ -6,12 +6,13 @@ import {
   type TelemetryServer,
 } from '../../telemetry/telemetry.js';
 import { type Instrumentation } from '../../telemetry/instrumentation.js';
+import { type EventPayload } from '../../types.js';
 import { type Clients } from './clients.js';
 import { type Stream } from './streams.js';
 
 export interface StreamEntry {
   id: string;
-  message: Record<string, Buffer>;
+  message: { id: Buffer; payload: Buffer; headers?: Buffer };
 }
 
 export interface ProcessorOptions {
@@ -28,6 +29,16 @@ export interface ProcessorOptions {
   server?: TelemetryServer;
 }
 
+interface Delivery {
+  stream: Stream;
+  /** Id of the stream entry. */
+  streamId: string;
+  attempt: number;
+  destination: TelemetryDestination;
+  doneKey: string;
+  headers: Record<string, string>;
+}
+
 export class Processor {
   private readonly logger = new Logger(Processor.name);
 
@@ -41,7 +52,8 @@ export class Processor {
   /**
    * Runs the handlers of an entry that haven't succeeded yet. The entry is
    * acknowledged once every handler has succeeded or failed permanently,
-   * otherwise it stays pending and is retried by the reclaim loop.
+   * otherwise it stays pending and is retried by the reclaim loop. An entry
+   * that fails to deserialize is retried and acknowledged the same way.
    *
    * Never rejects.
    */
@@ -62,10 +74,9 @@ export class Processor {
       server,
     } = this.options;
     const { event, handlers } = stream;
-    const { id, message } = entry;
-    const retryCount = attempt - 1;
+    const { id: streamId, message } = entry;
     const eventName = event.name;
-    const doneKey = `${keyPrefix}done:${group}:${eventName}:${id}`;
+    const doneKey = `${keyPrefix}done:${group}:${eventName}:${streamId}`;
     const destination: TelemetryDestination = {
       system: 'redis',
       name: stream.name,
@@ -78,23 +89,43 @@ export class Processor {
       3_600_000,
     );
 
-    this.logger.log(`Received message for event ${eventName} (${id})`);
+    this.logger.log(`Received message for event ${eventName} (${streamId})`);
 
     try {
       const client = await clients.get('command');
       const done = await client.hGetAll(doneKey);
       const pending = handlers.filter(({ name }) => !(name in done));
-      const rawPayload = message['payload'] ?? Buffer.alloc(0);
-      const eventPayload = this.serializer.deserialize(event, rawPayload);
+      const rawPayload = message.payload;
+      const headers = this.parseHeaders(message.headers);
+      const delivery: Delivery = {
+        stream,
+        streamId,
+        attempt,
+        destination,
+        doneKey,
+        headers,
+      };
+      let eventPayload: EventPayload<object>;
 
-      this.logger.verbose(`Event ${eventName} (${id}) payload:`, eventPayload);
+      try {
+        eventPayload = this.serializer.deserialize(event, rawPayload);
+      } catch (err) {
+        // the payload, which has the id of the event, can't be read
+        await this.settle(delivery, message.id.toString(), [err]);
+
+        return;
+      }
+
+      this.logger.verbose(
+        `Event ${eventName} (${streamId}) payload:`,
+        eventPayload,
+      );
 
       // a retry would only measure the delay between the retries
       if (attempt === 1) {
         this.instrumentation.deliver(destination, eventPayload.publishedAt);
       }
 
-      const headers = this.parseHeaders(message['headers']);
       const results = await Promise.all(
         pending.map(async ({ name, callback }) => {
           try {
@@ -115,7 +146,7 @@ export class Processor {
               async () => callback(eventPayload),
             );
           } catch (err) {
-            return { name, error: err };
+            return { error: err };
           }
 
           await client
@@ -125,59 +156,74 @@ export class Processor {
             .exec()
             .catch((err) =>
               this.logger.warn(
-                `Failed to record handler ${name} of ${id}: ${String(err)}`,
+                `Failed to record handler ${name} of ${streamId}: ${String(err)}`,
                 err instanceof Error ? err.stack : undefined,
               ),
             );
 
-          return { name, error: undefined };
+          return undefined;
         }),
       );
-      const failed = results.filter(({ error }) => error !== undefined);
+      const failed = results
+        .filter((result) => result !== undefined)
+        .map(({ error }) => error);
 
-      for (const { name, error } of failed) {
-        this.logger.error(
-          `Error handling event ${eventName} (${id}) (handler: ${name}, retryCount: ${retryCount}): ${String(error)}`,
-          error instanceof Error ? error.stack : undefined,
-        );
-      }
-
-      if (failed.length > 0 && retryCount < maxRetries) {
-        // stays pending and is retried by the reclaim loop
-        this.instrumentation.retry(destination);
-
-        return;
-      }
-
-      for (const { name, error } of failed) {
-        this.logger.error(
-          `Event ${eventName} (${id}) (handler: ${name}) failed permanently after ${retryCount} retries: ${String(error)}`,
-          error instanceof Error ? error.stack : undefined,
-        );
-      }
-
-      await this.instrumentation.settle(
-        { ...destination, operation: 'ack' },
-        {
-          id: eventPayload.id,
-          name: eventName,
-          headers,
-          attempt,
-        },
-        failed.length === 0 ? 'acked' : 'dropped',
-        () => client.multi().xAck(stream.name, group, id).del(doneKey).exec(),
-      );
+      await this.settle(delivery, eventPayload.id, failed);
 
       if (failed.length === 0) {
-        this.logger.log(`Event ${eventName} (${id}) handled successfully`);
+        this.logger.log(
+          `Event ${eventName} (${streamId}) handled successfully`,
+        );
       }
     } catch (err) {
       // redis failure, the entry stays pending
       this.logger.error(
-        `Failed to process entry ${id} of ${stream.name}: ${String(err)}`,
+        `Failed to process entry ${streamId} of ${stream.name}: ${String(err)}`,
         err instanceof Error ? err.stack : undefined,
       );
     }
+  }
+
+  private async settle(
+    delivery: Delivery,
+    messageId: string,
+    errors: unknown[],
+  ): Promise<void> {
+    const { group, maxRetries } = this.options;
+    const { stream, streamId, attempt, destination, doneKey, headers } =
+      delivery;
+    const eventName = stream.event.name;
+    const retryCount = attempt - 1;
+
+    for (const error of errors) {
+      this.logger.error(
+        `Error handling event ${eventName} (${streamId}) (retryCount: ${retryCount}): ${String(error)}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+
+    if (errors.length > 0 && retryCount < maxRetries) {
+      this.instrumentation.retry(destination);
+
+      return;
+    }
+
+    for (const error of errors) {
+      this.logger.error(
+        `Event ${eventName} (${streamId}) failed permanently after ${retryCount} retries: ${String(error)}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+
+    const client = await this.clients.get('command');
+
+    await this.instrumentation.settle(
+      { ...destination, operation: 'ack' },
+      { id: messageId, name: eventName, headers, attempt },
+      errors.length === 0 ? 'acked' : 'dropped',
+      () =>
+        client.multi().xAck(stream.name, group, streamId).del(doneKey).exec(),
+    );
   }
 
   private parseHeaders(raw: Buffer | undefined): Record<string, string> {

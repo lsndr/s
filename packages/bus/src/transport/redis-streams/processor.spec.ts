@@ -15,7 +15,11 @@ import { JsonSerializer } from '../../serialization/json.serializer.js';
 import { NoopTelemetry } from '../../telemetry/noop.telemetry.js';
 import { Instrumentation } from '../../telemetry/instrumentation.js';
 import { Clients } from './clients.js';
-import { Processor, type ProcessorOptions } from './processor.js';
+import {
+  Processor,
+  type ProcessorOptions,
+  type StreamEntry,
+} from './processor.js';
 import { type Callback, Handler } from './handler.js';
 import { type Stream } from './streams.js';
 
@@ -25,8 +29,7 @@ class TestEvent {
 
 interface SetupOptions {
   handlers: Record<string, Callback>;
-  /** Raw message of the entry. Defaults to a serialized `TestEvent`. */
-  message?: Record<string, Buffer>;
+  message?: Partial<StreamEntry['message']>;
   options?: Partial<ProcessorOptions>;
 }
 
@@ -62,13 +65,13 @@ describe('Processor', { timeout: 60_000 }, () => {
     };
 
     await redis.xGroupCreate(name, group, '0', { MKSTREAM: true });
-    await redis.xAdd(
-      name,
-      '*',
-      message ?? {
-        payload: Buffer.from(serializer.serialize(new TestEvent('hello')).data),
-      },
-    );
+    const serialized = serializer.serialize(new TestEvent('hello'));
+
+    await redis.xAdd(name, '*', {
+      id: Buffer.from(serialized.id),
+      payload: Buffer.from(serialized.data),
+      ...message,
+    });
 
     const reply = await redis
       .withTypeMapping({ [RESP_TYPES.BLOB_STRING]: Buffer })
@@ -388,7 +391,7 @@ describe('Processor', { timeout: 60_000 }, () => {
       expect(await redis.hGetAll(doneKey)).toEqual({ Ok: '1' });
       expect(await redis.pTTL(doneKey)).toBeGreaterThan(0);
       expect(log.error).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining('(handler: Flaky, retryCount: 0): Error: boom'),
+        expect.stringContaining('(retryCount: 0): Error: boom'),
         expect.any(String),
       );
     });
@@ -454,7 +457,7 @@ describe('Processor', { timeout: 60_000 }, () => {
       expect(await redis.exists(doneKey)).toBe(0);
       expect(log.error).toHaveBeenCalledWith(
         expect.stringContaining(
-          '(handler: Broken) failed permanently after 2 retries: Error: boom',
+          'failed permanently after 2 retries: Error: boom',
         ),
         expect.any(String),
       );
