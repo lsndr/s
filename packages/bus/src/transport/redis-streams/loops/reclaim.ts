@@ -115,7 +115,7 @@ export class ReclaimLoop implements Loop {
         streams.run(stream, id, (current) =>
           processor.process(
             current,
-            { id, message: entry.message as unknown as StreamEntry['message'] },
+            { ...entry, id } as unknown as StreamEntry,
             attempt,
             batch,
           ),
