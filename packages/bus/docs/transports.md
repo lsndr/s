@@ -49,6 +49,10 @@ BusModule.forRoot({
 | `maxLength` | `100`   | Approximate stream length above which entries are trimmed.                                       |
 | `onlyAcked` | `true`  | Trim only entries every group has acknowledged. `false` makes the cap hard and can lose entries. |
 
+### Naming
+
+Each event gets a stream named after its class. Names decide the stream and the handler, so they must be unique: subscribing a second handler with the same name to an event, or a second event class with the same name, throws at bootstrap.
+
 ### Concurrency
 
 Each stream has `concurrency` slots on each instance. A stream is read only while it has a free slot, and entries free their slot when they finish. There is no global limit across streams.
@@ -122,6 +126,7 @@ BusModule.forRoot({
 
 - Events are published to the durable `events` direct exchange, with the event class name as the routing key. Messages are persistent and use publisher confirms.
 - Each handler and event pair gets a queue named `<group>.<HandlerClass>.<EventClass>`.
+- Names decide the queue and the routing key, so they must be unique: subscribing a second handler with the same name to an event, or a second event class with the same name, throws at bootstrap.
 
 ### Delivery guarantees
 
