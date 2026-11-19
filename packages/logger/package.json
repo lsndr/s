@@ -43,7 +43,7 @@
     }
   },
   "devDependencies": {
-    "@nestjs/common": "^12.4.0",
+    "@nestjs/common": "^12.5.0",
     "pino-pretty": "^13.2.0"
   },
   "repository": {
