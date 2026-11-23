@@ -181,3 +181,7 @@ const orders = await logger.measure('loadOrders', () => fetchOrders(), {
 ```
 
 It logs a message like "Operation loadOrders completed in 12.34ms" at the given level (`info` by default) and adds `performance: { operationName, duration }` to the entry, with `duration` in milliseconds. If the function throws, nothing is logged and the error is passed on to the caller.
+
+## Changelog
+
+Release notes are published as [GitHub releases](https://github.com/lsndr/s/releases?q=%40lsndr%2Flogger%40&expanded=true).

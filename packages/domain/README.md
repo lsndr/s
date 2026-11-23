@@ -144,3 +144,7 @@ export default defineConfig({
 ```
 
 The rule needs type information, so configure typed linting (for example `languageOptions.parserOptions.projectService: true` with `typescript-eslint`).
+
+## Changelog
+
+Release notes are published as [GitHub releases](https://github.com/lsndr/s/releases?q=%40lsndr%2Fdomain%40&expanded=true).

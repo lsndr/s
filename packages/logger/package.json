@@ -1,6 +1,19 @@
 {
   "name": "@lsndr/logger",
   "version": "0.1.17",
+  "description": "A pino-based NestJS LoggerService that attaches request-scoped fields to every log entry written inside a context.",
+  "keywords": [
+    "nestjs",
+    "logger",
+    "pino",
+    "logging",
+    "structured-logging"
+  ],
+  "homepage": "https://github.com/lsndr/s/tree/main/packages/logger#readme",
+  "bugs": {
+    "url": "https://github.com/lsndr/s/issues"
+  },
+  "author": "lsndr",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
