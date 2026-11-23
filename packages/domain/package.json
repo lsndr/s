@@ -1,6 +1,20 @@
 {
   "name": "@lsndr/domain",
   "version": "0.2.19",
+  "description": "Building blocks for DDD-style domain models: aggregate roots, value objects and domain errors, plus an ESLint rule.",
+  "keywords": [
+    "ddd",
+    "domain-driven-design",
+    "aggregate-root",
+    "value-object",
+    "domain-events",
+    "eslint-rule"
+  ],
+  "homepage": "https://github.com/lsndr/s/tree/main/packages/domain#readme",
+  "bugs": {
+    "url": "https://github.com/lsndr/s/issues"
+  },
+  "author": "lsndr",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

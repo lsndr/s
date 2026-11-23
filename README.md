@@ -8,6 +8,14 @@
 
 Each package README covers its own requirements, peer dependencies and usage.
 
+## Changelog
+
+Release notes are published as [GitHub releases](https://github.com/lsndr/s/releases).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE)

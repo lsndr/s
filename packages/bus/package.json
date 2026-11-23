@@ -1,6 +1,22 @@
 {
   "name": "@lsndr/bus",
   "version": "0.17.13",
+  "description": "Transport-agnostic event bus for NestJS: Redis Streams, RabbitMQ or your own transport, with a transactional outbox and OpenTelemetry support.",
+  "keywords": [
+    "nestjs",
+    "event-bus",
+    "message-bus",
+    "redis-streams",
+    "rabbitmq",
+    "amqp",
+    "outbox",
+    "opentelemetry"
+  ],
+  "homepage": "https://github.com/lsndr/s/tree/main/packages/bus#readme",
+  "bugs": {
+    "url": "https://github.com/lsndr/s/issues"
+  },
+  "author": "lsndr",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

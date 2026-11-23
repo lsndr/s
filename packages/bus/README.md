@@ -226,3 +226,7 @@ export class HealthService {
 - [Serialization](docs/serialization.md): custom message formats
 - [Lifecycle hooks](docs/lifecycle.md): `onBusInit`, `onBusBootstrap`, `onBusShutdown`
 - [Telemetry](docs/telemetry.md): traces, metrics, Grafana dashboards, custom backends
+
+## Changelog
+
+Release notes are published as [GitHub releases](https://github.com/lsndr/s/releases?q=%40lsndr%2Fbus%40&expanded=true).
