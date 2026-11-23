@@ -1,6 +1,6 @@
 {
   "name": "@lsndrs/domain",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "description": "Building blocks for DDD-style domain models: aggregate roots, value objects and domain errors, plus an ESLint rule.",
   "keywords": [
     "ddd",
