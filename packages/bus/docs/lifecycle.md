@@ -8,7 +8,7 @@ import {
   type OnBusInit,
   type OnBusBootstrap,
   type OnBusShutdown,
-} from '@lsndr/bus';
+} from '@lsndrs/bus';
 
 class MyTransport
   implements Transport, OnBusInit, OnBusBootstrap, OnBusShutdown

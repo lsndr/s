@@ -1,4 +1,4 @@
-# @lsndr/domain
+# @lsndrs/domain
 
 Lightweight building blocks for DDD-style domain models: aggregate roots that collect domain events, value objects, domain errors, and an ESLint rule that keeps state-recovery constructors out of business code. It has no runtime dependencies.
 
@@ -9,14 +9,8 @@ Lightweight building blocks for DDD-style domain models: aggregate roots that co
 
 ## Installation
 
-The package is published to GitHub Packages. Point the `@lsndr` scope at that registry in `.npmrc` (authenticating with a token that can read packages), then install:
-
-```ini
-@lsndr:registry=https://npm.pkg.github.com
-```
-
 ```bash
-npm install @lsndr/domain
+npm install @lsndrs/domain
 ```
 
 ## Aggregate root
@@ -31,7 +25,7 @@ This solves two problems:
 New aggregates are created through static factories that validate their input and raise events. The public constructor does no validation and is only for restoring an aggregate from persisted state; see [ESLint rule](#eslint-rule).
 
 ```typescript
-import { AggregateRoot } from '@lsndr/domain';
+import { AggregateRoot } from '@lsndrs/domain';
 
 interface OrderState {
   id: string;
@@ -68,7 +62,7 @@ This solves two problems:
 - **Scattered domain logic.** Behaviour that belongs to the value (formatting, comparison, arithmetic) lives on the value object instead of in helpers around the code base.
 
 ```typescript
-import { ValueObject } from '@lsndr/domain';
+import { ValueObject } from '@lsndrs/domain';
 
 class Email extends ValueObject<string, 'Email'> {
   public static create(value: string): Email {
@@ -93,7 +87,7 @@ const email: Email = Email.create('john@example.com');
 `DomainError` is thrown by `assert`. It has two public fields: `owner` (the class that raised it) and `key` (a stable identifier of the broken rule), and its message is `Domain error "<key>" occured in "<owner>"`. You can also throw it yourself.
 
 ```typescript
-import { DomainError } from '@lsndr/domain';
+import { DomainError } from '@lsndrs/domain';
 
 try {
   Email.create('not-an-email');
@@ -128,7 +122,7 @@ Hydration code outside the class hierarchy should disable the rule where it is i
 
 ```javascript
 import { defineConfig } from 'eslint/config';
-import noStateRecoveryConstructorUsage from '@lsndr/domain/eslint/no-state-recovery-constructor-usage';
+import noStateRecoveryConstructorUsage from '@lsndrs/domain/eslint/no-state-recovery-constructor-usage';
 
 const domainPlugin = {
   rules: {

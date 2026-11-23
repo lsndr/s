@@ -1,5 +1,5 @@
 {
-  "name": "@lsndr/logger",
+  "name": "@lsndrs/logger",
   "version": "0.1.18",
   "description": "A pino-based NestJS LoggerService that attaches request-scoped fields to every log entry written inside a context.",
   "keywords": [
@@ -28,7 +28,7 @@
     "dist"
   ],
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public"
   },
   "engines": {
     "node": ">=24.0.0"

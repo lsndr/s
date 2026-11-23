@@ -1,4 +1,4 @@
-# @lsndr/logger
+# @lsndrs/logger
 
 A [NestJS](https://nestjs.com/) `LoggerService` built on [pino](https://github.com/pinojs/pino). It writes structured JSON logs, and it attaches request-scoped fields (a request id, a user id) to every log entry written inside a context, without passing a logger or those fields through every call.
 
@@ -10,14 +10,8 @@ A [NestJS](https://nestjs.com/) `LoggerService` built on [pino](https://github.c
 
 ## Installation
 
-The package is published to GitHub Packages. Point the `@lsndr` scope at that registry in `.npmrc` (authenticating with a token that can read packages), then install:
-
-```ini
-@lsndr:registry=https://npm.pkg.github.com
-```
-
 ```bash
-npm install @lsndr/logger
+npm install @lsndrs/logger
 ```
 
 For readable output during development, also install `pino-pretty`:
@@ -28,7 +22,7 @@ npm install -D pino-pretty
 
 ## Configuration
 
-The logger is configured through environment variables. They are read once, when `@lsndr/logger` is first imported, and all `Logger` instances share the same underlying pino instance.
+The logger is configured through environment variables. They are read once, when `@lsndrs/logger` is first imported, and all `Logger` instances share the same underlying pino instance.
 
 | Variable    | Default | Effect                                                                                                                                                                                                                                                 |
 | ----------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -61,7 +55,7 @@ In production each entry is one JSON line:
 Create a logger with a source name, usually the class name, and call the usual NestJS methods on it:
 
 ```typescript
-import { Logger } from '@lsndr/logger';
+import { Logger } from '@lsndrs/logger';
 
 class OrderService {
   private readonly logger = new Logger(OrderService.name);
@@ -112,7 +106,7 @@ Pass an instance to NestJS to use it for the framework's own logs as well:
 
 ```typescript
 import { NestFactory } from '@nestjs/core';
-import { Logger } from '@lsndr/logger';
+import { Logger } from '@lsndrs/logger';
 import { AppModule } from './app.module.js';
 
 const app = await NestFactory.create(AppModule, { logger: new Logger() });
@@ -127,7 +121,7 @@ NestJS calls the logger as `logger.log('message', 'ContextName')`. When the mess
 `withContext` runs a function with a set of params that every `Logger` adds to its entries while that function is running, including code it calls and anything that continues after an `await`. It is built on `AsyncLocalStorage`, so concurrent requests don't see each other's params.
 
 ```typescript
-import { Logger } from '@lsndr/logger';
+import { Logger } from '@lsndrs/logger';
 
 const logger = new Logger('Orders');
 
@@ -159,7 +153,7 @@ logger.withContext({ requestId: 'r1' }, () => {
 `logger.withContext(params, fn)` and `LoggerContext.create(params, fn)` are equivalent, and `LoggerContext.params()` returns the params of the active context (an empty object outside of one). Use `LoggerContext` directly where you don't have a logger at hand, for example in middleware:
 
 ```typescript
-import { LoggerContext } from '@lsndr/logger';
+import { LoggerContext } from '@lsndrs/logger';
 
 function middleware(requestId: string, next: () => void) {
   LoggerContext.create({ requestId }, next);
@@ -171,7 +165,7 @@ function middleware(requestId: string, next: () => void) {
 `measure` runs a function, times it and logs the duration. The function can be synchronous or asynchronous; the result is always returned as a promise.
 
 ```typescript
-import { Logger } from '@lsndr/logger';
+import { Logger } from '@lsndrs/logger';
 
 const logger = new Logger('Orders');
 

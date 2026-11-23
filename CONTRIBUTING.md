@@ -6,7 +6,7 @@ To report a security vulnerability, follow [SECURITY.md](SECURITY.md) instead of
 
 ## Setup
 
-You need Node.js 24 or newer and npm. The `@lsndr/bus` tests start Redis and RabbitMQ containers with [Testcontainers](https://testcontainers.com), so they also need a running Docker daemon.
+You need Node.js 24 or newer and npm. The `@lsndrs/bus` tests start Redis and RabbitMQ containers with [Testcontainers](https://testcontainers.com), so they also need a running Docker daemon.
 
 ```bash
 npm ci
@@ -22,7 +22,7 @@ Code style, comments and the way tests are written are described in [AGENTS.md](
 
 ## Commits
 
-Commit messages follow [Conventional Commits](https://www.conventionalcommits.org), for example `fix(bus): stop reclaiming messages twice`. The scope is the package name without `@lsndr/`. If your pull request is squash-merged, its title becomes the commit message, so it needs to follow the same format.
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org), for example `fix(bus): stop reclaiming messages twice`. The scope is the package name without `@lsndrs/`. If your pull request is squash-merged, its title becomes the commit message, so it needs to follow the same format.
 
 The commit type decides the version bump of the affected packages when they are released:
 
@@ -36,4 +36,4 @@ While a package is on `0.x`, a major bump is released as a minor one and a minor
 
 ## Releases
 
-Releases are automated; contributors don't bump versions or edit changelogs. Every push to `main` runs the [release workflow](.github/workflows/release.yml): [`nx release`](https://nx.dev/features/manage-releases) bumps the packages that changed, tags them as `<package>@<version>`, creates a GitHub release with generated notes and publishes them to GitHub Packages. The releases page is the changelog.
+Releases are automated; contributors don't bump versions or edit changelogs. Every push to `main` runs the [release workflow](.github/workflows/release.yml): [`nx release`](https://nx.dev/features/manage-releases) bumps the packages that changed, tags them as `<package>@<version>`, creates a GitHub release with generated notes and publishes them to npm. The releases page is the changelog.

@@ -4,7 +4,7 @@
   "tags": ["bus", "messaging", "redis"],
   "schemaVersion": 39,
   "editable": true,
-  "description": "Metrics of @lsndr/bus on Redis Streams recorded by OtelTelemetry, as Prometheus names them.",
+  "description": "Metrics of @lsndrs/bus on Redis Streams recorded by OtelTelemetry, as Prometheus names them.",
   "time": {
     "from": "now-1h",
     "to": "now"
