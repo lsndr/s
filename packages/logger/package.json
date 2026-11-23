@@ -1,6 +1,6 @@
 {
   "name": "@lsndr/logger",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "A pino-based NestJS LoggerService that attaches request-scoped fields to every log entry written inside a context.",
   "keywords": [
     "nestjs",
