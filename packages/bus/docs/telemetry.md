@@ -12,7 +12,7 @@ Tracing and metrics are pluggable through the `telemetry` option.
 `OtelTelemetry` uses [OpenTelemetry](https://opentelemetry.io) and follows the messaging semantic conventions for [spans](https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/) and [metrics](https://opentelemetry.io/docs/specs/semconv/messaging/messaging-metrics/). It needs `@opentelemetry/api`; spans and metrics are exported by whatever SDK you have set up.
 
 ```typescript
-import { BusModule, OtelTelemetry } from '@lsndr/bus';
+import { BusModule, OtelTelemetry } from '@lsndrs/bus';
 
 BusModule.forRoot({
   transport,

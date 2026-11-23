@@ -20,7 +20,7 @@ import {
   RabbitmqTransport,
   type OutboxConfig,
   type OutboxRecord,
-} from '@lsndr/bus';
+} from '@lsndrs/bus';
 
 interface PostgresOutboxConfig extends OutboxConfig {
   batchSize: number;

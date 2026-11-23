@@ -21,7 +21,7 @@ import {
   type Serializer,
   type SerializedData,
   type SerializedMessage,
-} from '@lsndr/bus';
+} from '@lsndrs/bus';
 
 @Injectable()
 class MsgpackSerializer implements Serializer {

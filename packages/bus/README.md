@@ -1,4 +1,4 @@
-# @lsndr/bus
+# @lsndrs/bus
 
 Event bus for [NestJS](https://nestjs.com/): transport agnostic, with outbox support and high observability.
 
@@ -25,14 +25,8 @@ More transports are coming.
 
 ## Installation
 
-The package is published to GitHub Packages. Point the `@lsndr` scope at that registry in `.npmrc` (authenticating with a token that can read packages), then install:
-
-```ini
-@lsndr:registry=https://npm.pkg.github.com
-```
-
 ```bash
-npm install @lsndr/bus class-transformer
+npm install @lsndrs/bus class-transformer
 ```
 
 `class-transformer` is used by the default `JsonSerializer`; you can skip it if you provide your own [serializer](docs/serialization.md).
@@ -59,7 +53,7 @@ Register the module with a transport:
 
 ```typescript
 import { Module } from '@nestjs/common';
-import { BusModule, RabbitmqTransport } from '@lsndr/bus';
+import { BusModule, RabbitmqTransport } from '@lsndrs/bus';
 
 @Module({
   imports: [
@@ -79,7 +73,7 @@ Publish an event:
 
 ```typescript
 import { Inject, Injectable } from '@nestjs/common';
-import { Dispatcher } from '@lsndr/bus';
+import { Dispatcher } from '@lsndrs/bus';
 
 @Injectable()
 export class OrderService {
@@ -94,7 +88,7 @@ export class OrderService {
 Handle it:
 
 ```typescript
-import { EventHandler, type EventPayload } from '@lsndr/bus';
+import { EventHandler, type EventPayload } from '@lsndrs/bus';
 
 @EventHandler(OrderPlaced)
 export class OrderPlacedHandler {
@@ -147,7 +141,7 @@ A middleware wraps the handler:
 
 ```typescript
 import { Injectable } from '@nestjs/common';
-import { type EventHandlerMiddleware, type EventPayload } from '@lsndr/bus';
+import { type EventHandlerMiddleware, type EventPayload } from '@lsndrs/bus';
 
 @Injectable()
 export class TimingMiddleware implements EventHandlerMiddleware {
@@ -192,7 +186,7 @@ Global middlewares run before handler-level ones. Bootstrap fails if a reference
 
 ```typescript
 import { Inject, Injectable } from '@nestjs/common';
-import { Health } from '@lsndr/bus';
+import { Health } from '@lsndrs/bus';
 
 @Injectable()
 export class HealthService {

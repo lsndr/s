@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-The packages are versioned independently and are all `0.x`. Only the latest published version of each package (`@lsndr/bus`, `@lsndr/domain`, `@lsndr/logger`) receives security fixes.
+The packages are versioned independently and are all `0.x`. Only the latest published version of each package (`@lsndrs/bus`, `@lsndrs/domain`, `@lsndrs/logger`) receives security fixes.
 
 ## Reporting a vulnerability
 

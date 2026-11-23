@@ -1,5 +1,5 @@
 {
-  "name": "@lsndr/domain",
+  "name": "@lsndrs/domain",
   "version": "0.2.19",
   "description": "Building blocks for DDD-style domain models: aggregate roots, value objects and domain errors, plus an ESLint rule.",
   "keywords": [
@@ -31,7 +31,7 @@
     "eslint"
   ],
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public"
   },
   "engines": {
     "node": ">=24.0.0"

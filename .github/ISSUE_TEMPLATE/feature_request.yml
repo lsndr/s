@@ -7,9 +7,9 @@ body:
     attributes:
       label: Package
       options:
-        - '@lsndr/bus'
-        - '@lsndr/domain'
-        - '@lsndr/logger'
+        - '@lsndrs/bus'
+        - '@lsndrs/domain'
+        - '@lsndrs/logger'
     validations:
       required: true
   - type: textarea
