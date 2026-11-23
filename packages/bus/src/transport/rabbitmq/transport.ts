@@ -8,6 +8,7 @@ import {
   type OnBusShutdown,
 } from '../../lifecycle.js';
 import { Handler } from '../handler.js';
+import { DeferredTasks } from './deferred-tasks.js';
 import {
   type ChannelModel,
   type ConfirmChannel,
@@ -61,9 +62,7 @@ export class RabbitmqTransport
   private channel?: ConfirmChannel;
   private readonly events = new Map<string, EventConstructor<any>>();
   private readonly queues = new Map<string, Handler>();
-  // consuming starts at bootstrap, once every callback of a queue is known
-  private readonly consumers: (() => Promise<void>)[] = [];
-  private bootstrapped = false;
+  private readonly consumers = new DeferredTasks();
   private readonly logger = new Logger(RabbitmqTransport.name);
   private readonly server?: TelemetryServer;
   private readonly instrumentation: Instrumentation;
@@ -94,11 +93,7 @@ export class RabbitmqTransport
   }
 
   public async onBusBootstrap(): Promise<void> {
-    this.bootstrapped = true;
-
-    for (const consume of this.consumers.splice(0)) {
-      await consume();
-    }
+    await this.consumers.release();
   }
 
   public async onBusInit(): Promise<void> {
@@ -170,13 +165,9 @@ export class RabbitmqTransport
       `Subscribed to event ${event.name} (handler: ${handlerName})`,
     );
 
-    const consume = () => this.consume(event, handlerName, queue, handler);
-
-    if (this.bootstrapped) {
-      await consume();
-    } else {
-      this.consumers.push(consume);
-    }
+    await this.consumers.run(() =>
+      this.consume(event, handlerName, queue, handler),
+    );
   }
 
   private async consume(
