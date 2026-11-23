@@ -64,6 +64,7 @@ describe('RabbitmqTransport', { timeout: 60_000 }, () => {
 
       return handled.promise;
     });
+    await transport.onBusBootstrap();
     await transport.publish(new TestEvent('hello'));
     await handling.promise;
     await transport.onBusShutdown();
@@ -95,23 +96,39 @@ describe('RabbitmqTransport', { timeout: 60_000 }, () => {
       return transport;
     }
 
-    it('throws when a handler with the same name is subscribed to an event twice', async () => {
+    it('runs every handler with the same name for a message', async () => {
       // arrange
       const transport = await setup();
+      const first = vi.fn();
+      const second = vi.fn();
 
-      await transport.subscribe(TestEvent, 'TestHandler', () => {});
+      await transport.subscribe(TestEvent, 'TestHandler', first);
+      await transport.subscribe(TestEvent, 'TestHandler', second);
+      await transport.onBusBootstrap();
 
       // act
-      const subscribing = transport.subscribe(
-        TestEvent,
-        'TestHandler',
-        () => {},
-      );
+      await transport.publish(new TestEvent('hello'));
 
       // assert
-      await expect(subscribing).rejects.toThrow(
-        'Handler TestHandler is already subscribed to',
-      );
+      await vi.waitFor(() => {
+        expect(first).toHaveBeenCalledTimes(1);
+        expect(second).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('does not consume messages before bootstrap', async () => {
+      // arrange
+      const transport = await setup();
+      const handler = vi.fn();
+
+      await transport.subscribe(TestEvent, 'TestHandler', handler);
+
+      // act
+      await transport.publish(new TestEvent('hello'));
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
+
+      // assert
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it('throws when an event class with the same name is subscribed', async () => {

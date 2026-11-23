@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setTimeout } from 'node:timers/promises';
 import { Logger } from '@nestjs/common';
-import { Handler } from './handler.js';
+import { Handler } from '../handler.js';
 import { Streams } from './streams.js';
 
 class TestEvent {}
@@ -99,17 +99,16 @@ describe('Streams', () => {
       expect(stream?.handlers.map(({ name }) => name)).toEqual(['h1']);
     });
 
-    it('throws if the handler is already registered for the stream', () => {
+    it('merges a handler with the name of a registered one', () => {
       // arrange
       const streams = new Streams(1);
       streams.register('a', TestEvent, new Handler('h', () => {}));
 
       // act
-      const act = () =>
-        streams.register('a', TestEvent, new Handler('h', () => {}));
+      streams.register('a', TestEvent, new Handler('h', () => {}));
 
       // assert
-      expect(act).toThrow('Handler h is already subscribed to a');
+      expect(streams.all()[0]?.handlers.map(({ name }) => name)).toEqual(['h']);
     });
   });
 

@@ -13,7 +13,7 @@ import {
 import { GenericContainer, Wait } from 'testcontainers';
 import { createClient, type RedisClientType } from 'redis';
 import { Clients } from '../clients.js';
-import { Handler } from '../handler.js';
+import { Handler } from '../../handler.js';
 import { Streams } from '../streams.js';
 import { StaleConsumersLoop } from './stale-consumers.js';
 

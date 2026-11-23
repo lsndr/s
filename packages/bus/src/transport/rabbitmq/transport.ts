@@ -2,7 +2,13 @@ import { Inject, Logger } from '@nestjs/common';
 import { type EventConstructor } from '../../types.js';
 import { type Transport } from '../transport.js';
 import { type BusProvider } from '../../provider.js';
-import { type OnBusInit, type OnBusShutdown } from '../../lifecycle.js';
+import {
+  type OnBusBootstrap,
+  type OnBusInit,
+  type OnBusShutdown,
+} from '../../lifecycle.js';
+import { Handler } from '../handler.js';
+import { DeferredTasks } from './deferred-tasks.js';
 import {
   type ChannelModel,
   type ConfirmChannel,
@@ -47,13 +53,16 @@ export interface RabbitmqTransportConfig {
 const RabbitmqTransportConfigToken = Symbol('RabbitmqTransportConfig');
 
 /** Transport that publishes and consumes events through RabbitMQ. */
-export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
+export class RabbitmqTransport
+  implements Transport, OnBusInit, OnBusBootstrap, OnBusShutdown
+{
   private readonly exchange = 'events';
 
   private connection?: ChannelModel;
   private channel?: ConfirmChannel;
   private readonly events = new Map<string, EventConstructor<any>>();
-  private readonly queues = new Set<string>();
+  private readonly queues = new Map<string, Handler>();
+  private readonly consumers = new DeferredTasks();
   private readonly logger = new Logger(RabbitmqTransport.name);
   private readonly server?: TelemetryServer;
   private readonly instrumentation: Instrumentation;
@@ -81,6 +90,10 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
 
   public async onBusShutdown(): Promise<void> {
     await this.getConnection().close();
+  }
+
+  public async onBusBootstrap(): Promise<void> {
+    await this.consumers.release();
   }
 
   public async onBusInit(): Promise<void> {
@@ -136,16 +149,36 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     C extends EventConstructor<any>,
     E extends InstanceType<C> = InstanceType<C>,
   >(event: C, handlerName: string, callback: EventCallback<E>): Promise<void> {
-    this.register(event, handlerName);
+    const handler = this.register(event, handlerName, callback);
+
+    if (!handler) {
+      this.logger.log(
+        `Subscribed to event ${event.name} (handler: ${handlerName}, sharing the queue of the handlers with this name)`,
+      );
+
+      return;
+    }
 
     const queue = await this.assertQueue(event.name, handlerName);
-    const channel = this.getChannel();
 
     this.logger.log(
       `Subscribed to event ${event.name} (handler: ${handlerName})`,
     );
 
-    const handler = (message: ConsumeMessage | null) => {
+    await this.consumers.run(() =>
+      this.consume(event, handlerName, queue, handler),
+    );
+  }
+
+  private async consume(
+    event: EventConstructor<any>,
+    handlerName: string,
+    queue: string,
+    handler: Handler,
+  ): Promise<void> {
+    const channel = this.getChannel();
+
+    const onMessage = (message: ConsumeMessage | null) => {
       if (!message) {
         return;
       }
@@ -199,7 +232,7 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
                 },
               ],
             },
-            async () => callback(payload),
+            () => handler.handle(payload),
           );
         })
         .then(
@@ -233,7 +266,7 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
         });
     };
 
-    await channel.consume(queue, (message) => handler(message), {
+    await channel.consume(queue, (message) => onMessage(message), {
       noAck: false,
     });
   }
@@ -323,7 +356,16 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     });
   }
 
-  private register(event: EventConstructor<any>, handlerName: string): void {
+  /**
+   * A handler with the name of a subscribed one joins its queue.
+   *
+   * @returns The handler of a new queue, or nothing if it joined one.
+   */
+  private register(
+    event: EventConstructor<any>,
+    handlerName: string,
+    callback: EventCallback<any>,
+  ): Handler | undefined {
     const registered = this.events.get(event.name);
 
     if (registered && registered !== event) {
@@ -333,15 +375,20 @@ export class RabbitmqTransport implements Transport, OnBusInit, OnBusShutdown {
     }
 
     const queueName = this.getQueueName(event.name, handlerName);
+    const existing = this.queues.get(queueName);
 
-    if (this.queues.has(queueName)) {
-      throw new Error(
-        `Handler ${handlerName} is already subscribed to ${queueName}`,
-      );
+    if (existing) {
+      existing.merge(new Handler(handlerName, callback));
+
+      return undefined;
     }
 
+    const handler = new Handler(handlerName, callback);
+
     this.events.set(event.name, event);
-    this.queues.add(queueName);
+    this.queues.set(queueName, handler);
+
+    return handler;
   }
 
   private getQueueName(eventName: string, handlerName: string): string {
