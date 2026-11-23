@@ -127,7 +127,9 @@ export class Processor {
       }
 
       const results = await Promise.allSettled(
-        pending.map(async ({ name, callback }) => {
+        pending.map(async (handler) => {
+          const { name } = handler;
+
           await this.instrumentation.process(
             {
               ...destination,
@@ -142,7 +144,7 @@ export class Processor {
               attempt,
               batch,
             },
-            async () => callback(eventPayload),
+            () => handler.handle(eventPayload),
           );
 
           await client

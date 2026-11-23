@@ -16,7 +16,7 @@ import { parseServer } from '../../telemetry/server.js';
 import { Instrumentation } from '../../telemetry/instrumentation.js';
 import { Backlog } from './backlog.js';
 import { Clients } from './clients.js';
-import { Handler } from './handler.js';
+import { Handler } from '../handler.js';
 import { Loops } from './loops/loops.js';
 import { ReadLoop } from './loops/read.js';
 import { ReclaimLoop } from './loops/reclaim.js';

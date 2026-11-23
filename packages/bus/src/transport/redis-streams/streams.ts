@@ -1,5 +1,5 @@
 import { type EventConstructor } from '../../types.js';
-import { type Handler } from './handler.js';
+import { type Handler } from '../handler.js';
 import { Inflight } from './inflight.js';
 
 export interface Stream {
@@ -29,8 +29,10 @@ export class Streams {
   }
 
   /**
-   * @throws If the stream is registered for another event, or the handler is
-   * already registered for the stream.
+   * A handler with the name of a registered one joins it, so its callbacks run
+   * together.
+   *
+   * @throws If the stream is registered for another event.
    */
   public register(
     name: string,
@@ -45,19 +47,19 @@ export class Streams {
       );
     }
 
-    if (stream?.handlers.some((existing) => existing.name === handler.name)) {
-      throw new Error(
-        `Handler ${handler.name} is already subscribed to ${name}`,
-      );
-    }
-
     if (!stream) {
       stream = { name, event, handlers: [] };
       this.streams.set(name, stream);
       this.entries.register(name);
     }
 
-    stream.handlers.push(handler);
+    const existing = stream.handlers.find(({ name }) => name === handler.name);
+
+    if (existing) {
+      existing.merge(handler);
+    } else {
+      stream.handlers.push(handler);
+    }
   }
 
   /**

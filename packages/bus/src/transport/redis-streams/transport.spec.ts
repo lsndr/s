@@ -237,16 +237,24 @@ describe('RedisStreamsTransport', { timeout: 60_000 }, () => {
       await expect(subscribed).resolves.toBeUndefined();
     });
 
-    it('rejects a handler that is already subscribed to the event', async () => {
+    it('runs every handler with the same name for an event', async () => {
       // arrange
       const { transport } = await createTransport();
-      await transport.subscribe(FirstEvent, 'Handler', vi.fn());
+      const first = vi.fn();
+      const second = vi.fn();
+
+      await transport.subscribe(FirstEvent, 'Handler', first);
+      await transport.subscribe(FirstEvent, 'Handler', second);
+      transport.onBusBootstrap();
 
       // act
-      const subscribed = transport.subscribe(FirstEvent, 'Handler', vi.fn());
+      await transport.publish(new FirstEvent('x'));
 
       // assert
-      await expect(subscribed).rejects.toThrow(/already subscribed/);
+      await vi.waitFor(() => {
+        expect(first).toHaveBeenCalledTimes(1);
+        expect(second).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

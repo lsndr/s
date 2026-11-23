@@ -51,7 +51,9 @@ BusModule.forRoot({
 
 ### Naming
 
-Each event gets a stream named after its class. Names decide the stream and the handler, so they must be unique: subscribing a second handler with the same name to an event, or a second event class with the same name, throws at bootstrap.
+Each event gets a stream named after its class, so two event classes with the same name throw at bootstrap.
+
+Handlers are identified by their class name. Handlers with the same name subscribed to one event count as one handler: every one of them runs, in parallel, for every entry, and the handler succeeds only when all of them do. If one fails, the others run again on the retry, because they are recorded together.
 
 ### Concurrency
 
@@ -70,7 +72,7 @@ Delivery is **at-least-once**: make handlers idempotent.
 - An entry is acknowledged with `XACK` once every handler has succeeded or failed permanently.
 - A failed entry stays pending and is claimed again, by any instance, once it has been pending for `retries.delay` ms. This repeats up to `retries.max` times. After that the entry is logged as permanently failed and acknowledged, so it is tried at most `retries.max + 1` times.
 - Entries of a crashed consumer are recovered the same way, and each recovery counts as a retry. While handlers run, their entry is kept from looking abandoned.
-- Handlers that succeeded are recorded, so a redelivery only runs the handlers that haven't succeeded yet. If recording fails, that handler may run again.
+- Handlers that succeeded are recorded, so a redelivery only runs the handlers that haven't succeeded yet. Handlers with the same name are recorded as one, so they all run again if any of them failed. If recording fails, that handler may run again.
 - If Redis fails while an entry is processed, the entry stays pending and is retried.
 - With `trim.onlyAcked: false`, trimming can drop entries that haven't been handled, see [Trimming](#trimming).
 
@@ -125,14 +127,15 @@ BusModule.forRoot({
 ### Topology
 
 - Events are published to the durable `events` direct exchange, with the event class name as the routing key. Messages are persistent and use publisher confirms.
-- Each handler and event pair gets a queue named `<group>.<HandlerClass>.<EventClass>`.
-- Names decide the queue and the routing key, so they must be unique: subscribing a second handler with the same name to an event, or a second event class with the same name, throws at bootstrap.
+- Each handler name and event pair gets a queue named `<group>.<HandlerClass>.<EventClass>`. Handlers with the same name subscribed to one event share that queue: every one of them runs, in parallel, for every message.
+- Two event classes with the same name would share a routing key, so subscribing the second throws at bootstrap.
+- Messages are consumed once every handler is subscribed, when the bus bootstraps.
 
 ### Delivery guarantees
 
 Delivery is **at-least-once**: make handlers idempotent.
 
-- Each handler has its own queue, so handlers of the same event succeed and retry independently.
+- Each handler name has its own queue, so handlers with different names succeed and retry independently. If a handler of a shared queue fails, the message is retried for all the handlers of that queue, so the ones that succeeded run again.
 - A message is acknowledged after its handler finishes. If the consumer dies first, the broker delivers it again.
 - A failed message is nacked into `<queue>.delay` (through the `events.delay` exchange), waits `retries.delay` ms, and returns to the original queue. This repeats up to `retries.max` times.
 - After that the message is logged as permanently failed and acknowledged, which drops it. A message is therefore tried at most `retries.max + 1` times.

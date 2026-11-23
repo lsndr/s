@@ -12,7 +12,7 @@ import { Logger } from '@nestjs/common';
 import { createClient, type RedisClientType } from 'redis';
 import { Backlog } from './backlog.js';
 import { Clients } from './clients.js';
-import { Handler } from './handler.js';
+import { Handler } from '../handler.js';
 import { Streams } from './streams.js';
 
 class TestEvent {}

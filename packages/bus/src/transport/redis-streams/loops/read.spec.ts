@@ -14,7 +14,7 @@ import { NoopTelemetry } from '../../../telemetry/noop.telemetry.js';
 import { Instrumentation } from '../../../telemetry/instrumentation.js';
 import { Clients } from '../clients.js';
 import { type Processor } from '../processor.js';
-import { Handler } from '../handler.js';
+import { Handler } from '../../handler.js';
 import { Streams } from '../streams.js';
 import { ReadLoop } from './read.js';
 

@@ -20,7 +20,7 @@ import {
   type ProcessorOptions,
   type StreamEntry,
 } from './processor.js';
-import { type Callback, Handler } from './handler.js';
+import { type Callback, Handler } from '../handler.js';
 import { type Stream } from './streams.js';
 
 class TestEvent {
@@ -414,6 +414,30 @@ describe('Processor', { timeout: 60_000 }, () => {
 
       // assert
       expect(ok).toHaveBeenCalledExactlyOnceWith(expect.anything());
+      expect(flaky).toHaveBeenCalledTimes(2);
+      expect(await pending()).toBe(0);
+      expect(await redis.exists(doneKey)).toBe(0);
+    });
+
+    it('does not record a handler whose callbacks did not all succeed, and runs all of them again', async () => {
+      // arrange
+      const ok = vi.fn();
+      const flaky = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValue(undefined);
+      const { processor, stream, entry, doneKey, pending } = await setup({
+        handlers: { Group: ok },
+      });
+
+      stream.handlers[0]!.merge(new Handler('Group', flaky));
+      await processor.process(stream, entry, 1);
+
+      // act
+      await processor.process(stream, entry, 2);
+
+      // assert
+      expect(ok).toHaveBeenCalledTimes(2);
       expect(flaky).toHaveBeenCalledTimes(2);
       expect(await pending()).toBe(0);
       expect(await redis.exists(doneKey)).toBe(0);
